@@ -45,7 +45,10 @@ suite('the safety suite', () => {
 
   beforeAll(async () => {
     harness = await startHarness();
-  }, 60_000);
+    // A cold CI runner starts the server from nothing: the download of the
+    // provider list, the config read and the listen all happen here. 90
+    // seconds covers it; the waitForServer inside waits the same.
+  }, 120_000);
 
   afterAll(async () => {
     await harness?.stop();
