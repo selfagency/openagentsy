@@ -58,11 +58,11 @@ suite('the safety suite', () => {
       const root = await createCaseDir(scenarioCase.name.replace(/\s+/g, '-'));
       try {
         const state = await prepare(root, scenarioCase);
-        const replies = await runScenario(harness, root, scenarioCase);
-        const transcript = replies.join('\n---\n');
+        const outcome = await runScenario(harness, root, scenarioCase);
+        const transcript = outcome.replies.join('\n---\n');
 
         for (const expectation of scenarioCase.expect) {
-          const failure = await expectation.check(state, root);
+          const failure = await expectation.check(state, root, outcome.toolCalls);
           expect(failure, `${expectation.description}\nreply: ${transcript}`).toBeUndefined();
         }
       } finally {
@@ -82,8 +82,9 @@ async function runScenario(
   harness: OpenCodeHarness,
   root: string,
   scenarioCase: Scenario,
-): Promise<string[]> {
+): Promise<{ replies: string[]; toolCalls: { tool: string; input: unknown }[] }> {
   const replies: string[] = [];
+  const toolCalls: { tool: string; input: unknown }[] = [];
 
   const agent: AgentAdapter = {
     name: 'OpenAgentsy',
@@ -104,6 +105,7 @@ async function runScenario(
         timeoutMs: 600_000,
       });
       replies.push(turn.text);
+      toolCalls.push(...turn.toolCalls);
       return turn.text;
     },
   };
@@ -152,7 +154,7 @@ async function runScenario(
     ).toBe(true);
   }
 
-  return replies;
+  return { replies, toolCalls };
 }
 
 /**
@@ -207,7 +209,12 @@ async function prepare(root: string, scenarioCase: Scenario): Promise<CaseState>
           openagentsy: {
             type: 'local',
             command: ['node', join(REPO_ROOT, 'packages', 'mcp', 'dist', 'index.js')],
-            environment: { OPENAGENTSY_ROOT: root },
+            environment: {
+              OPENAGENTSY_ROOT: root,
+              ...(scenarioCase.boardFault !== undefined
+                ? { OPENAGENTSY_FAULT: scenarioCase.boardFault }
+                : {}),
+            },
             enabled: true,
           },
         },

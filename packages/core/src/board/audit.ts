@@ -23,6 +23,7 @@ export type AuditInput = Omit<AuditEntry, 'ts'>;
 export const POLICIES = {
   recordPost: { id: 'oa.record.post', version: 'v1' },
   leaseGrant: { id: 'oa.lease.grant', version: 'v1' },
+  leaseRelease: { id: 'oa.lease.release', version: 'v1' },
   leaseDeny: { id: 'oa.lease.deny', version: 'v1' },
   budgetSet: { id: 'oa.budget.set', version: 'v1' },
   budgetStop: { id: 'oa.budget.stop', version: 'v1' },

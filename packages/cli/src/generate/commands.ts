@@ -4,7 +4,11 @@ import { stringify } from 'yaml';
 export type CommandDefinition = {
   name: string;
   description: string;
-  agent: string;
+  /**
+   * The role the command runs as. The build resolves it to the agent id, so
+   * renaming a role in `roles.yaml` renames the command with it.
+   */
+  role: string;
   /** true runs the command as a background child session, false runs it inline. */
   background: boolean;
   template: string;
@@ -14,7 +18,7 @@ export const COMMANDS: CommandDefinition[] = [
   {
     name: 'plan',
     description: 'Classify a request, write the plan as beans, and stop for approval.',
-    agent: 'oa-lead',
+    role: 'lead',
     background: false,
     template: [
       'Classify this request before doing anything: size, decomposability, risk,',
@@ -29,7 +33,7 @@ export const COMMANDS: CommandDefinition[] = [
   {
     name: 'review',
     description: "Review the active bean's diff against its acceptance criteria.",
-    agent: 'oa-reviewer',
+    role: 'reviewer',
     background: true,
     template: [
       'Review the current diff for the active bean against its acceptance',
@@ -45,7 +49,7 @@ export const COMMANDS: CommandDefinition[] = [
   {
     name: 'status',
     description: 'Report open beans, leases, budget spend, and the last records per bean.',
-    agent: 'oa-lead',
+    role: 'lead',
     background: false,
     template: [
       'Report the state of the board: open beans, who holds each file lease,',
@@ -57,10 +61,10 @@ export const COMMANDS: CommandDefinition[] = [
   },
 ];
 
-export function renderCommand(command: CommandDefinition, target: Target): string {
+export function renderCommand(command: CommandDefinition, target: Target, agent: string): string {
   const frontmatter: Record<string, unknown> = {
     description: command.description,
-    agent: command.agent,
+    agent,
   };
   // V1 calls the flag `subtask`, V2 calls it `subagent` and still accepts
   // `subtask` as a deprecated alias.

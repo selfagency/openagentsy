@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
-import { agentIdOf, loadRoles, type RolesFile, type Target } from '@openagentsy/core';
+import { agentIdFor, agentIdOf, loadRoles, type RolesFile, type Target } from '@openagentsy/core';
 import { agentFileName, renderAgent } from '../generate/agent.js';
 import { COMMANDS, renderCommand } from '../generate/commands.js';
 import { lockEntryFor, lockVariants, type ModelLock, readModelLock } from '../generate/lock.js';
@@ -125,7 +125,10 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   const commands: string[] = [];
   for (const command of COMMANDS) {
     const path = join(outDir, 'commands', `${command.name}.md`);
-    await writeFileAt(path, renderCommand(command, options.target));
+    await writeFileAt(
+      path,
+      renderCommand(command, options.target, agentIdFor(roles, command.role)),
+    );
     commands.push(command.name);
   }
 

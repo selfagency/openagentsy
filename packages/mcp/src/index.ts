@@ -19,6 +19,7 @@ import {
   POLICIES,
   RECORD_KINDS,
   recordUsage,
+  releaseLease,
   setBudget,
   writeLeaseSnapshot,
 } from '@openagentsy/core';
@@ -26,13 +27,47 @@ import { z } from 'zod';
 
 const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
 const stateDir = join(root, '.openagentsy');
+
+/**
+ * The writer cap.
+ *
+ * The plan allows three writers at once. The board refuses a lease that would
+ * put a fourth writer on it, so the cap is a rule and not a note in a prompt.
+ */
+const WRITER_CAP = 3;
 const databasePath = join(stateDir, 'board.sqlite');
 const auditPath = join(stateDir, 'audit.jsonl');
 const leaseSnapshotPath = join(stateDir, 'leases.json');
 
 await mkdir(stateDir, { recursive: true });
-const db = openDatabase(databasePath);
-migrate(db);
+const rawDb = openDatabase(databasePath);
+migrate(rawDb);
+
+/**
+ * The fault switch.
+ *
+ * `OPENAGENTSY_FAULT` makes the board fail on purpose, so a case can check
+ * what an agent does when the board is not there. The database is the one
+ * thing every tool goes through, so the fault is injected there and every
+ * tool fails the same way.
+ */
+const fault = process.env.OPENAGENTSY_FAULT ?? '';
+const db =
+  fault === ''
+    ? rawDb
+    : new Proxy(rawDb, {
+        get(target, property, receiver) {
+          if (property === 'prepare') {
+            return () => {
+              throw new BoardError(
+                `The board did not answer. Injected fault: ${fault}.`,
+                'Do not retry in a loop. Say the board is unreachable and stop.',
+              );
+            };
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      });
 
 const server = new McpServer(
   { name: 'openagentsy', version: '0.1.0' },
@@ -146,7 +181,7 @@ server.registerTool(
   },
   async (input) => {
     try {
-      const result = grantLeases(db, input);
+      const result = grantLeases(db, input, { writerCap: WRITER_CAP });
       // The plugin cannot open the database, so the board publishes the leases
       // as a file the plugin can read.
       await writeLeaseSnapshot(leaseSnapshotPath, listLeases(db));
@@ -170,6 +205,17 @@ server.registerTool(
           resource: conflict.glob,
           effect: 'deny',
           detail: `held by ${conflict.agent} on ${conflict.bean}`,
+        });
+      }
+      if (result.capReached) {
+        await appendAudit(auditPath, {
+          policyId: POLICIES.leaseDeny.id,
+          policyVersion: POLICIES.leaseDeny.version,
+          actor: input.agent,
+          action: 'lease_grant',
+          resource: input.globs.join(', '),
+          effect: 'deny',
+          detail: `the writer cap is ${result.capReached.cap} and ${result.capReached.writers} writers already hold a lease`,
         });
       }
       return text(result);
@@ -208,6 +254,52 @@ server.registerTool(
         });
       }
       return text(decision);
+    } catch (error) {
+      return failure(error);
+    }
+  },
+);
+
+server.registerTool(
+  'board_lease_release',
+  {
+    description:
+      'Give a lease back. A lease that is never given back locks the files it covers, so a builder that is done, or one that died, gives its files back.',
+    inputSchema: {
+      bean: z.string().describe('Bean the lease belongs to'),
+      agent: z.string().describe('Agent holding the lease'),
+      globs: z.array(z.string()).describe('Path globs, relative to the project root'),
+    },
+  },
+  async (input) => {
+    try {
+      const released = [];
+      const notHeld = [];
+      for (const glob of input.globs) {
+        const result = releaseLease(db, {
+          bean: input.bean,
+          agent: input.agent,
+          glob,
+        });
+        if (result.released && result.lease) {
+          released.push(result.lease);
+          await appendAudit(auditPath, {
+            policyId: POLICIES.leaseRelease.id,
+            policyVersion: POLICIES.leaseRelease.version,
+            actor: input.agent,
+            action: 'lease_release',
+            resource: result.lease.glob,
+            effect: 'allow',
+            detail: `bean ${input.bean}`,
+          });
+        } else {
+          notHeld.push(glob);
+        }
+      }
+      // The plugin reads the leases from the snapshot, so the snapshot is
+      // written on every change to the leases.
+      await writeLeaseSnapshot(leaseSnapshotPath, listLeases(db));
+      return text({ released, notHeld });
     } catch (error) {
       return failure(error);
     }

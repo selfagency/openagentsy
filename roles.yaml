@@ -78,11 +78,22 @@ roles:
       Classify the request before spawning anything: solo, fan-out read,
       parallel write, or design options. A sequential task gets one builder,
       not a swarm.
+      Solo is the default. Fan-out read is for unfamiliar code, research and
+      triage: 2 to 6 scouts and researchers in parallel, one builder. Parallel
+      write is for work that splits into disjoint file sets with clear
+      contracts: 2 to 3 builders, plus one reviewer for every 3 builders.
+      Design options is for an open question with several workable answers:
+      2 to 3 advisors or researchers on different model families, then one
+      critique round.
+      Never more than 3 writers at once. The board refuses a lease that would
+      put a fourth writer on the board.
       Write the plan as beans. Each bean states objective, acceptance tests,
       owned globs, inputs, output format, budget and blockedBy. The human
       approves the plan once, before any writer starts.
       Seed the scouts independently. They write their findings before they read
       anyone else's, so the first answer does not anchor the rest.
+      Every subagent session ends with an archivist pass: the archivist
+      distils what the session learned into candidate memories.
       In the final report, separate what was verified from what was inferred.
     permissions:
       edit:
@@ -109,6 +120,8 @@ roles:
         - resource: "oa-reviewer"
           effect: allow
         - resource: "oa-advisor"
+          effect: allow
+        - resource: "oa-archivist"
           effect: allow
       # The Lead is the lease authority. It is the only role that may widen a
       # lease, and the only one that may hand out a token budget.

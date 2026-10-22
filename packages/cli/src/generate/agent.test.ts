@@ -1,4 +1,4 @@
-import { parseRoles, type RolesFile } from '@openagentsy/core';
+import { agentIdFor, agentIdOf, parseRoles, type RolesFile } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { agentFileName, renderAgent } from './agent.js';
@@ -69,6 +69,25 @@ roles:
       startVariant: medium
       ceilingVariant: high
       climbTriggers: [test_failed_twice]
+  reviewer:
+    description: Reviews a diff
+    mode: subagent
+    hidden: false
+    writes: false
+    steps: 20
+    scope: the diff
+    guidance: report findings
+    permissions:
+      edit: deny
+    skills: []
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+    effort:
+      startVariant: low
+      ceilingVariant: high
+      climbTriggers: []
 `;
 
 function roles(): RolesFile {
@@ -205,8 +224,8 @@ describe('renderCommand', () => {
   it('uses subtask for V1 and subagent for V2', () => {
     const command = COMMANDS.find((entry) => entry.name === 'review');
     if (!command) throw new Error('no review command');
-    const v1 = frontmatter(renderCommand(command, 'v1'));
-    const v2 = frontmatter(renderCommand(command, 'v2'));
+    const v1 = frontmatter(renderCommand(command, 'v1', 'oa-reviewer'));
+    const v2 = frontmatter(renderCommand(command, 'v2', 'oa-reviewer'));
     expect(v1.subtask).toBe(true);
     expect(v1.subagent).toBeUndefined();
     expect(v2.subagent).toBe(true);
@@ -216,6 +235,15 @@ describe('renderCommand', () => {
   it('points each command at its agent', () => {
     const command = COMMANDS.find((entry) => entry.name === 'review');
     if (!command) throw new Error('no review command');
-    expect(frontmatter(renderCommand(command, 'v1')).agent).toBe('oa-reviewer');
+    expect(frontmatter(renderCommand(command, 'v1', 'oa-reviewer')).agent).toBe('oa-reviewer');
+  });
+
+  it('names a role, so a renamed role renames the command', () => {
+    const file = roles();
+    for (const command of COMMANDS) {
+      const role = file.roles[command.role];
+      if (!role) throw new Error(`no role "${command.role}" for the ${command.name} command`);
+      expect(agentIdFor(file, command.role)).toBe(agentIdOf(role));
+    }
   });
 });

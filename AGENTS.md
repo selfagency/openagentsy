@@ -31,10 +31,12 @@ This file gives coding agents project-specific context. Keep it short and update
 ## Traps
 
 - The plugin runtime has no `node:sqlite` and no bare imports. A plugin that uses either fails to load silently. That is why `adapter-opencode` is bundled by `tsdown` and why its `tsconfig.json` sets `emitDeclarationOnly`: `tsc -b` must never write into `packages/adapter-opencode/dist`, or it replaces the bundle with output that cannot load as a plugin.
+- The installed plugin is a copy. `.opencode/plugins/openagentsy.js` is what OpenCode loads, and it does not change when the bundle in `packages/adapter-opencode/dist` is rebuilt. After changing the adapter, copy the new bundle over it, or the session keeps running the old guard.
 - The plugin's `tool.execute.before` hook does **not** fire for MCP tool calls. It fires for the file and shell tools only. So the plugin cannot stamp a session's identity onto a board call, and no board rule may depend on the caller being known.
 - The V1 agent permission key is `bash`, not `shell`. OpenCode 1.19.3 drops a `shell` key silently. V1 uses `bash` and `task`; V2 uses `shell` and `subagent`.
 - The lease guard blocks a write to any file no lease covers, including a file the agent believes is its own. An agent that needs to write asks the Lead for a lease, or posts a `question` record.
 - A lease is only ever released by its holder, through `board_lease_release`. There is no other way to free a path.
+- The board refuses a lease that would put a fourth writer on the board. The cap is three writers, and it is enforced in the board, not in a prompt.
 - The board MCP has no OpenAI compatible endpoint. The judge in the safety suite is another session on the same server with a tool-less agent, not an HTTP call.
 - Biome does not format Markdown here (`!**/*.md` in `biome.jsonc`). Its Markdown formatter rewrites the plans, which is churn, not a fix.
 - The pre-commit hook runs `lint-staged`, then `tsc -b`, then `fallow audit --base HEAD`. The audit compares the working tree against `HEAD`, so a partial commit is audited against everything that is still uncommitted.

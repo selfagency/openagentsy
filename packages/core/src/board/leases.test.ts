@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { migrate, openDatabase } from './db.js';
-import { checkLease, grantLeases, listLeases } from './leases.js';
+import { checkLease, grantLeases, listLeases, writerCount } from './leases.js';
 
 let db: DatabaseSync;
 
@@ -85,5 +85,43 @@ describe('checkLease', () => {
     grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['**'] });
     const decision = checkLease(db, { path: '/elsewhere/x.ts', root: ROOT });
     expect(decision.status).toBe('unleased');
+  });
+});
+
+describe('the writer cap', () => {
+  it('counts the agents that hold a lease', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/api/**'] });
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/web/**'] });
+    expect(writerCount(db)).toBe(1);
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-2', globs: ['src/other/**'] });
+    expect(writerCount(db)).toBe(2);
+  });
+
+  it('refuses a grant that would put a fourth writer on the board', () => {
+    for (const agent of ['builder-1', 'builder-2', 'builder-3']) {
+      const result = grantLeases(db, { bean: 'proj-42', agent, globs: [`${agent}/**`] });
+      expect(result.granted).toHaveLength(1);
+    }
+    const result = grantLeases(
+      db,
+      { bean: 'proj-42', agent: 'builder-4', globs: ['builder-4/**'] },
+      { writerCap: 3 },
+    );
+    expect(result.granted).toHaveLength(0);
+    expect(result.capReached).toEqual({ writers: 3, cap: 3 });
+    expect(listLeases(db)).toHaveLength(3);
+  });
+
+  it('lets a writer that already holds a lease take another', () => {
+    for (const agent of ['builder-1', 'builder-2', 'builder-3']) {
+      grantLeases(db, { bean: 'proj-42', agent, globs: [`${agent}/**`] });
+    }
+    const result = grantLeases(
+      db,
+      { bean: 'proj-42', agent: 'builder-2', globs: ['builder-2/more/**'] },
+      { writerCap: 3 },
+    );
+    expect(result.granted).toHaveLength(1);
+    expect(result.capReached).toBeUndefined();
   });
 });

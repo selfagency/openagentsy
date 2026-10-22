@@ -226,6 +226,12 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
  * The server reports the sessions that are busy, so the wait is a poll of
  * that map. A session that is not in it is idle, and its last message holds
  * the reply.
+ *
+ * A turn can also end without a reply: the model streams an empty message
+ * and the server never completes it. The session is then idle and the last
+ * message is not a finished assistant turn, which means the turn is over and
+ * produced nothing. That is a failure of the case, not a wait worth ten
+ * minutes: a case that hung that way looked like a slow model.
  */
 async function waitForIdle(
   client: OpencodeClient,
@@ -238,30 +244,42 @@ async function waitForIdle(
   while (Date.now() < deadline) {
     const status = await client.session.status({ query: { directory } });
     const busy = status.data as Record<string, unknown> | undefined;
-    if (busy && Object.hasOwn(busy, sessionID)) {
+    const isBusy = busy !== undefined && Object.hasOwn(busy, sessionID);
+
+    if (isBusy) {
       reported = true;
-    } else if (reported) {
-      // The session was busy and is not any more. The turn is over.
-      return;
     } else {
-      // The session was never reported as busy. The turn may already be
-      // over, or it may not have started yet. Give it a moment and look
-      // again, so a turn that never starts is a timeout and not a success.
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      const again = await client.session.status({ query: { directory } });
-      const busyNow = again.data as Record<string, unknown> | undefined;
-      if (!busyNow || !Object.hasOwn(busyNow, sessionID)) {
-        const messages = await client.session.messages({
-          path: { id: sessionID },
-          query: { directory },
-        });
-        const last = messages.data?.at(-1);
-        if (last?.info?.role === 'assistant' && last.info.time?.completed) return;
-      }
+      const last = await lastAssistantMessage(client, sessionID, directory);
+      if (last?.info?.time?.completed) return;
+      // The session is idle and the last assistant message never completed.
+      // Either the turn is over with nothing in it, or it has not started.
+      if (reported) return;
+      if (last !== undefined) return;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`the turn did not finish within ${timeoutMs}ms`);
+}
+
+async function lastAssistantMessage(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+): Promise<{ info?: { role?: string; time?: { completed?: number } } } | undefined> {
+  const messages = await client.session.messages({
+    path: { id: sessionID },
+    query: { directory },
+  });
+  const last = messages.data?.at(-1);
+  if (last?.info?.role !== 'assistant') return undefined;
+  return {
+    info: {
+      role: last.info.role,
+      ...(last.info.time?.completed !== undefined
+        ? { time: { completed: last.info.time.completed } }
+        : {}),
+    },
+  };
 }
 
 /** A model is written provider/model. */

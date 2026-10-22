@@ -44,7 +44,30 @@ export type GrantLeasesInput = {
 export type GrantLeasesResult = {
   granted: Lease[];
   conflicts: { glob: string; agent: string; bean: string }[];
+  /**
+   * The writers already on the board, when the grant would put one more over
+   * the cap. The grant is refused: the writers are capped, not suggested.
+   */
+  capReached?: { writers: number; cap: number } | undefined;
 };
+
+/**
+ * The number of writers on the board.
+ *
+ * A writer is an agent that holds at least one lease. A scout that reads
+ * holds none, so it never counts.
+ */
+export function writerCount(db: DatabaseSync): number {
+  const rows = db.prepare(`SELECT DISTINCT agent FROM leases`).all() as unknown as {
+    agent: string;
+  }[];
+  return rows.length;
+}
+
+function holdsAnyLease(db: DatabaseSync, agent: string): boolean {
+  const row = db.prepare(`SELECT 1 FROM leases WHERE agent = ? LIMIT 1`).get(agent);
+  return row !== undefined;
+}
 
 /**
  * Record the files one agent owns.
@@ -54,10 +77,15 @@ export type GrantLeasesResult = {
  * algebra, so those surface as a conflict in `checkLease` instead. The check
  * is the enforcement point, the grant records intent.
  */
-export function grantLeases(db: DatabaseSync, input: GrantLeasesInput): GrantLeasesResult {
+export function grantLeases(
+  db: DatabaseSync,
+  input: GrantLeasesInput,
+  options: { writerCap?: number } = {},
+): GrantLeasesResult {
   const granted: Lease[] = [];
   const conflicts: { glob: string; agent: string; bean: string }[] = [];
   const grantedAt = new Date().toISOString();
+  const cap = options.writerCap;
 
   const findExact = db.prepare(
     `SELECT id, bean, agent, glob, granted_at FROM leases WHERE glob = ?`,
@@ -77,6 +105,17 @@ export function grantLeases(db: DatabaseSync, input: GrantLeasesInput): GrantLea
       continue;
     }
 
+    // The cap counts writers, and only a new writer counts. The Lead grants
+    // leases to the writers of the plan, and three is the number the plan
+    // allows at once.
+    if (cap !== undefined && existing.length === 0) {
+      const writers = writerCount(db);
+      const alreadyAWriter = writers > 0 && holdsAnyLease(db, input.agent);
+      if (!alreadyAWriter && writers >= cap) {
+        return { granted, conflicts, capReached: { writers, cap } };
+      }
+    }
+
     const result = insert.run(input.bean, input.agent, glob, grantedAt);
     if (result.changes > 0) {
       granted.push({
@@ -92,6 +131,35 @@ export function grantLeases(db: DatabaseSync, input: GrantLeasesInput): GrantLea
   return { granted, conflicts };
 }
 
+export type ReleaseLeaseInput = {
+  bean: string;
+  agent: string;
+  glob: string;
+};
+
+/**
+ * Give a lease back.
+ *
+ * A lease that is never given back is a file nobody can write, and a session
+ * that died holding one leaves its files locked for good. The release names
+ * the bean, the agent and the glob, so a release of somebody else's lease is
+ * refused: the holder gives it back, not the other way round.
+ */
+export function releaseLease(
+  db: DatabaseSync,
+  input: ReleaseLeaseInput,
+): { released: boolean; lease?: Lease } {
+  const glob = normalizePath(input.glob);
+  const existing = db
+    .prepare(`SELECT id, bean, agent, glob, granted_at FROM leases WHERE glob = ? AND agent = ?`)
+    .all(glob, input.agent) as unknown as LeaseRow[];
+  const held = existing.find((row) => row.bean === input.bean);
+  if (!held) return { released: false };
+
+  db.prepare(`DELETE FROM leases WHERE id = ?`).run(held.id);
+  return { released: true, lease: toLease(held) };
+}
+
 export function listLeases(db: DatabaseSync, bean?: string): Lease[] {
   const rows = (bean === undefined
     ? db.prepare(`SELECT id, bean, agent, glob, granted_at FROM leases ORDER BY id`)
@@ -104,7 +172,6 @@ export type LeaseSnapshot = {
   updatedAt: string;
   leases: Lease[];
 };
-
 /**
  * Publish the leases as a plain file.
  *

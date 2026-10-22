@@ -40,6 +40,18 @@ export function agentIdOf(role: RoleDefinition): string {
   return role.agentName ?? agentId(role.name);
 }
 
+/**
+ * The agent id of a role, by role name.
+ *
+ * A command names the role it runs as, not the agent id, so a role that
+ * renames itself in `roles.yaml` renames the command with it.
+ */
+export function agentIdFor(roles: RolesFile, roleName: string): string {
+  const role = roles.roles[roleName];
+  if (!role) throw new RolesError(`no role "${roleName}" in the roles file`);
+  return agentIdOf(role);
+}
+
 const EFFECTS: readonly PermissionEffect[] = ['allow', 'ask', 'deny'];
 const SIGNALS: readonly ModelSignal[] = ['agentic', 'coding', 'overall', 'long_context'];
 const COST_STANCES: readonly CostStance[] = [
