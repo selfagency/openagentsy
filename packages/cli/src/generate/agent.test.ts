@@ -1,7 +1,7 @@
 import { parseRoles, type RolesFile } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { renderAgent } from './agent.js';
+import { agentFileName, renderAgent } from './agent.js';
 import { COMMANDS, renderCommand } from './commands.js';
 
 const ROLES = `
@@ -97,6 +97,17 @@ describe('renderAgent for V1', () => {
     const meta = frontmatter(markdown);
     expect(meta.permission).toBeDefined();
     expect(meta.permissions).toBeUndefined();
+  });
+
+  it('names an agent after its role when no agent name is given', () => {
+    const file = roles();
+    expect(agentFileName(role(file, 'builder'))).toBe('oa-builder.md');
+  });
+
+  it('names an agent by its own agent name when the role carries one', () => {
+    const file = roles();
+    const lead = { ...role(file, 'lead'), agentName: 'agentsy' };
+    expect(agentFileName(lead)).toBe('agentsy.md');
   });
 
   it('names the spawn tool task', () => {

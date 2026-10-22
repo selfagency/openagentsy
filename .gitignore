@@ -16,4 +16,9 @@ dist/
 # scratch from doc research
 .tmp/
 
+# local secrets
+.env
+.env.local
+.envrc
+
 .DS_Store

@@ -1,5 +1,6 @@
 import {
   ACTION_NAMES,
+  type ActionName,
   type ActionPermissions,
   type PermissionEffect,
   type RoleDefinition,
@@ -63,22 +64,30 @@ function dedupe(rules: ActionPermissions): ActionPermissions {
   });
 }
 
+/**
+ * Collapse one action's rules to its OpenCode value: a single rule becomes
+ * its effect, several become a resource-to-effect map.
+ */
+function collapsedValue(rules: ActionPermissions): V1PermissionValue | undefined {
+  const collapsed = dedupe(rules);
+  const first = collapsed[0];
+  if (!first) return undefined;
+  if (collapsed.length === 1) return first.effect;
+  const map: Record<string, PermissionEffect> = {};
+  for (const rule of collapsed) map[rule.resource] = rule.effect;
+  return map;
+}
+
 export function toV1Permissions(permissions: Record<string, ActionPermissions>): V1PermissionBlock {
   const out: V1PermissionBlock = {};
-  for (const action of actionOrder()) {
-    const rules = permissions[action];
+  for (const [action, rules] of Object.entries(permissions)) {
     if (!rules || rules.length === 0) continue;
-    const actionName = V1_ACTION_NAMES[action] ?? action;
-    const collapsed = dedupe(rules);
-    const first = collapsed[0];
-    if (!first) continue;
-    if (collapsed.length === 1) {
-      out[actionName] = first.effect;
-      continue;
-    }
-    const map: Record<string, PermissionEffect> = {};
-    for (const rule of collapsed) map[rule.resource] = rule.effect;
-    out[actionName] = map;
+    const value = collapsedValue(rules);
+    if (value === undefined) continue;
+    // A key that is not an action names a tool, and a tool keeps its name in
+    // both versions. The renamed actions stay renamed.
+    const key = V1_ACTION_NAMES[action] ?? action;
+    out[key] = value;
   }
   return out;
 }
@@ -94,6 +103,12 @@ export function toV2Permissions(
     const actionName = V2_ACTION_NAMES[action] ?? action;
     for (const rule of dedupe(rules)) {
       out.push({ action: actionName, resource: rule.resource, effect: rule.effect });
+    }
+  }
+  for (const [tool, rules] of Object.entries(permissions)) {
+    if (actionOrder().includes(tool as ActionName)) continue;
+    for (const rule of dedupe(rules)) {
+      out.push({ action: tool, resource: rule.resource, effect: rule.effect });
     }
   }
   return out;

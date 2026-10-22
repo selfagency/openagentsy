@@ -247,7 +247,13 @@ export async function loadLock(root: string): Promise<LockFile | undefined> {
 async function loadRole(root: string, name: string): Promise<RoleDefinition | undefined> {
   try {
     const roles = await loadRoles(join(root, 'roles.yaml'));
-    return roles.roles[name];
+    const byKey = roles.roles[name];
+    if (byKey) return byKey;
+    // An agent may carry its own name, which the Lead does so the selector
+    // shows the project's name. That name resolves back to its role here.
+    return Object.values(roles.roles).find(
+      (role) => role.agentName !== undefined && role.agentName === name,
+    );
   } catch {
     return undefined;
   }

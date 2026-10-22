@@ -38,7 +38,7 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
   const prompted = await client.session.prompt({
     path: { id: created.data?.id },
     body: {
-      agent: 'oa-judge',
+      agent: 'judge',
       model: parseModel(options.model),
       system: `The criteria:\n${options.criteria.map((c) => `- ${c}`).join('\n')}`,
       parts: [

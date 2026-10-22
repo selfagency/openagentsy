@@ -56,6 +56,12 @@ export type EffortLadder = {
 
 export type RoleDefinition = {
   name: string;
+  /**
+   * The agent's id, when it is not the default `oa-<role>`. The Lead is the
+   * one a person picks in the agent selector, so it carries the project's
+   * name instead of a role name.
+   */
+  agentName?: string;
   description: string;
   mode: 'primary' | 'subagent';
   hidden: boolean;

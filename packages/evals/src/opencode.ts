@@ -160,6 +160,12 @@ export type PromptOptions = {
  *
  * The session is created in the case directory, so the agents, the plugin and
  * the board of that directory are the ones under test.
+ *
+ * The turn is asked for asynchronously and the reply is collected from the
+ * session, rather than holding one request open. A turn of a real model takes
+ * minutes, and a request that is held open for minutes is a request that
+ * undici gives up on: it failed a case with a headers timeout after five
+ * minutes of a perfectly healthy turn.
  */
 export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const { harness, directory, agent } = options;
@@ -173,9 +179,11 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     throw new Error(`could not create a session: ${JSON.stringify(created.error)}`);
   }
   const sessionID = created.data?.id;
+  if (sessionID === undefined) {
+    throw new Error('the server created a session without an id');
+  }
 
-  // A turn that never comes back is a failure, not a hang.
-  const prompt = client.session.prompt({
+  const asked = await client.session.promptAsync({
     path: { id: sessionID },
     body: {
       agent,
@@ -184,23 +192,19 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     },
     query: { directory },
   });
-
-  const timeoutMs = options.timeoutMs ?? 600_000;
-  const prompted = await Promise.race([
-    prompt,
-    new Promise<never>((_resolve, reject) => {
-      setTimeout(
-        () => reject(new Error(`the turn did not finish within ${timeoutMs}ms`)),
-        timeoutMs,
-      );
-    }),
-  ]);
-
-  if (prompted.error) {
-    throw new Error(`the prompt failed: ${JSON.stringify(prompted.error)}`);
+  if (asked.error) {
+    throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
   }
 
-  const parts = prompted.data?.parts ?? [];
+  const timeoutMs = options.timeoutMs ?? 600_000;
+  await waitForIdle(client, sessionID, directory, timeoutMs);
+
+  const messages = await client.session.messages({
+    path: { id: sessionID },
+    query: { directory },
+  });
+  const parts = messages.data?.at(-1)?.parts ?? [];
+
   const text = parts
     .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
@@ -214,6 +218,50 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     }));
 
   return { text, toolCalls, files: [] };
+}
+
+/**
+ * Wait until the session has nothing left to do.
+ *
+ * The server reports the sessions that are busy, so the wait is a poll of
+ * that map. A session that is not in it is idle, and its last message holds
+ * the reply.
+ */
+async function waitForIdle(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let reported = false;
+  while (Date.now() < deadline) {
+    const status = await client.session.status({ query: { directory } });
+    const busy = status.data as Record<string, unknown> | undefined;
+    if (busy && Object.hasOwn(busy, sessionID)) {
+      reported = true;
+    } else if (reported) {
+      // The session was busy and is not any more. The turn is over.
+      return;
+    } else {
+      // The session was never reported as busy. The turn may already be
+      // over, or it may not have started yet. Give it a moment and look
+      // again, so a turn that never starts is a timeout and not a success.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const again = await client.session.status({ query: { directory } });
+      const busyNow = again.data as Record<string, unknown> | undefined;
+      if (!busyNow || !Object.hasOwn(busyNow, sessionID)) {
+        const messages = await client.session.messages({
+          path: { id: sessionID },
+          query: { directory },
+        });
+        const last = messages.data?.at(-1);
+        if (last?.info?.role === 'assistant' && last.info.time?.completed) return;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`the turn did not finish within ${timeoutMs}ms`);
 }
 
 /** A model is written provider/model. */

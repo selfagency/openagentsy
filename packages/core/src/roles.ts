@@ -32,6 +32,14 @@ export function agentId(roleName: string): string {
   return `${AGENT_PREFIX}${roleName}`;
 }
 
+/**
+ * The id an agent is known by. A role may name its own agent, which the Lead
+ * does so a person picks the project's name in the selector.
+ */
+export function agentIdOf(role: RoleDefinition): string {
+  return role.agentName ?? agentId(role.name);
+}
+
 const EFFECTS: readonly PermissionEffect[] = ['allow', 'ask', 'deny'];
 const SIGNALS: readonly ModelSignal[] = ['agentic', 'coding', 'overall', 'long_context'];
 const COST_STANCES: readonly CostStance[] = [
@@ -110,14 +118,29 @@ function parsePermissions(value: unknown, where: string): Record<string, ActionP
   }
   const out: Record<string, ActionPermissions> = {};
   for (const [action, rules] of Object.entries(value)) {
-    if (!ACTION_NAMES.includes(action as ActionName)) {
+    if (!ACTION_NAMES.includes(action as ActionName) && !isToolName(action)) {
       throw new RolesError(
-        `${where}.${action}: unknown action. Known actions: ${ACTION_NAMES.join(', ')}`,
+        `${where}.${action}: unknown action. Known actions: ${ACTION_NAMES.join(', ')}. A key that is not an action must name a tool, as in openagentsy_board_lease_grant.`,
       );
     }
     out[action] = parseRules(rules, `${where}.${action}`);
   }
   return out;
+}
+
+/**
+ * A permission key that is not an action names a tool.
+ *
+ * OpenCode's agent permission map takes any tool name as a key, and that is
+ * how a role is kept away from a tool it must not call. The board's lease
+ * grant is the case that matters: only the Lead may widen a lease, so every
+ * other role denies that tool by name.
+ *
+ * An MCP tool is always `server_tool`, so the name carries an underscore. A
+ * key without one is a typo, not a tool.
+ */
+function isToolName(name: string): boolean {
+  return /^[a-z][a-z0-9]*_[a-z0-9_]+$/.test(name);
 }
 
 function parseModelProfile(value: unknown, where: string): ModelProfile {
@@ -216,8 +239,15 @@ function parseRole(
   const skills = asStringArray(raw.skills ?? [], `${where}.skills`);
   merged.skill = skillRules(skills);
 
+  const agentName =
+    raw.agentName === undefined ? undefined : asString(raw.agentName, `${where}.agentName`);
+  if (agentName !== undefined && !/^[a-z][a-z0-9-]*$/.test(agentName)) {
+    throw new RolesError(`${where}.agentName: expected a lowercase agent id, got "${agentName}"`);
+  }
+
   return {
     name,
+    ...(agentName !== undefined ? { agentName } : {}),
     description: asString(raw.description, `${where}.description`),
     mode,
     hidden:

@@ -171,6 +171,18 @@ async function guardWrite(
       `OpenAgentsy blocked this write. ${decision.reason} Ask the Lead for a lease, then retry.`,
     );
   }
+
+  // A write that was allowed is on record too. A record that only holds the
+  // refusals cannot answer "was this file ever written?".
+  await appendAudit(root, {
+    policyId: POLICIES.leaseWrite.id,
+    policyVersion: POLICIES.leaseWrite.version,
+    actor: agent,
+    action: toolName,
+    resource: relativeToRoot(root, absolute),
+    effect: 'allow',
+    detail: decision.reason,
+  });
 }
 
 export type ServerHooks = {

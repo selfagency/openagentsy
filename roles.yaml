@@ -63,6 +63,7 @@ defaults:
 
 roles:
   lead:
+    agentName: agentsy
     description: Plans, delegates, arbitrates and reports. The entry point for any request.
     mode: primary
     hidden: false
@@ -109,6 +110,14 @@ roles:
           effect: allow
         - resource: "oa-advisor"
           effect: allow
+      # The Lead is the lease authority. It is the only role that may widen a
+      # lease, and the only one that may hand out a token budget.
+      openagentsy_board_lease_grant:
+        - resource: "*"
+          effect: allow
+      openagentsy_board_budget_set:
+        - resource: "*"
+          effect: allow
     skills: []
     modelProfile:
       primarySignal: agentic
@@ -140,6 +149,10 @@ roles:
       edit: deny
       shell: deny
       subagent: deny
+      # The Lead owns the leases. The board cannot verify who is calling it,
+      # so the tool is taken away here rather than trusted there.
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_budget_set: deny
     skills: [openagentsy-scout]
     modelProfile:
       primarySignal: coding
@@ -174,6 +187,10 @@ roles:
       subagent: deny
       webfetch: allow
       websearch: allow
+      # The Lead owns the leases. The board cannot verify who is calling it,
+      # so the tool is taken away here rather than trusted there.
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_budget_set: deny
     skills: []
     modelProfile:
       primarySignal: coding
@@ -238,6 +255,10 @@ roles:
         - resource: "rm -rf*"
           effect: deny
       subagent: deny
+      # The Lead owns the leases. The board cannot verify who is calling it,
+      # so the tool is taken away here rather than trusted there.
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_budget_set: deny
     skills: [openagentsy-handoff]
     modelProfile:
       primarySignal: coding
@@ -288,6 +309,10 @@ roles:
         - resource: "git log*"
           effect: allow
       subagent: deny
+      # The Lead owns the leases. The board cannot verify who is calling it,
+      # so the tool is taken away here rather than trusted there.
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_budget_set: deny
     skills: [openagentsy-review]
     modelProfile:
       primarySignal: coding
@@ -317,6 +342,10 @@ roles:
       edit: deny
       shell: ask
       subagent: deny
+      # The Lead owns the leases. The board cannot verify who is calling it,
+      # so the tool is taken away here rather than trusted there.
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_budget_set: deny
     skills: []
     modelProfile:
       primarySignal: overall
@@ -349,6 +378,10 @@ roles:
       edit: deny
       shell: deny
       subagent: deny
+      # The Lead owns the leases. The board cannot verify who is calling it,
+      # so the tool is taken away here rather than trusted there.
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_budget_set: deny
     skills: []
     modelProfile:
       primarySignal: long_context

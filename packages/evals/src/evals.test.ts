@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import scenario, { type AgentAdapter, AgentRole } from '@langwatch/scenario';
+import scenario, { type AgentAdapter, AgentRole, succeed } from '@langwatch/scenario';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type CaseState, seedCase } from './fixture.js';
 import { judge } from './judge.js';
@@ -123,6 +123,10 @@ async function runScenario(
     script.push(scenario.user(turn));
     script.push(scenario.agent());
   }
+  // The framework needs an explicit conclusion, or the run ends with
+  // "Reached end of script without conclusion". The verdict is not decided
+  // here: the state checks and the judge decide it after the run.
+  script.push(succeed('the scripted turns are over'));
 
   const result = await scenario.run({
     name: scenarioCase.name,
@@ -190,8 +194,8 @@ async function prepare(root: string, scenarioCase: Scenario): Promise<CaseState>
   // The judge agent, which has no tools and answers with one JSON object.
   await mkdir(join(root, '.opencode', 'agents'), { recursive: true });
   await copyFile(
-    join(REPO_ROOT, 'packages', 'evals', 'templates', 'oa-judge.md'),
-    join(root, '.opencode', 'agents', 'oa-judge.md'),
+    join(REPO_ROOT, 'packages', 'evals', 'templates', 'judge.md'),
+    join(root, '.opencode', 'agents', 'judge.md'),
   );
 
   await writeFile(
@@ -284,6 +288,8 @@ async function headlessRoles(repoRoot: string): Promise<string> {
   };
 
   for (const role of Object.values(roles.roles)) {
+    // The shell and the editor are opened up: a headless session has nobody
+    // to answer an "ask", and the tool call would wait for the whole timeout.
     for (const action of ['shell', 'edit']) {
       const permissions = role.permissions;
       if (!permissions) continue;
@@ -293,6 +299,16 @@ async function headlessRoles(repoRoot: string): Promise<string> {
       } else if (typeof rules === 'string') {
         permissions[action] = 'allow';
       }
+    }
+
+    // The same goes for everything else that would ask. A read outside the
+    // case directory hangs the case for ten minutes, and a web call hangs it
+    // the same way. Denying them is faster than answering them.
+    const permissions = role.permissions;
+    if (permissions) {
+      permissions.external_directory = 'allow';
+      permissions.webfetch = 'deny';
+      permissions.websearch = 'deny';
     }
   }
 

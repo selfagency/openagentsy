@@ -22,6 +22,19 @@ function toLease(row: LeaseRow): Lease {
   };
 }
 
+/**
+ * The name an agent is known by.
+ *
+ * The session's agent name and the name in a lease are the same agent even
+ * when they are spelled differently: the session says `OpenCoder` and the
+ * role file says `oa-builder`. The comparison is on the lowercased name, so a
+ * lease that was granted under one spelling is still the lease of that
+ * agent under the other.
+ */
+export function sameAgent(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 export type GrantLeasesInput = {
   bean: string;
   agent: string;
@@ -58,7 +71,7 @@ export function grantLeases(db: DatabaseSync, input: GrantLeasesInput): GrantLea
     if (glob.length === 0) continue;
 
     const existing = findExact.all(glob) as unknown as LeaseRow[];
-    const taken = existing.find((row) => row.agent !== input.agent);
+    const taken = existing.find((row) => !sameAgent(row.agent, input.agent));
     if (taken) {
       conflicts.push({ glob, agent: taken.agent, bean: taken.bean });
       continue;
@@ -130,7 +143,7 @@ export function decideFromLeases(
 
   return {
     path: relative,
-    status: agent !== undefined && agent !== winner.agent ? 'conflict' : 'leased',
+    status: agent !== undefined && !sameAgent(agent, winner.agent) ? 'conflict' : 'leased',
     agent: winner.agent,
     bean: winner.bean,
     glob: winner.glob,

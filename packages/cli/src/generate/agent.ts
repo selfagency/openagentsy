@@ -78,6 +78,6 @@ export function renderAgent(
   return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role, options.effort ?? {})}`;
 }
 
-export function agentFileName(roleName: string): string {
-  return `${agentId(roleName)}.md`;
+export function agentFileName(role: RoleDefinition): string {
+  return `${role.agentName ?? agentId(role.name)}.md`;
 }

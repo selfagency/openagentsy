@@ -4,6 +4,9 @@
   "workspaces": {
     "patterns": ["packages/*"]
   },
+  "health": {
+    "maxCrap": 60
+  },
   "rules": {
     "unused-dev-dependencies": "error",
     "unused-optional-dependencies": "error",
