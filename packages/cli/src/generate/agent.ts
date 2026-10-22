@@ -1,23 +1,23 @@
-import { stringify } from "yaml"
 import {
   agentId,
-  toV1Permissions,
-  toV2Permissions,
-  withProtectedPaths,
   type RoleDefinition,
   type RolesFile,
   type Target,
-} from "@openagentsy/core"
-import { renderPrompt } from "./prompt.js"
+  toV1Permissions,
+  toV2Permissions,
+  withProtectedPaths,
+} from '@openagentsy/core';
+import { stringify } from 'yaml';
+import { renderPrompt } from './prompt.js';
 
 export type AgentRenderOptions = {
-  target: Target
-  model?: string
-  modelVariant?: string
-  effort?: { start?: string; ceiling?: string }
-}
+  target: Target;
+  model?: string;
+  modelVariant?: string;
+  effort?: { start?: string; ceiling?: string };
+};
 
-type Frontmatter = Record<string, unknown>
+type Frontmatter = Record<string, unknown>;
 
 function v1Frontmatter(
   role: RoleDefinition,
@@ -27,12 +27,12 @@ function v1Frontmatter(
   const frontmatter: Frontmatter = {
     description: role.description,
     mode: role.mode,
-  }
-  if (model) frontmatter["model"] = model
-  frontmatter["steps"] = role.steps
-  if (role.hidden) frontmatter["hidden"] = true
-  frontmatter["permission"] = permissions
-  return frontmatter
+  };
+  if (model) frontmatter.model = model;
+  frontmatter.steps = role.steps;
+  if (role.hidden) frontmatter.hidden = true;
+  frontmatter.permission = permissions;
+  return frontmatter;
 }
 
 function v2Frontmatter(
@@ -44,16 +44,16 @@ function v2Frontmatter(
   const frontmatter: Frontmatter = {
     description: role.description,
     mode: role.mode,
-  }
-  if (model) frontmatter["model"] = modelVariant ? `${model}#${modelVariant}` : model
-  frontmatter["steps"] = role.steps
-  if (role.hidden) frontmatter["hidden"] = true
-  frontmatter["permissions"] = permissions
-  return frontmatter
+  };
+  if (model) frontmatter.model = modelVariant ? `${model}#${modelVariant}` : model;
+  frontmatter.steps = role.steps;
+  if (role.hidden) frontmatter.hidden = true;
+  frontmatter.permissions = permissions;
+  return frontmatter;
 }
 
 function renderFrontmatter(frontmatter: Frontmatter): string {
-  return stringify(frontmatter, { lineWidth: 0 }).trimEnd()
+  return stringify(frontmatter, { lineWidth: 0 }).trimEnd();
 }
 
 /**
@@ -68,21 +68,16 @@ export function renderAgent(
   roles: RolesFile,
   options: AgentRenderOptions,
 ): string {
-  const permissions = withProtectedPaths(role, roles.protectedPaths)
+  const permissions = withProtectedPaths(role, roles.protectedPaths);
 
   const frontmatter =
-    options.target === "v1"
+    options.target === 'v1'
       ? v1Frontmatter(role, toV1Permissions(permissions), options.model)
-      : v2Frontmatter(
-          role,
-          toV2Permissions(permissions),
-          options.model,
-          options.modelVariant,
-        )
+      : v2Frontmatter(role, toV2Permissions(permissions), options.model, options.modelVariant);
 
-  return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role, options.effort ?? {})}`
+  return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role, options.effort ?? {})}`;
 }
 
 export function agentFileName(roleName: string): string {
-  return `${agentId(roleName)}.md`
+  return `${agentId(roleName)}.md`;
 }

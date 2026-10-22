@@ -1,45 +1,50 @@
-import { fileURLToPath } from "node:url"
-import type { RolesFile } from "@openagentsy/core"
-import { assembleCandidates } from "./candidates.js"
-import { buildSurfaceIndex, loadBenchLm } from "./benchlm.js"
-import { buildLock } from "./lock.js"
-import { loadModelsDev } from "./modelsdev.js"
-import { loadAliases, loadPolicy } from "./policy.js"
-import { listProviderModels, type FetchLike, type ProviderSelection } from "./providers.js"
+import { fileURLToPath } from 'node:url';
+import type { RolesFile } from '@openagentsy/core';
+import { buildSurfaceIndex, loadBenchLm } from './benchlm.js';
+import { assembleCandidates } from './candidates.js';
+import { buildLock } from './lock.js';
+import { loadModelsDev } from './modelsdev.js';
+import { loadAliases, loadPolicy } from './policy.js';
+import { type FetchLike, listProviderModels, type ProviderSelection } from './providers.js';
 
-export const POLICY_PATH = fileURLToPath(new URL("../policy/providers.yaml", import.meta.url))
-export const ALIASES_PATH = fileURLToPath(new URL("../policy/benchlm-aliases.yaml", import.meta.url))
+export const POLICY_PATH = fileURLToPath(new URL('../policy/providers.yaml', import.meta.url));
+export const ALIASES_PATH = fileURLToPath(
+  new URL('../policy/benchlm-aliases.yaml', import.meta.url),
+);
 
 export type SelectModelsInput = {
-  root: string
-  roles: RolesFile
-  providers: ProviderSelection[]
-  fetchImpl?: FetchLike
-  now?: number
-  benchLmKey?: string
-  allowTraining?: boolean
-  allowRetention?: boolean
-  date?: string
-}
+  root: string;
+  roles: RolesFile;
+  providers: ProviderSelection[];
+  fetchImpl?: FetchLike;
+  now?: number;
+  benchLmKey?: string;
+  allowTraining?: boolean;
+  allowRetention?: boolean;
+  date?: string;
+};
 
 export type SelectModelsResult = {
-  lock: ReturnType<typeof buildLock>["lock"]
-  reasons: Record<string, string>
-  failures: Record<string, string>
-  rejected: Record<string, ReturnType<typeof buildLock>["rejected"][string]>
-  sources: { modelsDev: string; benchlm: string }
-  counts: { served: number; candidates: number; ranked: number }
-}
+  lock: ReturnType<typeof buildLock>['lock'];
+  reasons: Record<string, string>;
+  failures: Record<string, string>;
+  rejected: Record<string, ReturnType<typeof buildLock>['rejected'][string]>;
+  sources: { modelsDev: string; benchlm: string };
+  counts: { served: number; candidates: number; ranked: number };
+};
 
 /**
  * Pick a model for every role from live provider inventories, the models.dev
  * catalog, the BenchLM leaderboard and the checked in retention policy.
  */
 export async function selectModels(input: SelectModelsInput): Promise<SelectModelsResult> {
-  const fetchImpl = input.fetchImpl ?? fetch
+  const fetchImpl = input.fetchImpl ?? fetch;
 
   const [modelsDev, benchLm, policy, aliasFile] = await Promise.all([
-    loadModelsDev(input.root, { fetchImpl, ...(input.now !== undefined ? { now: input.now } : {}) }),
+    loadModelsDev(input.root, {
+      fetchImpl,
+      ...(input.now !== undefined ? { now: input.now } : {}),
+    }),
     loadBenchLm(input.root, {
       fetchImpl,
       ...(input.now !== undefined ? { now: input.now } : {}),
@@ -47,14 +52,14 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
     }),
     loadPolicy(POLICY_PATH),
     loadAliases(ALIASES_PATH),
-  ])
+  ]);
 
-  const served: Record<string, string[]> = {}
+  const served: Record<string, string[]> = {};
   for (const selection of input.providers) {
-    const models = await listProviderModels(selection, fetchImpl)
+    const models = await listProviderModels(selection, fetchImpl);
     served[selection.provider] = models.map((model) =>
-      typeof model === "string" ? model : model.name,
-    )
+      typeof model === 'string' ? model : model.name,
+    );
   }
 
   const candidates = assembleCandidates({
@@ -64,7 +69,7 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
     benchLmIndex: buildSurfaceIndex(benchLm.catalog),
     aliases: aliasFile.aliases,
     policy,
-  })
+  });
 
   const { lock, reasons, rejected, failures } = buildLock({
     roles: input.roles,
@@ -73,9 +78,9 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
     ...(input.allowTraining !== undefined ? { allowTraining: input.allowTraining } : {}),
     ...(input.allowRetention !== undefined ? { allowRetention: input.allowRetention } : {}),
     ...(input.date !== undefined ? { date: input.date } : {}),
-  })
+  });
 
-  const ranked = candidates.filter((candidate) => candidate.ranks.coding !== undefined).length
+  const ranked = candidates.filter((candidate) => candidate.ranks.coding !== undefined).length;
 
   return {
     lock,
@@ -88,5 +93,5 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
       candidates: candidates.length,
       ranked,
     },
-  }
+  };
 }

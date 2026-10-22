@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite"
+import { DatabaseSync } from 'node:sqlite';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS records (
@@ -42,15 +42,15 @@ CREATE TABLE IF NOT EXISTS budgets (
   tokens_used INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
-`
+`;
 
 export function openDatabase(path: string): DatabaseSync {
-  const db = new DatabaseSync(path)
-  db.exec("PRAGMA journal_mode = WAL")
-  db.exec("PRAGMA foreign_keys = ON")
-  return db
+  const db = new DatabaseSync(path);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
+  return db;
 }
 
 export function migrate(db: DatabaseSync): void {
-  db.exec(SCHEMA)
+  db.exec(SCHEMA);
 }

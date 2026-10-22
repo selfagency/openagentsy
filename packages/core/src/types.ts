@@ -1,9 +1,9 @@
-export type PermissionEffect = "allow" | "ask" | "deny"
+export type PermissionEffect = 'allow' | 'ask' | 'deny';
 
 export type PermissionRule = {
-  resource: string
-  effect: PermissionEffect
-}
+  resource: string;
+  effect: PermissionEffect;
+};
 
 /**
  * Internal action names. These are the keys used in roles.yaml and they are
@@ -11,68 +11,68 @@ export type PermissionRule = {
  * definition covers both OpenCode versions.
  */
 export const ACTION_NAMES = [
-  "read",
-  "edit",
-  "glob",
-  "grep",
-  "list",
-  "shell",
-  "subagent",
-  "skill",
-  "webfetch",
-  "websearch",
-  "external_directory",
-  "lsp",
-  "question",
-] as const
+  'read',
+  'edit',
+  'glob',
+  'grep',
+  'list',
+  'shell',
+  'subagent',
+  'skill',
+  'webfetch',
+  'websearch',
+  'external_directory',
+  'lsp',
+  'question',
+] as const;
 
-export type ActionName = (typeof ACTION_NAMES)[number]
+export type ActionName = (typeof ACTION_NAMES)[number];
 
-export type ActionPermissions = PermissionRule[]
+export type ActionPermissions = PermissionRule[];
 
-export type ModelSignal = "agentic" | "coding" | "overall" | "long_context"
+export type ModelSignal = 'agentic' | 'coding' | 'overall' | 'long_context';
 
-export type CostStance = "quality_first" | "balanced" | "cheapest" | "ignore_cost"
+export type CostStance = 'quality_first' | 'balanced' | 'cheapest' | 'ignore_cost';
 
 export type ModelProfile = {
-  primarySignal: ModelSignal
-  hardRequirements: string[]
-  costStance: CostStance
-  minimumRank?: number
-  minimumContext?: number
+  primarySignal: ModelSignal;
+  hardRequirements: string[];
+  costStance: CostStance;
+  minimumRank?: number;
+  minimumContext?: number;
   /** Expected calls in a five hour window, used for the quota check. */
-  expectedCallsPer5h?: number
-  benchmark?: string
-  differentCreatorThan?: string
-}
+  expectedCallsPer5h?: number;
+  benchmark?: string;
+  differentCreatorThan?: string;
+};
 
 export type EffortLadder = {
-  startVariant: string
-  ceilingVariant: string
-  climbTriggers: string[]
+  startVariant: string;
+  ceilingVariant: string;
+  climbTriggers: string[];
   /** Role whose model the ceiling rung uses. Defaults to the role itself. */
-  ceilingModelRole?: string
-}
+  ceilingModelRole?: string;
+};
 
 export type RoleDefinition = {
-  name: string
-  description: string
-  mode: "primary" | "subagent"
-  hidden: boolean
-  writes: boolean
-  steps: number
-  scope: string
-  guidance: string
-  permissions: Record<string, ActionPermissions>
-  skills: string[]
-  modelProfile: ModelProfile
-  effort: EffortLadder
-}
+  name: string;
+  description: string;
+  mode: 'primary' | 'subagent';
+  hidden: boolean;
+  writes: boolean;
+  steps: number;
+  scope: string;
+  guidance: string;
+  permissions: Record<string, ActionPermissions>;
+  skills: string[];
+  modelProfile: ModelProfile;
+  effort: EffortLadder;
+};
 
 export type RolesFile = {
-  version: number
-  protectedPaths: string[]
-  roles: Record<string, RoleDefinition>
-}
+  version: number;
+  protectedPaths: string[];
+  roles: Record<string, RoleDefinition>;
+};
 
-export type Target = "v1" | "v2"
+export type Target = 'v1' | 'v2';

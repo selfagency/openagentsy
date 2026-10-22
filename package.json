@@ -8,16 +8,28 @@
     "node": ">=22.5.0"
   },
   "scripts": {
+    "prepare": "husky",
     "build": "pnpm -r --sequential build",
-    "typecheck": "pnpm -r --sequential typecheck",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc -b --noEmit",
+    "ci:check": "biome ci . && pnpm typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
     "openagentsy": "node packages/cli/dist/index.js",
     "pretest": "pnpm build"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.2",
     "@types/node": "^24.3.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,mts,cts,tsx,json,jsonc}": [
+      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
+    ]
   }
 }

@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest"
-import { parseRoles, RolesError } from "./roles.js"
+import { describe, expect, it } from 'vitest';
+import { parseRoles, RolesError } from './roles.js';
+import type { RolesFile } from './types.js';
 
 const MINIMAL = `
 version: 1
@@ -35,75 +36,82 @@ roles:
       startVariant: medium
       ceilingVariant: high
       climbTriggers: [test_failed_twice]
-`
+`;
 
-describe("parseRoles", () => {
-  it("reads a role definition", () => {
-    const roles = parseRoles(MINIMAL)
-    const builder = roles.roles["builder"]!
-    expect(builder.description).toBe("Implements a bean")
-    expect(builder.mode).toBe("subagent")
-    expect(builder.writes).toBe(true)
-    expect(builder.steps).toBe(40)
-  })
+/** A role the test knows exists. */
+function role(roles: RolesFile, name: string): RolesFile['roles'][string] {
+  const found = roles.roles[name];
+  if (!found) throw new Error(`no role ${name}`);
+  return found;
+}
 
-  it("merges the default permissions into the role", () => {
-    const roles = parseRoles(MINIMAL)
-    const builder = roles.roles["builder"]!
-    expect(builder.permissions["read"]).toEqual([{ resource: "*", effect: "allow" }])
-    expect(builder.permissions["webfetch"]).toEqual([{ resource: "*", effect: "ask" }])
-  })
+describe('parseRoles', () => {
+  it('reads a role definition', () => {
+    const roles = parseRoles(MINIMAL);
+    const builder = role(roles, 'builder');
+    expect(builder.description).toBe('Implements a bean');
+    expect(builder.mode).toBe('subagent');
+    expect(builder.writes).toBe(true);
+    expect(builder.steps).toBe(40);
+  });
 
-  it("lets the role override a default action", () => {
-    const roles = parseRoles(MINIMAL)
-    const builder = roles.roles["builder"]!
-    expect(builder.permissions["edit"]).toEqual([{ resource: "*", effect: "allow" }])
-  })
+  it('merges the default permissions into the role', () => {
+    const roles = parseRoles(MINIMAL);
+    const builder = role(roles, 'builder');
+    expect(builder.permissions.read).toEqual([{ resource: '*', effect: 'allow' }]);
+    expect(builder.permissions.webfetch).toEqual([{ resource: '*', effect: 'ask' }]);
+  });
 
-  it("derives the skill permission from the skill list", () => {
-    const roles = parseRoles(MINIMAL)
-    const builder = roles.roles["builder"]!
-    expect(builder.permissions["skill"]).toEqual([
-      { resource: "*", effect: "deny" },
-      { resource: "openagentsy-handoff", effect: "allow" },
-    ])
-  })
+  it('lets the role override a default action', () => {
+    const roles = parseRoles(MINIMAL);
+    const builder = role(roles, 'builder');
+    expect(builder.permissions.edit).toEqual([{ resource: '*', effect: 'allow' }]);
+  });
 
-  it("allows every skill when the list is empty", () => {
-    const roles = parseRoles(MINIMAL.replace("skills: [openagentsy-handoff]", "skills: []"))
-    expect(roles.roles["builder"]!.permissions["skill"]).toEqual([{ resource: "*", effect: "allow" }])
-  })
+  it('derives the skill permission from the skill list', () => {
+    const roles = parseRoles(MINIMAL);
+    const builder = role(roles, 'builder');
+    expect(builder.permissions.skill).toEqual([
+      { resource: '*', effect: 'deny' },
+      { resource: 'openagentsy-handoff', effect: 'allow' },
+    ]);
+  });
 
-  it("reads the model profile and the effort ladder", () => {
-    const roles = parseRoles(MINIMAL)
-    const builder = roles.roles["builder"]!
-    expect(builder.modelProfile.primarySignal).toBe("coding")
-    expect(builder.modelProfile.costStance).toBe("balanced")
-    expect(builder.effort.climbTriggers).toEqual(["test_failed_twice"])
-  })
+  it('allows every skill when the list is empty', () => {
+    const roles = parseRoles(MINIMAL.replace('skills: [openagentsy-handoff]', 'skills: []'));
+    expect(roles.roles.builder?.permissions.skill).toEqual([{ resource: '*', effect: 'allow' }]);
+  });
 
-  it("rejects an unknown action", () => {
-    const broken = MINIMAL.replace("      shell:", "      telepathy:")
-    expect(() => parseRoles(broken)).toThrow(RolesError)
-    expect(() => parseRoles(broken)).toThrow(/unknown action/)
-  })
+  it('reads the model profile and the effort ladder', () => {
+    const roles = parseRoles(MINIMAL);
+    const builder = role(roles, 'builder');
+    expect(builder.modelProfile.primarySignal).toBe('coding');
+    expect(builder.modelProfile.costStance).toBe('balanced');
+    expect(builder.effort.climbTriggers).toEqual(['test_failed_twice']);
+  });
 
-  it("rejects an unknown permission effect", () => {
-    const broken = MINIMAL.replace("effect: allow", "effect: maybe")
-    expect(() => parseRoles(broken)).toThrow(/expected one of/)
-  })
+  it('rejects an unknown action', () => {
+    const broken = MINIMAL.replace('      shell:', '      telepathy:');
+    expect(() => parseRoles(broken)).toThrow(RolesError);
+    expect(() => parseRoles(broken)).toThrow(/unknown action/);
+  });
 
-  it("rejects a missing required field", () => {
-    const broken = MINIMAL.replace("    scope: only leased files\n", "")
-    expect(() => parseRoles(broken)).toThrow(/scope/)
-  })
+  it('rejects an unknown permission effect', () => {
+    const broken = MINIMAL.replace('effect: allow', 'effect: maybe');
+    expect(() => parseRoles(broken)).toThrow(/expected one of/);
+  });
 
-  it("rejects an unsupported version", () => {
-    expect(() => parseRoles(MINIMAL.replace("version: 1", "version: 2"))).toThrow(/version/)
-  })
+  it('rejects a missing required field', () => {
+    const broken = MINIMAL.replace('    scope: only leased files\n', '');
+    expect(() => parseRoles(broken)).toThrow(/scope/);
+  });
 
-  it("rejects a file with no roles", () => {
-    const broken = MINIMAL.replace(/roles:\n  builder:[\s\S]*$/, "roles: {}\n")
-    expect(() => parseRoles(broken)).toThrow(/at least one role/)
-  })
-})
+  it('rejects an unsupported version', () => {
+    expect(() => parseRoles(MINIMAL.replace('version: 1', 'version: 2'))).toThrow(/version/);
+  });
+
+  it('rejects a file with no roles', () => {
+    const broken = MINIMAL.replace(/roles:\n {2}builder:[\s\S]*$/, 'roles: {}\n');
+    expect(() => parseRoles(broken)).toThrow(/at least one role/);
+  });
+});

@@ -35,6 +35,15 @@ Phase 2 reuses code from agentsy (GPL-3.0-or-later; the MIT mention in its READM
 
 ## 1. 2.0: Biome, Husky and lint-staged
 
+> **Resolved.** Implemented on 2026-10-22. Biome 2.6.2, Husky 9.1.7, lint-staged 17.6.0.
+> `biome.jsonc`, `.husky/pre-commit`, `.github/workflows/check.yml` and
+> `.github/workflows/eval.yml` are in the repo. The whole codebase was formatted
+> once, and every non-null assertion was replaced with a real check, because
+> `noNonNullAssertion` is on in the recommended set. Markdown is excluded from
+> Biome: its table formatting is experimental and the plan's own lint-staged
+> pattern never covered `.md`. The safety suite runs on a pull request once the
+> pull request has left draft.
+
 Add this **now**, while the Phase 0/1 build is still running, so the code being written today is formatted from the start.
 
 ```bash

@@ -1,4 +1,4 @@
-import { z } from "zod"
+import { z } from 'zod';
 
 /**
  * The OpenCode plugin SDK's tool helper, without the SDK.
@@ -9,26 +9,26 @@ import { z } from "zod"
  * resolve, so the adapter has to be self contained. This is that same two
  * lines, with the types taken from the SDK at build time.
  */
-export type ToolArgs = Record<string, z.ZodType>
+export type ToolArgs = Record<string, z.ZodType>;
 
 export type ToolDefinition<Args extends ToolArgs = ToolArgs> = {
-  description: string
-  args: Args
+  description: string;
+  args: Args;
   execute: (
     args: z.infer<z.ZodObject<Args>>,
     context: {
-      sessionID: string
-      messageID: string
-      agent: string
-      directory: string
-      worktree: string
-      abort: AbortSignal
-      metadata: (input: { title?: string; metadata?: Record<string, unknown> }) => void
+      sessionID: string;
+      messageID: string;
+      agent: string;
+      directory: string;
+      worktree: string;
+      abort: AbortSignal;
+      metadata: (input: { title?: string; metadata?: Record<string, unknown> }) => void;
     },
-  ) => Promise<string>
-}
+  ) => Promise<string>;
+};
 
 export const tool = Object.assign(
   <Args extends ToolArgs>(input: ToolDefinition<Args>): ToolDefinition<Args> => input,
   { schema: z },
-)
+);

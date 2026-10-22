@@ -1,16 +1,16 @@
-import { mkdir, writeFile } from "node:fs/promises"
-import { dirname, isAbsolute, join } from "node:path"
-import type { DatabaseSync } from "node:sqlite"
-import { matchesGlob, normalizePath, relativeToRoot, isInsideRoot } from "../paths.js"
-import type { Lease, LeaseDecision } from "./types.js"
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
+import { isInsideRoot, matchesGlob, normalizePath, relativeToRoot } from '../paths.js';
+import type { Lease, LeaseDecision } from './types.js';
 
 type LeaseRow = {
-  id: number
-  bean: string
-  agent: string
-  glob: string
-  granted_at: string
-}
+  id: number;
+  bean: string;
+  agent: string;
+  glob: string;
+  granted_at: string;
+};
 
 function toLease(row: LeaseRow): Lease {
   return {
@@ -19,19 +19,19 @@ function toLease(row: LeaseRow): Lease {
     agent: row.agent,
     glob: row.glob,
     grantedAt: row.granted_at,
-  }
+  };
 }
 
 export type GrantLeasesInput = {
-  bean: string
-  agent: string
-  globs: string[]
-}
+  bean: string;
+  agent: string;
+  globs: string[];
+};
 
 export type GrantLeasesResult = {
-  granted: Lease[]
-  conflicts: { glob: string; agent: string; bean: string }[]
-}
+  granted: Lease[];
+  conflicts: { glob: string; agent: string; bean: string }[];
+};
 
 /**
  * Record the files one agent owns.
@@ -42,48 +42,55 @@ export type GrantLeasesResult = {
  * is the enforcement point, the grant records intent.
  */
 export function grantLeases(db: DatabaseSync, input: GrantLeasesInput): GrantLeasesResult {
-  const granted: Lease[] = []
-  const conflicts: { glob: string; agent: string; bean: string }[] = []
-  const grantedAt = new Date().toISOString()
+  const granted: Lease[] = [];
+  const conflicts: { glob: string; agent: string; bean: string }[] = [];
+  const grantedAt = new Date().toISOString();
 
-  const findExact = db.prepare(`SELECT id, bean, agent, glob, granted_at FROM leases WHERE glob = ?`)
+  const findExact = db.prepare(
+    `SELECT id, bean, agent, glob, granted_at FROM leases WHERE glob = ?`,
+  );
   const insert = db.prepare(
     `INSERT OR IGNORE INTO leases (bean, agent, glob, granted_at) VALUES (?, ?, ?, ?)`,
-  )
+  );
 
   for (const rawGlob of input.globs) {
-    const glob = normalizePath(rawGlob)
-    if (glob.length === 0) continue
+    const glob = normalizePath(rawGlob);
+    if (glob.length === 0) continue;
 
-    const existing = findExact.all(glob) as unknown as LeaseRow[]
-    const taken = existing.find((row) => row.agent !== input.agent)
+    const existing = findExact.all(glob) as unknown as LeaseRow[];
+    const taken = existing.find((row) => row.agent !== input.agent);
     if (taken) {
-      conflicts.push({ glob, agent: taken.agent, bean: taken.bean })
-      continue
+      conflicts.push({ glob, agent: taken.agent, bean: taken.bean });
+      continue;
     }
 
-    const result = insert.run(input.bean, input.agent, glob, grantedAt)
+    const result = insert.run(input.bean, input.agent, glob, grantedAt);
     if (result.changes > 0) {
-      granted.push({ id: Number(result.lastInsertRowid), bean: input.bean, agent: input.agent, glob, grantedAt })
+      granted.push({
+        id: Number(result.lastInsertRowid),
+        bean: input.bean,
+        agent: input.agent,
+        glob,
+        grantedAt,
+      });
     }
   }
 
-  return { granted, conflicts }
+  return { granted, conflicts };
 }
 
 export function listLeases(db: DatabaseSync, bean?: string): Lease[] {
-  const rows = (
-    bean === undefined
-      ? db.prepare(`SELECT id, bean, agent, glob, granted_at FROM leases ORDER BY id`)
-      : db.prepare(`SELECT id, bean, agent, glob, granted_at FROM leases WHERE bean = ? ORDER BY id`)
-  ).all(...(bean === undefined ? [] : [bean])) as unknown as LeaseRow[]
-  return rows.map(toLease)
+  const rows = (bean === undefined
+    ? db.prepare(`SELECT id, bean, agent, glob, granted_at FROM leases ORDER BY id`)
+    : db.prepare(`SELECT id, bean, agent, glob, granted_at FROM leases WHERE bean = ? ORDER BY id`)
+  ).all(...(bean === undefined ? [] : [bean])) as unknown as LeaseRow[];
+  return rows.map(toLease);
 }
 
 export type LeaseSnapshot = {
-  updatedAt: string
-  leases: Lease[]
-}
+  updatedAt: string;
+  leases: Lease[];
+};
 
 /**
  * Publish the leases as a plain file.
@@ -94,16 +101,16 @@ export type LeaseSnapshot = {
  * the source of truth and this file is written from it.
  */
 export async function writeLeaseSnapshot(path: string, leases: Lease[]): Promise<void> {
-  const snapshot: LeaseSnapshot = { updatedAt: new Date().toISOString(), leases }
-  await mkdir(dirname(path), { recursive: true })
-  await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8")
+  const snapshot: LeaseSnapshot = { updatedAt: new Date().toISOString(), leases };
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
 }
 
 export type CheckLeaseInput = {
-  path: string
-  root: string
-  agent?: string
-}
+  path: string;
+  root: string;
+  agent?: string;
+};
 
 export function decideFromLeases(
   leases: Lease[],
@@ -111,23 +118,23 @@ export function decideFromLeases(
   root: string,
   agent: string | undefined,
 ): LeaseDecision {
-  const relative = relativeToRoot(root, path)
+  const relative = relativeToRoot(root, path);
   const matches = leases
     .filter((lease) => matchesGlob(lease.glob, relative))
-    .sort((a, b) => b.glob.length - a.glob.length)
+    .sort((a, b) => b.glob.length - a.glob.length);
 
-  const winner = matches[0]
+  const winner = matches[0];
   if (!winner) {
-    return { path: relative, status: "unleased" }
+    return { path: relative, status: 'unleased' };
   }
 
   return {
     path: relative,
-    status: agent !== undefined && agent !== winner.agent ? "conflict" : "leased",
+    status: agent !== undefined && agent !== winner.agent ? 'conflict' : 'leased',
     agent: winner.agent,
     bean: winner.bean,
     glob: winner.glob,
-  }
+  };
 }
 
 /**
@@ -137,9 +144,9 @@ export function decideFromLeases(
  * the holder is a different agent the answer is a conflict, not a permission.
  */
 export function checkLease(db: DatabaseSync, input: CheckLeaseInput): LeaseDecision {
-  const absolute = isAbsolute(input.path) ? input.path : join(input.root, input.path)
+  const absolute = isAbsolute(input.path) ? input.path : join(input.root, input.path);
   if (!isInsideRoot(input.root, absolute)) {
-    return { path: normalizePath(input.path), status: "unleased" }
+    return { path: normalizePath(input.path), status: 'unleased' };
   }
-  return decideFromLeases(listLeases(db), absolute, input.root, input.agent)
+  return decideFromLeases(listLeases(db), absolute, input.root, input.agent);
 }

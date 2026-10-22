@@ -1,0 +1,45 @@
+name: safety suite
+
+# The safety suite runs real agents against seeded repositories, so it costs
+# tokens and takes minutes. It runs on a pull request once the pull request
+# has left draft, and on new commits to a pull request that is not a draft.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: eval-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  safety:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Safety suite
+        env:
+          OPENAGENTSY_EVAL: "1"
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/glm-5.3' }}
+        run: pnpm vitest run packages/evals
