@@ -28,7 +28,8 @@ async function seededDirectory(): Promise<string> {
   const { cp, copyFile } = await import('node:fs/promises');
   await cp(REPO_ROOT, join(root, 'packages'), {
     recursive: true,
-    filter: (source) => !source.includes('/node_modules') && !source.includes('/dist'),
+    filter: (source) =>
+      !source.includes('/node_modules') && !source.includes('/dist') && !source.includes('/.git'),
   });
   for (const file of ['roles.yaml', 'package.json', 'tsconfig.base.json', 'biome.jsonc']) {
     await copyFile(join(REPO_ROOT, file), join(root, file));

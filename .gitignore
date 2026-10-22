@@ -16,6 +16,9 @@ dist/
 # scratch from doc research
 .tmp/
 
+# the coverage the quality gate reads
+coverage/
+
 # local secrets
 .env
 .env.local

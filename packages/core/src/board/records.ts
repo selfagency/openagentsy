@@ -119,7 +119,11 @@ export function createRecord(db: DatabaseSync, input: PostRecordInput): BoardRec
 }
 
 export type InboxQuery = {
-  agent: string;
+  /**
+   * The agent whose inbox is read. Without it, every record is read, which
+   * is what a person wants and an agent never does.
+   */
+  agent?: string;
   cursor?: number;
   limit?: number;
   markRead?: boolean;
@@ -145,45 +149,64 @@ const MAX_LIMIT = 100;
 export function listRecords(db: DatabaseSync, query: InboxQuery): InboxResult {
   const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const cursor = query.cursor ?? 0;
+  const agent = query.agent;
 
-  const rows = db
-    .prepare(
-      `SELECT id, bean, kind, from_agent, to_agent, action, state, artifact, contract, needs, surprise, confidence, created_at
-         FROM records
-        WHERE id > ?
-          AND (to_agent = ? OR to_agent IS NULL)
-          AND NOT EXISTS (
-            SELECT 1 FROM record_reads
-             WHERE record_reads.record_id = records.id
-               AND record_reads.agent = ?
-          )
-        ORDER BY id ASC
-        LIMIT ?`,
-    )
-    .all(cursor, query.agent, query.agent, limit) as unknown as RecordRow[];
+  const rows = (agent === undefined
+    ? db
+        .prepare(
+          `SELECT id, bean, kind, from_agent, to_agent, action, state, artifact, contract, needs, surprise, confidence, created_at
+               FROM records
+              WHERE id > ?
+              ORDER BY id ASC
+              LIMIT ?`,
+        )
+        .all(cursor, limit)
+    : db
+        .prepare(
+          `SELECT id, bean, kind, from_agent, to_agent, action, state, artifact, contract, needs, surprise, confidence, created_at
+               FROM records
+              WHERE id > ?
+                AND (to_agent = ? OR to_agent IS NULL)
+                AND NOT EXISTS (
+                  SELECT 1 FROM record_reads
+                   WHERE record_reads.record_id = records.id
+                     AND record_reads.agent = ?
+                )
+              ORDER BY id ASC
+              LIMIT ?`,
+        )
+        .all(cursor, agent, agent, limit)) as unknown as RecordRow[];
 
   const records = rows.map((row) => toRecord(row, false));
 
-  const unreadRow = db
-    .prepare(
-      `SELECT COUNT(*) AS count
-         FROM records
-        WHERE (to_agent = ? OR to_agent IS NULL)
-          AND NOT EXISTS (
-            SELECT 1 FROM record_reads
-             WHERE record_reads.record_id = records.id
-               AND record_reads.agent = ?
-          )`,
-    )
-    .get(query.agent, query.agent) as unknown as { count: number };
+  const unreadRow = (agent === undefined
+    ? db
+        .prepare(
+          `SELECT COUNT(*) AS count
+               FROM records
+              WHERE id > ?`,
+        )
+        .get(cursor)
+    : db
+        .prepare(
+          `SELECT COUNT(*) AS count
+               FROM records
+              WHERE (to_agent = ? OR to_agent IS NULL)
+                AND NOT EXISTS (
+                  SELECT 1 FROM record_reads
+                   WHERE record_reads.record_id = records.id
+                     AND record_reads.agent = ?
+                )`,
+        )
+        .get(agent, agent)) as unknown as { count: number };
 
-  if (query.markRead !== false && records.length > 0) {
+  if (query.markRead !== false && agent !== undefined && records.length > 0) {
     const mark = db.prepare(
       `INSERT OR IGNORE INTO record_reads (record_id, agent, read_at) VALUES (?, ?, ?)`,
     );
     const readAt = new Date().toISOString();
     for (const record of records) {
-      mark.run(record.id, query.agent, readAt);
+      mark.run(record.id, agent, readAt);
     }
   }
 

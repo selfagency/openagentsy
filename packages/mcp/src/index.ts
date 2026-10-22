@@ -69,9 +69,30 @@ const db =
         },
       });
 
+/**
+ * The usage card.
+ *
+ * The MCP protocol hands the server a place to describe itself, and the
+ * client puts it in the system prompt. So the card is the board's whole
+ * documentation to an agent, and it is paid for on every turn. It is
+ * therefore short, and it says only what an agent cannot infer: which tool
+ * does what, and the three rules that hold everywhere.
+ */
+const USAGE_CARD = `The OpenAgentsy board. The tools:
+- board_post: leave a typed record for another agent. kind is status, contract, question, blocker or finding. Every record carries a confidence: verified, inferred or guess.
+- board_inbox: read the records addressed to you, and mark them read. A cursor, never a history.
+- board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
+- board_lease_release: give a lease back. Only the holder may release it.
+- board_lease_check: ask whether you may write a path.
+- board_lease_list: list the leases.
+- board_budget_set: set a token budget for a bean. The Lead only.
+- board_budget_check: report whether a bean is over its budget. At 85 percent the builder stops and posts a blocker.
+- board_budget_list: list the budgets.
+Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
+
 const server = new McpServer(
   { name: 'openagentsy', version: '0.1.0' },
-  { capabilities: { tools: {} } },
+  { capabilities: { tools: {} }, instructions: USAGE_CARD },
 );
 
 function text(value: unknown): { content: { type: 'text'; text: string }[] } {

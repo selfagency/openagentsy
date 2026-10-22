@@ -2,8 +2,14 @@ pnpm exec lint-staged
 pnpm typecheck
 # The changed-code gate. HEAD is the base because the staged changes sit on
 # top of it, so only what this commit introduces can fail the gate.
+#
+# The complexity score needs the coverage, because a score without it is an
+# estimate that punishes every function nobody wrote a test for. The tests
+# take a second and a half, so they run here rather than in a separate step.
 if git rev-parse --verify HEAD >/dev/null 2>&1; then
-  pnpm exec fallow audit --base HEAD --format human --quiet
+  BASE=HEAD
 else
-  pnpm exec fallow audit --base develop --format human --quiet
+  BASE=develop
 fi
+pnpm test:coverage
+pnpm exec fallow audit --base "$BASE" --coverage coverage/coverage-final.json --format human --quiet
