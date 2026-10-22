@@ -94,11 +94,23 @@ export async function answerPermissions(
   };
 }
 
-async function waitForServer(baseUrl: string, timeoutMs: number): Promise<void> {
+async function waitForServer(
+  baseUrl: string,
+  timeoutMs: number,
+  auth?: { user: string; password: string },
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${baseUrl}/app`);
+      const response = await fetch(`${baseUrl}/app`, {
+        ...(auth
+          ? {
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${auth.user}:${auth.password}`).toString('base64')}`,
+              },
+            }
+          : {}),
+      });
       if (response.ok) return;
     } catch {
       // The server is not up yet.
@@ -138,7 +150,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   try {
     // A cold start under load can take longer than a warm one. 90 seconds
     // covers a machine that is busy starting other servers.
-    await waitForServer(baseUrl, 90_000);
+    await waitForServer(baseUrl, 90_000, { user: 'opencode', password });
   } catch (error) {
     child.kill('SIGTERM');
     throw error;
