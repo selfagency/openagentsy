@@ -1,0 +1,15 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "langwatch": {
+      "type": "remote",
+      "url": "https://app.langwatch.ai/mcp",
+      "enabled": true
+    },
+    "fallow": {
+      "type": "local",
+      "command": ["pnpm", "exec", "fallow-mcp"],
+      "enabled": true
+    }
+  }
+}

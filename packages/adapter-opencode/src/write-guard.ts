@@ -55,22 +55,15 @@ async function recordDecision(
 /**
  * Check a write against the leases, and record the decision.
  *
- * Throws when the write is refused, so the agent is told and the tool call
- * ends.
+ * Returns undefined when there is nothing to check: the tool is not a write,
+ * or the path is unknown. The two runtimes differ in what they do with a
+ * refusal, not in the rule, so the rule lives here.
  */
-export async function guardWrite(
+export async function checkWrite(
   root: string,
-  toolName: string,
-  args: unknown,
-  agent: string | undefined,
-  sessionID?: string,
-): Promise<void> {
-  if (!WRITE_TOOLS.has(toolName)) return;
-  if (!agent) return;
-
-  const path = targetPathOf(args);
-  if (!path) return;
-
+  input: { toolName: string; path: string; agent: string; sessionID?: string | undefined },
+): Promise<{ effect: 'allow' | 'deny'; reason: string } | undefined> {
+  const { toolName, path, agent, sessionID } = input;
   const absolute = path.startsWith('/') ? path : `${root}/${path}`;
   const decision = await decideWrite(root, absolute, agent);
 
@@ -93,9 +86,7 @@ export async function guardWrite(
       detail: decision.reason,
       sessionID,
     });
-    throw new Error(
-      `OpenAgentsy blocked this write. ${decision.reason} Ask the Lead for a lease, then retry.`,
-    );
+    return { effect: 'deny', reason: decision.reason };
   }
 
   await recordDecision(root, {
@@ -107,4 +98,32 @@ export async function guardWrite(
     detail: decision.reason,
     sessionID,
   });
+  return { effect: 'allow', reason: decision.reason };
+}
+
+/**
+ * Check a write against the leases, and record the decision.
+ *
+ * Throws when the write is refused, so the agent is told and the tool call
+ * ends.
+ */
+export async function guardWrite(
+  root: string,
+  toolName: string,
+  args: unknown,
+  agent: string | undefined,
+  sessionID?: string,
+): Promise<void> {
+  if (!WRITE_TOOLS.has(toolName)) return;
+  if (!agent) return;
+
+  const path = targetPathOf(args);
+  if (!path) return;
+
+  const result = await checkWrite(root, { toolName, path, agent, sessionID });
+  if (result?.effect === 'deny') {
+    throw new Error(
+      `OpenAgentsy blocked this write. ${result.reason} Ask the Lead for a lease, then retry.`,
+    );
+  }
 }

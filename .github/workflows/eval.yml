@@ -2,23 +2,49 @@ name: safety suite
 
 # The safety suite runs real agents against seeded repositories, so it costs
 # tokens and takes minutes. It runs on a pull request once the pull request
-# has left draft, and on new commits to a pull request that is not a draft.
+# has left draft, on a schedule, and on demand.
+#
+# The matrix is the two runtimes. The suite drives a real OpenCode server
+# through the same harness on both, so a change that works on one and breaks
+# on the other shows up here rather than in a session.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "How many times to run each case. The plan asks for 5 before a release."
+        required: false
+        default: "1"
 
 concurrency:
-  group: eval-${{ github.event.pull_request.number }}
+  group: eval-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   safety:
     if: github.event.pull_request.draft == false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # OpenCode 1 is the stable line.
+          - runtime: v1
+            package: opencode-ai@1.19.4
+          # OpenCode 2 is published under its own scope. The plugin API is
+          # different, and the adapter has one path for each.
+          - runtime: v2
+            package: "@opencode/cli@2.1.3"
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      # The key is what makes the run a trace in LangWatch. Without it the
+      # cases still run, and the conversations stay on the machine.
+      LANGWATCH_API_KEY: ${{ secrets.LANGWATCH_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -37,9 +63,35 @@ jobs:
       - name: Build
         run: pnpm build
 
+      - name: Install OpenCode (${{ matrix.runtime }})
+        run: npm install -g '${{ matrix.package }}'
+
+      - name: The version under test
+        run: opencode --version
+
+      - name: Unit tests
+        run: pnpm test
+
+      # The v2 leg cannot run the safety suite yet: the v2 server has a
+      # different client API, so the harness would need a port. What it can
+      # prove today is that the plugin loads in a real v2 and the adapter's
+      # setup registers against the real v2 context.
+      - name: The v2 conformance probe
+        if: matrix.runtime == 'v2'
+        run: node packages/adapter-opencode/scripts/probe-v2.mjs
+
       - name: Safety suite
+        if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
           OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
           OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/glm-5.3' }}
-        run: pnpm vitest run packages/evals
+        run: |
+          for run in $(seq 1 ${{ github.event.inputs.runs || 1 }}); do
+            echo "run $run of ${{ github.event.inputs.runs || 1 }}"
+            pnpm vitest run packages/evals
+          done
+
+      - name: The run in LangWatch
+        if: always() && env.LANGWATCH_API_KEY != ''
+        run: echo 'The traces are in LangWatch, under the scenario batch of this commit.'

@@ -7,27 +7,30 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { guardWrite } from './write-guard.js';
+import { checkWrite } from './write-guard.js';
 
 /**
  * The OpenCode 2 plugin path.
  *
  * OpenCode 2 has a real plugin API: a plugin default-exports a definition
  * with an `id` and a `setup(ctx)`, and `setup` registers hooks, transforms,
- * tools and subscriptions on the context. The V1 hook map does not run here,
- * and this path was written from the V2 documentation.
+ * tools and subscriptions on the context. The V1 hook map does not run here.
  *
  * The mapping from the V1 hooks this plugin uses:
  *
- * | V1                    | V2                                      |
- * | --------------------- | --------------------------------------- |
- * | `tool.execute.before` | `ctx.tool.hook("execute.before", ...)`  |
- * | `chat.params`         | `ctx.session.hook("context", ...)`      |
- * | `event`               | `ctx.event.subscribe({ signal })`       |
- * | `tool` map            | `ctx.tool.transform(...)`               |
+ * | V1                    | V2                                        |
+ * | --------------------- | ----------------------------------------- |
+ * | `tool.execute.before` | `ctx.permission.hook("evaluate", ...)`    |
+ * | `chat.params`         | `ctx.session.hook("context", ...)`        |
+ * | `event`               | `ctx.event.subscribe({ signal })`         |
+ * | `tool` map            | `ctx.tool.transform(...)`                 |
  *
- * The V2 path has not been run against a V2 build, because V2 is not
- * installed on this machine. The V1 path is verified end to end.
+ * The write guard uses the permission hook and not the tool hook, because
+ * the permission event carries the agent and the paths, and the tool event
+ * carries neither. The rule is the same one the V1 path applies: only
+ * `checkWrite` decides.
+ *
+ * This path is verified against `@opencode/cli@2.1.3`.
  */
 
 /** The V2 context, as far as this plugin uses it. */
@@ -52,6 +55,12 @@ export type V2Context = {
       callback: (editor: { add: (definition: V2ToolDefinition) => void }) => void,
     ) => Promise<{ dispose: () => Promise<void> }>;
   };
+  permission: {
+    hook: (
+      name: string,
+      callback: (event: V2PermissionEvent) => Promise<void> | void,
+    ) => Promise<{ dispose: () => Promise<void> }>;
+  };
   event: {
     subscribe: (options?: { signal?: AbortSignal }) => AsyncIterable<V2Event>;
   };
@@ -71,10 +80,28 @@ export type V2ToolEvent = {
   sessionID?: string;
 };
 
+/**
+ * The event of a permission decision, the V2 place a write is refused.
+ *
+ * It carries the session, the agent, the action and the paths, which is
+ * everything the lease rule needs.
+ */
+export type V2PermissionEvent = {
+  sessionID: string;
+  agent?: string;
+  action: string;
+  resources: readonly string[];
+  effect: 'allow' | 'ask' | 'deny';
+  message?: string;
+};
+
 export type V2Event = {
   type: string;
   properties?: { sessionID?: string };
 };
+
+/** The permission actions that write. The names are the permission map keys. */
+const WRITE_ACTIONS = new Set(['edit', 'write', 'patch', 'apply_patch']);
 
 export type V2ToolDefinition = {
   name: string;
@@ -212,10 +239,26 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
 
   await registerContextHook(root, ctx, sessionAgents, switched);
 
-  // The write guard.
-  await ctx.tool.hook('execute.before', async (event) => {
-    const agent = event.sessionID ? sessionAgents.get(event.sessionID) : undefined;
-    await guardWrite(root, event.tool, event.input, agent);
+  // The write guard. The permission event carries the agent and the paths,
+  // so the lease rule can be applied before the action runs.
+  await ctx.permission.hook('evaluate', async (event) => {
+    if (!WRITE_ACTIONS.has(event.action)) return;
+    const agent = event.agent;
+    if (agent === undefined) return;
+
+    for (const resource of event.resources) {
+      const result = await checkWrite(root, {
+        toolName: event.action,
+        path: resource,
+        agent,
+        sessionID: event.sessionID,
+      });
+      if (result?.effect === 'deny') {
+        event.effect = 'deny';
+        event.message = `OpenAgentsy blocked this write. ${result.reason} Ask the Lead for a lease, then retry.`;
+        return;
+      }
+    }
   });
 
   // The effort tool.

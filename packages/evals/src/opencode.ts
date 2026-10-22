@@ -122,10 +122,17 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   const logFd =
     logFile === undefined ? undefined : (await import('node:fs')).openSync(logFile, 'a');
 
+  // OpenCode 2 serves with a password and OpenCode 1 does not, so the
+  // password is set for both and sent with every request. The harness talks
+  // to the same server API on both, so one harness covers both runtimes.
+  const password = process.env.OPENAGENTSY_EVAL_PASSWORD ?? 'openagentsy-eval';
   const child: ChildProcess = spawn(
     'opencode',
     ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
-    { stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'] },
+    {
+      stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+    },
   );
 
   try {
@@ -135,7 +142,10 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     throw error;
   }
 
-  const client = createOpencodeClient({ baseUrl });
+  const client = createOpencodeClient({
+    baseUrl,
+    headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
+  });
 
   return {
     client,

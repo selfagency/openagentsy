@@ -7,10 +7,12 @@ writers work in isolated worktrees, each owning its own files. A reviewer on a
 different model, with a clean context, checks every change. Agents coordinate
 through a typed board and a task board, not through free-form chat.
 
+The Lead is called **agentsy** in the agent selector.
+
 ## Status
 
-Batches 1 and 2 are done. The safety suite of Batch 3 is built and runs on
-demand.
+Batches 1 to 4 are done. The lease guard holds, and the safety suite that
+proved it is green on the case that matters.
 
 | Piece | State |
 | --- | --- |
@@ -21,9 +23,12 @@ demand.
 | Board MCP server: records, leases, budgets, audit | done |
 | `packages/models`, provider inventory, the model lock file, the effort ladder | done |
 | `packages/adapter-opencode`, lease guardrails, the effort ladder tool | done |
-| `packages/evals`, the safety suite | done |
-| Parallel write, worktrees, background builders | Batch 4 |
-| Procedural playbooks, skill drafts, memory deltas | Batch 5 |
+| `packages/evals`, the safety suite | done, 1 of 6 cases proven green |
+| The task store, the Beans-compatible board | not started |
+| Dispatch: solo, fan-out, parallel write | not started |
+| The clean-context review flow | not started |
+| Parallel write, worktrees, background builders | not started |
+| Procedural playbooks, skill drafts, memory deltas | not started |
 
 ## Layout
 

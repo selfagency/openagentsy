@@ -1,16 +1,27 @@
 # OpenAgentsy Phase 2: Implementation Plan
 
-**Bottom line.** Phase 2 ships six packages and one change to repo tooling:
+**Bottom line.** Phase 2 ships seven packages and two cross-cutting features:
 
-- **Repo tooling (2.0).** Biome handles linting and formatting. Husky and lint-staged run it on every commit and block the commit when it fails. `tsc --noEmit` handles typechecking.
 - **`@openagentsy/tasks`.** A built-in task tracker that reads and writes the Beans `.beans/` Markdown format directly. It needs neither `beans-mcp` nor the `beans` CLI.
 - **`@openagentsy/footprint`.** Energy, water, carbon and warming estimates using the EcoLogits method. Every number carries a range.
 - **`@openagentsy/ledger`.** A local SQLite ledger of tokens and cost per message. It also records waste signals and outcomes: tokens per completed task and per commit.
-- **`@openagentsy/hooks`.** Deterministic guardrails built on agentsy's `HookRegistry`, plus secret redaction and the patch review queue.
+- **`@openagentsy/hooks`.** Deterministic guardrails built on agentsy's `HookRegistry`, plus:
+  - secret redaction;
+  - a **lesson lifecycle** with executable eval artifacts, which replaces the patch queue (§7.5);
+  - the **Lead recovery loop** (§7.7).
 - **`@openagentsy/offload`.** Routes small housekeeping jobs (titles, summaries, JSON repair, quick replies) to a local model.
 - **`@openagentsy/sidebar`.** The OpenCode V2 TUI sidebar blocks, with a toast and slash-command fallback for V1.
+- **`@openagentsy/quality`.** The anti-slop checks:
+  - static CSS, HTML, copy and comment checks in code;
+  - optional Hallmark `sloplint`;
+  - recorded waivers;
+  - three on-demand skills;
+  - a reviewer gate (§9).
+- **`oa conformance`.** Reports, per host version, which OpenCode capabilities are proven, observed or unverified (§10).
 
-Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode API detail is inferred rather than read from source, it's marked **VERIFY**.
+The Biome, Husky, lint-staged, `tsc` and CI baseline is already in the repo (§1).
+
+Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode API detail is inferred rather than read from source, it's marked **VERIFY**. Every **VERIFY** maps to one conformance check.
 
 ---
 
@@ -24,6 +35,9 @@ Phase 2 reuses code from agentsy (GPL-3.0-or-later; the MIT mention in its READM
 | hmans/beans | Apache-2.0 | File format re-implemented. Fractional-index algorithm ported, with an attribution header and NOTICE entry (Apache-2.0 code may go into GPL-3 works). |
 | junhoyeo/tokscale | MIT | Ideas only: OpenCode DB discovery, pricing fallback chain, dedup rules. |
 | xiufengsun/TokenTracker | MIT | Ideas only: outcomes sidecar, git attribution, privacy rules. |
+| zhaono1/agent-playbook | MIT | Lesson states, start packet and eval-artifact contract adapted; long-task recovery loop and host-conformance states adapted. No package or MCP dependency. Attribution headers and NOTICE entry. |
+| miqdadbadjuber/anti-slop | MIT | Rules adapted into code and skills, keeping their `R-XX` IDs in rule metadata. Attribution headers and NOTICE entry. |
+| Nutlope/hallmark | MIT | Floor rules adapted, keeping their Floor numbers. `sloplint.mjs` is called as an external check when installed, not vendored. |
 | EcoLogits methodology | CC BY-SA 4.0 (docs) | Formulas re-implemented, with credit in the UI and README. **VERIFY** the license of `ecologits/data/models.json` before bundling it. Until then, fetch it at runtime and cache it. |
 
 ```jsonc
@@ -33,88 +47,18 @@ Phase 2 reuses code from agentsy (GPL-3.0-or-later; the MIT mention in its READM
 
 ---
 
-## 1. 2.0: Biome, Husky and lint-staged
+## 1. Baseline already in place
 
-> **Resolved.** Implemented on 2026-10-22. Biome 2.6.2, Husky 9.1.7, lint-staged 17.6.0.
-> `biome.jsonc`, `.husky/pre-commit`, `.github/workflows/check.yml` and
-> `.github/workflows/eval.yml` are in the repo. The whole codebase was formatted
-> once, and every non-null assertion was replaced with a real check, because
-> `noNonNullAssertion` is on in the recommended set. Markdown is excluded from
-> Biome: its table formatting is experimental and the plan's own lint-staged
-> pattern never covered `.md`. The safety suite runs on a pull request once the
-> pull request has left draft.
+Biome (lint and format), Husky with lint-staged (blocking pre-commit), `tsc -b --noEmit`, and the CI check are already set up. Phase 2 code must pass `pnpm lint` and `pnpm typecheck`. Phase 2 adds two things on top:
 
-Add this **now**, while the Phase 0/1 build is still running, so the code being written today is formatted from the start.
+- **Agents can't skip the hook.** The `no-skip-git-hooks` rule (§7.3) denies agent shell calls that use:
+  - `--no-verify`;
+  - `-n` on `git commit`;
+  - `HUSKY=0`;
+  - `core.hooksPath`.
 
-```bash
-pnpm add -D -E @biomejs/biome
-pnpm add -D husky lint-staged
-pnpm exec husky init
-```
-
-`biome.jsonc`:
-
-```jsonc
-{
-  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-  "files": { "includes": ["**", "!**/dist", "!**/.beans", "!**/.openagentsy"] },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always" } },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "recommended": true,
-      "suspicious": { "noExplicitAny": "error", "noConsole": "error" },
-      "correctness": { "noUnusedVariables": "error", "noUnusedImports": "error" },
-      "style": { "useConst": "error" }
-    }
-  },
-  "overrides": [
-    { "includes": ["evals/**", "**/*.test.ts"], "linter": { "rules": { "suspicious": { "noExplicitAny": "off" } } } },
-    { "includes": ["scripts/**"], "linter": { "rules": { "suspicious": { "noConsole": "off" } } } }
-  ]
-}
-```
-
-**VERIFY** the key names against the Biome major version you pin. Biome 2 renamed `ignore`/`include` to `files.includes` with `!` negation, and moved import sorting under `assist`. `biome migrate --write` fixes up an older config.
-
-`package.json`:
-
-```jsonc
-{
-  "scripts": {
-    "prepare": "husky",
-    "lint": "biome check .",
-    "lint:fix": "biome check --write .",
-    "typecheck": "tsc -b --noEmit",
-    "ci:check": "biome ci . && pnpm typecheck"
-  },
-  "lint-staged": {
-    "*.{js,mjs,cjs,ts,mts,cts,tsx,json,jsonc}": [
-      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
-    ]
-  }
-}
-```
-
-`.husky/pre-commit`:
-
-```sh
-pnpm exec lint-staged
-pnpm typecheck
-```
-
-`.github/workflows/check.yml` runs `pnpm ci:check` on every PR, so `--no-verify` can't get anything past the gate.
-
-**Blocking behaviour.**
-
-- Biome exits non-zero on lint errors. lint-staged then aborts, and Husky stops the commit.
-- Fixable formatting is written back and re-staged automatically.
-- `tsc` runs on the whole project because types need the full program. If it gets slow, move it to `.husky/pre-push`.
-
-**Agents go through the same hook.** §7.3 adds a hook rule that denies `--no-verify`, `-n` on `git commit`, and `HUSKY=0` in agent shell calls. When the pre-commit hook fails, its output comes back to the agent as a tool error so the agent fixes the code.
+  When the pre-commit hook fails, its output comes back to the agent as a tool error, so the agent fixes the code.
+- **Quality checks run separately from Biome** (§9), through a PostToolCall hook and `oa_quality_check`. If GritQL can match comments reliably, the comment rules may also ship as a Biome plugin. The checker in `packages/quality` stays the source of truth either way.
 
 ---
 
@@ -125,13 +69,24 @@ packages/
   tasks/        # .beans-compatible task store + oa_task_* tools + prime injection
   footprint/    # EcoLogits-method estimator (pure, no I/O)
   ledger/       # SQLite usage ledger, pricing, waste signals, outcomes
-  hooks/        # agentsy HookRegistry adapter, guardrail rules, redaction, patch queue
+  hooks/        # agentsy HookRegistry adapter, guardrail rules, redaction,
+                #   lessons/ (lifecycle + eval runner), recovery-loop checks
+  quality/      # rule registry, static checks, comment lint, sloplint bridge, waivers, reviewer gate
   offload/      # local-model router (Ollama / LM Studio) for micro-tasks
   sidebar/      # V2 TUI plugin (dist/tui.js) + V1 server fallback (dist/v1.js)
-  adapters/     # from Phase 1: V1/V2 defineTool, event bridge
+  adapters/     # from Phase 1: V1/V2 defineTool, event bridge, conformance probes
+skills/
+  oa-ui/  oa-copy/  oa-comments/     # on-demand quality skills (§9.5)
 ```
 
-Dependency direction runs `footprint` → `ledger` → `sidebar`, and `tasks` → `sidebar`. `hooks` depends only on `@agentsy/runtime`. `footprint` and the parts of `tasks` that do no I/O stay pure, so they can be tested without OpenCode.
+**Dependency direction.**
+- `footprint` → `ledger` → `sidebar`.
+- `tasks` → `sidebar`.
+- `hooks` depends only on `@agentsy/runtime`.
+- `quality` is pure apart from the optional sloplint spawn. `hooks` calls it.
+- `tasks` reads its findings through an injected `openFloorFindings(taskId)`, so there is no import cycle.
+
+`footprint`, `quality`'s rule functions and the parts of `tasks` that do no I/O stay pure, so they can be tested without OpenCode.
 
 ---
 
@@ -489,10 +444,13 @@ export const taskTools = (store: TaskStore) => ({
 ### 3.7 Rules the code enforces, so prompts don't have to
 
 ```ts
-function enforceTransitions(cur: Task, next: Task) {
+// openFloorFindings is injected by the plugin entry from @openagentsy/quality (§9.4); tasks never imports quality.
+function enforceTransitions(cur: Task, next: Task, deps: { openFloorFindings: (taskId: string) => Finding[] }) {
   if (next.status === 'completed') {
     if (/- \[ \]/.test(next.body)) throw new Error('Unchecked items remain; check them off or move them to a follow-up task.');
     if (!/^## Summary of Changes/m.test(next.body)) throw new Error('Add a "## Summary of Changes" section before completing.');
+    const floor = deps.openFloorFindings(next.id);
+    if (floor.length) throw new Error(`${floor.length} open floor quality finding(s): ${floor.slice(0, 3).map((f) => `${f.ruleId} ${f.file}:${f.line}`).join('; ')}. Fix them; floor rules can't be waived.`);
   }
   if (next.status === 'scrapped' && !/^## Reasons for Scrapping/m.test(next.body))
     throw new Error('Add a "## Reasons for Scrapping" section before scrapping.');
@@ -740,7 +698,7 @@ CREATE INDEX IF NOT EXISTS usage_task ON usage(task_id);
 
 CREATE TABLE IF NOT EXISTS waste (
   id INTEGER PRIMARY KEY, root_session_id TEXT, message_id TEXT,
-  kind TEXT CHECK (kind IN ('retry','tool_error_loop','interrupted','undo','reverted_code','cache_miss')),
+  kind TEXT CHECK (kind IN ('retry','tool_error_loop','interrupted','undo','reverted_code','cache_miss','no_progress')),
   tokens INTEGER NOT NULL, detail TEXT, ts TEXT NOT NULL
 );
 
@@ -829,7 +787,7 @@ GROUP BY o.task_id;
 
 ### 5.6 Exports
 
-`oa ledger export --json` writes the counters only, using a schema documented in `packages/ledger/SCHEMA.md`. Because tokscale and TokenTracker already read OpenCode's own database, people who use those tools get the same sessions without any work from us. Nothing is uploaded. There is no leaderboard, streak or achievement feature (§10).
+`oa ledger export --json` writes the counters only, using a schema documented in `packages/ledger/SCHEMA.md`. Because tokscale and TokenTracker already read OpenCode's own database, people who use those tools get the same sessions without any work from us. Nothing is uploaded. There is no leaderboard, streak or achievement feature (§12).
 
 ---
 
@@ -968,7 +926,7 @@ Formatting rules:
 | Tasks | `TaskStore.all()` through a file watcher on `.beans/` | Shows in-progress, the next 3 ready tasks, and how many are blocked. Mouse-down on a row inserts `oa_task_show <id>` into the prompt. **VERIFY** the prompt-insert API. |
 | Budget | `ledger.db` for this root session | Tokens by role, cache hit rate, waste %, and tokens per completed task. Also tokens saved by offload. |
 | Memory inbox | Magic Context harvest queue | Each memory gets `a` (approve) or `r` (reject) through `context.keymap.layer`. Rejected memories never enter memory. |
-| Accountability | The `outcome` table, the redaction counter and the hook audit log | Links to `oa report --ethical`. |
+| Accountability | The `outcome` table, the redaction counter, the hook audit log, lessons awaiting a decision (§7.5), board/report mismatch flags (§7.7), quality waivers (§9.4) and the conformance count (§10) | For example: "3 lessons to review · 2 waivers · conformance 9/14 observed". Links to `oa report --ethical`. |
 
 ### 6.5 Collapse persistence
 
@@ -982,7 +940,7 @@ export function useCollapsed(key: string, initial: boolean): [() => boolean, () 
 
 ### 6.6 Framing rules, as code review checks
 
-- Blocks only use `theme.text.base` and `theme.text.muted`. A lint rule (a custom Biome GritQL plugin, or a unit test that scans the JSX) fails if a footprint block references `theme.error` or `theme.warning`.
+- Blocks only use `theme.text.base` and `theme.text.muted`. A unit test that scans the block JSX (or a project-local `packages/quality` rule) fails if a footprint block references `theme.error` or `theme.warning`.
 - No copy contains "you", "your fault", "streak", "today you" or a comparison with other users. A unit test checks this against a list of banned words.
 - `footprint.showWarming` defaults to `true`, and can be set to `false` in `openagentsy.jsonc`.
 
@@ -1084,8 +1042,14 @@ export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
       : { continue: true } },
 
   { id: 'protect-policy', event: 'PreToolCall', block: true,
-    handler: async (e) => isWrite(e) && /openagentsy\.jsonc$|\.husky\/|biome\.jsonc$/.test(targetPath(e) ?? '')
-      ? { continue: false, reason: 'Policy and hook files are edited by a person, not an agent. Propose the change in chat.' }
+    handler: async (e) => isWrite(e) && /openagentsy\.jsonc$|\.husky\/|biome\.jsonc$|\.openagentsy\/(lessons|quality\/waivers\.json|conformance\.json)/.test(targetPath(e) ?? '')
+      ? { continue: false, reason: 'Policy, hook, lesson and waiver files are edited by a person, not an agent. Propose the change in chat.' }
+      : { continue: true } },
+
+  // Human-only decisions: agents may propose lessons and waivers, never decide them (§7.5, §9.4).
+  { id: 'human-only-decisions', event: 'PreToolCall', block: true,
+    handler: async (e) => ['oa_lesson_decide', 'oa_quality_waive'].includes(e.toolName)
+      ? { continue: false, reason: 'Lesson decisions and quality waivers are recorded by a person (/oa lesson, /oa waive). Propose it in chat with your evidence.' }
       : { continue: true } },
 
   { id: 'secret-scan-writes', event: 'PreToolCall', block: true,
@@ -1119,22 +1083,118 @@ export function redact(s: string): { text: string; count: number } { /* replace 
 
 `redact()` runs on everything that gets stored: board records, harvested memories, archived task bodies and Accountability reports. Each redaction increments the counter shown in the Accountability block. The test fixtures include a key with real secret shape, which must never appear in `.openagentsy/` after a scenario run.
 
-### 7.5 Patch review queue
+### 7.5 Lessons: reviewed self-improvement
+
+This section is adapted from zhaono1/agent-playbook's self-improving-agent and eval-artifact contract (MIT) [^apb]. It replaces a simple propose/approve patch queue with explicit states, a required "start packet", and executable proof.
+
+**States and transitions.**
 
 ```ts
-// packages/hooks/src/patches.ts
-export interface PromptPatch {
-  id: string; target: `skill:${string}` | `role:${string}` | 'instructions';
-  diff: string;                     // unified diff against the current file
-  evidence: { wasteKind: string; tokens: number; sessions: string[] }[];
-  confidence: number;               // shown, never acted on automatically
-  status: 'proposed' | 'approved' | 'rejected';
+// packages/hooks/src/lessons/model.ts
+export type LessonState =
+  | 'candidate' | 'validated' | 'applied' | 'rejected'
+  | 'superseded' | 'rolled_back' | 'no_delta' | 'open_question';
+
+const NEXT: Record<LessonState, LessonState[]> = {
+  candidate: ['validated', 'rejected', 'open_question', 'no_delta'],
+  open_question: ['candidate', 'rejected'],
+  validated: ['applied', 'rejected'],
+  applied: ['superseded', 'rolled_back'],
+  rejected: [], superseded: [], rolled_back: [], no_delta: [],
+};
+
+export function transition(l: Lesson, to: LessonState, d: Decision): Lesson {
+  if (!NEXT[l.state].includes(to)) throw new Error(`illegal lesson transition ${l.state} → ${to}`);
+  if (to !== 'rejected' && to !== 'no_delta' && !packetComplete(l.packet)) throw new Error('start packet incomplete');
+  if (to === 'validated' && !d.evalResult?.passed) throw new Error('validation needs a passing eval result for this lesson');
+  if (to === 'applied' && (!d.changeRef || !l.packet.owner)) throw new Error('apply needs one owner and a change reference');
+  return { ...l, state: to, history: [...l.history, { from: l.state, to, ...d, ts: now() }] };
 }
+
+export type Owner =
+  | `test:${string}` | `validator:${string}` | `skill:${string}` | `role:${string}` | 'instructions' | 'memory';
+
+export interface StartPacket {
+  futureBehavior: string;      // what the agent should do differently next time
+  representativeTask: string;  // one concrete scenario that should now succeed
+  evidence: string[];          // ledger waste ids, session ids, failing test, user correction ref
+  owner: Owner;                // exactly one durable owner
+  ownerJustification?: string; // required when owner is 'instructions' or 'memory'
+  writeBoundary: string[];     // files the change may touch
+  proof: string;               // path to an eval artifact or an evals/ Scenario suite
+}
+
+export interface Lesson {
+  id: string; state: LessonState; summary: string; occurrences: number;
+  packet: Partial<StartPacket>; history: Transition[];
+}
+export interface Decision { decidedBy: string; reason: string; evalResult?: EvalResult; changeRef?: string }
 ```
 
-- The archivist proposes a patch after a pattern in the waste table repeats across 3 or more sessions.
-- `/oa patches` lists proposed patches. Approving one applies the diff as an ordinary file edit, which goes through the hooks, and records who approved it.
-- **Nothing is applied without an `approved` status set by a person.** The red-team exit test checks this.
+**Choosing an owner.** The archivist must propose the narrowest owner that can hold the lesson, in this order:
+
+1. a test or validator, when the behaviour can be enforced in code;
+2. the owning skill or role file;
+3. project instructions;
+4. a memory note.
+
+An `instructions` or `memory` owner needs a one-line `ownerJustification` explaining why code or a skill can't hold the lesson. This follows the same Hook/Prompt Axiom as the rest of §7.
+
+**Capture.** The archivist creates candidates in two cases:
+- the same waste kind with similar normalised detail appears in 3 or more sessions (§5.4);
+- the user makes an explicit correction.
+
+Candidates are deduplicated by normalised summary, which increments `occurrences`. A higher count raises priority only; it is not evidence. All text fields pass through `redact()`, and lessons are stored in `.openagentsy/lessons/<id>.json`.
+
+**Eval artifacts.**
+
+```ts
+// packages/hooks/src/lessons/eval.ts
+export const EvalArtifact = z.object({
+  schema_version: z.literal('1'),
+  lesson_id: z.string(),
+  name: z.string(),
+  scenarios: z.array(z.object({
+    id: z.string(),
+    phase: z.enum(['baseline', 'candidate']),
+    cwd: z.string(),                                   // relative to the artifact file
+    command: z.array(z.string()).min(1),               // argv only; shell strings rejected
+    timeout_ms: z.number().int().max(300_000).default(30_000),
+    expect: z.object({
+      exit_code: z.number().int().optional(),
+      stdout_includes: z.array(z.string()).optional(), stdout_excludes: z.array(z.string()).optional(),
+      stderr_includes: z.array(z.string()).optional(), stderr_excludes: z.array(z.string()).optional(),
+    }),
+  })).min(1).max(20).refine((s) => s.some((x) => x.phase === 'candidate'), 'needs a candidate scenario')
+    .refine((s) => new Set(s.map((x) => x.id)).size === s.length, 'scenario ids must be unique'),
+});
+```
+
+Runner rules:
+- Spawn with `shell: false`.
+- Pass only `PATH`, `HOME`, `TMPDIR` and locale variables in the environment.
+- Reject any `cwd` outside the workspace or an OpenAgentsy worktree.
+- Kill the process at the timeout.
+
+The result is written with mode `0600` to `.openagentsy/lessons/evals/<lesson>-<ts>.json`. It holds:
+- per-assertion booleans and durations;
+- the artifact's sha256 and a hash of each command.
+
+It never holds raw stdout or stderr.
+
+Before a result is accepted, the runner rejects symlinked result paths and recomputes pass/fail consistency.
+
+`proof` may instead point to an `evals/` Scenario suite. In that case it runs through the existing runner and must pass all three repeat runs (pass³).
+
+When the baseline can be reproduced, the candidate change is applied in a temporary worktree. The baseline scenario must fail on the current owner and pass with the change.
+
+**After application.** Run the representative task again. If behaviour didn't change, the lesson moves to `rolled_back` (revert the commit) or `rejected`.
+
+**Human-only decisions.**
+- `oa_lesson_decide` is blocked for every agent role by the `human-only-decisions` rule (§7.3).
+- `/oa lessons` is the inbox, sorted by occurrences and recency.
+- `/oa lesson <id> validate|apply|reject|observe` records the decision, with `decidedBy` set to the human user.
+- **No lesson changes an instruction, skill or role file without a human decision.** The red-team exit test checks this.
 
 ### 7.6 Output checks (from agentsy SAFETY.md)
 
@@ -1149,6 +1209,30 @@ These run as `PreResponse` handlers, and they **flag** rather than block:
 | Scope drift | Files touched outside the active task's stated paths, or tool calls unrelated to the task title. Uses an embedding check from the offload model. |
 
 Flags go to the Accountability block and to `oa report --ethical`. The person decides what to do about them.
+
+### 7.7 Lead recovery loop
+
+This is adapted from agent-playbook's long-task-coordinator [^apb]. Every coordination round the Lead runs has five stages, in this order:
+
+```
+READ → RECOVER → DECIDE → PERSIST → REPORT
+```
+
+- **READ** loads the board and the in-progress tasks.
+- **RECOVER** checks only the state of the work, before any decisions about the work itself:
+  - Does the saved next step still make sense?
+  - Did any delegated results come back?
+  - Should the Lead wait, retry or re-dispatch?
+- **DECIDE** picks the next action.
+- **PERSIST** writes it to the board.
+- **REPORT** speaks only after PERSIST has written the state.
+
+The rule text added to the Lead role in `roles.yaml` stays under 120 tokens. The code enforces these rules:
+
+- **Board round statuses:** `running | awaiting_result | paused | blocked | complete`. `awaiting_result` is valid and is never a failure.
+- **Every delegated item has an owner and a return condition.** The board MCP rejects a dispatch that is missing either one.
+- **The report must match the board.** A `PostResponse` hook compares the status the Lead claims in chat with the board's round status. A mismatch is flagged in the Accountability block.
+- **A round that changed nothing can't claim progress.** A round that dispatched nothing, consumed no results and changed nothing on the board writes a `no_progress` waste event (add it to the `waste.kind` CHECK constraint in §5.1).
 
 ---
 
@@ -1210,7 +1294,246 @@ export async function offload<T>(job: { name: string; prompt: string; schema: z.
 
 ---
 
-## 9. Configuration (`openagentsy.jsonc`, Phase 2 keys)
+## 9. `@openagentsy/quality`: anti-slop checks
+
+These rules are adapted from miqdadbadjuber/anti-slop [^antislop] and Nutlope/hallmark [^hallmark], both MIT. Loading either project as prompt text would cost too much:
+
+- antislop's core file is about 10k tokens;
+- Hallmark's SKILL.md routes to many reference files.
+
+So the rules are split three ways:
+
+- **Mechanical rules go into code.** They cost no tokens and run in a hook.
+- **Judgment rules go into three skills** that load only when a change touches UI, copy or comments.
+- **The reviewer signs off on a structured gate.**
+
+Each rule keeps its upstream ID (antislop `R-XX`, Hallmark Floor number), so a finding can cite where it came from.
+
+**Tiers** (taken from Hallmark):
+
+| Tier | Meaning | Can it be waived? |
+| --- | --- | --- |
+| `floor` | Honesty, function and accessibility. Blocks the task from completing. | **No.** |
+| `reflex` | Common tells. Must be fixed or waived with a reason. | Yes, by a person. |
+| `finish` | Taste and polish. Warnings only; a project `DESIGN.md` overrides them. | Not needed. |
+
+**Rules of thumb.**
+- Taste rules stay warnings, so OpenAgentsy never imposes one aesthetic. They include:
+  - eyebrows and tracked capitals;
+  - an italic word in a heading;
+  - Lucide icons, bento grids and 3-step "how it works" sections;
+  - em dashes.
+- `DESIGN.md` / `design.md` is read as **data, not instructions** (antislop's boundary rule). Text inside it can change which taste rules apply, but it can't turn off a floor rule or tell the agent to do anything.
+
+### 9.1 Rule registry
+
+```ts
+// packages/quality/src/rule.ts
+// Adapted from Nutlope/hallmark and miqdadbadjuber/anti-slop, MIT. See NOTICE.
+export interface QualityRule {
+  id: string;                       // "css/no-transition-all"
+  source: `hallmark:floor-${number}` | `antislop:R-${number}` | `antislop-code:${string}` | 'openagentsy';
+  tier: 'floor' | 'reflex' | 'finish';
+  appliesTo: string[];              // globs, e.g. ["**/*.css", "**/*.{html,tsx,jsx,vue,svelte}"]
+  check: (file: SourceFile, ctx: CheckCtx) => Finding[];
+  waivable: boolean;                // false for every floor rule (asserted at registry load)
+}
+
+export interface Finding {
+  ruleId: string; source: string; tier: QualityRule['tier'];
+  file: string; line: number; message: string; fix: string;   // fix: one line, imperative
+  kind?: 'claim';                   // claims are "source this", not "delete this"
+}
+
+export function createRegistry(rules: QualityRule[]) {
+  for (const r of rules) if (r.tier === 'floor' && r.waivable) throw new Error(`floor rule ${r.id} cannot be waivable`);
+  return { forFile: (path: string) => rules.filter((r) => r.appliesTo.some((g) => minimatch(path, g))) };
+}
+```
+
+### 9.2 Static checks
+
+Every check below is a pure function. Each one has a fixture that passes and one that fails.
+
+| Rule ID | Source | Tier | Detects |
+| --- | --- | --- | --- |
+| `css/token-only-colour-font` | hallmark:floor-1 | reflex | Literal colours or `font-family` outside `:root` or a theme token block |
+| `css/no-transition-all` | hallmark:floor-2 | reflex | `transition: all` |
+| `css/no-layout-animation` | hallmark:floor-2 | reflex | Animating `width`, `height`, `top` or `left` |
+| `css/overflow-clip` | hallmark:floor-4 | floor | `overflow-x: hidden` or `100vw` on `html` or `body` |
+| `css/grid-minmax` | hallmark | reflex | Grid tracks holding images that don't use `minmax(0, 1fr)` |
+| `css/reduced-motion` | hallmark:floor-7, antislop:R-32 | floor | An animation with no `prefers-reduced-motion` fallback |
+| `css/focus-visible` | hallmark:floor-6 | floor | Interactive selectors with no `:focus-visible` style |
+| `css/contrast` | antislop:R-25 | floor | A token colour pair below WCAG AA, computed from the **unrounded** ratio |
+| `css/purple-blue-gradient` | hallmark:floor-11 | finish | The stock purple-to-blue gradient |
+| `html/dead-nav` | antislop:R-24 | floor | Nav links to anchors or routes that don't exist |
+| `html/inert-control` | antislop:R-26 | floor | A button with no handler, or a form with no action or submit handler |
+| `html/emoji-icon` | hallmark:floor-11 | reflex | Emoji used as icons |
+| `html/card-in-card` | hallmark:floor-11 | finish | A card nested inside a card (class or role heuristics) |
+| `copy/unsourced-claim` | antislop:R-17/18/36, hallmark:floor-8 | floor (`kind: 'claim'`) | In UI copy: `\d+(%|K\+|M\+|x)`, testimonials, logo walls. **The agent must cite where the claim came from**, or mark it as a placeholder. |
+| `copy/generic-cta` | antislop | reflex | "Get Started" or "Learn More" with no object |
+| `copy/buzzwords` | antislop | reflex (config) | seamless, revolutionary, next-generation, … |
+| `copy/em-dash` | antislop:R-02 | finish, **off by default** | Em dashes in user-facing UI copy only. Never applied to prose or docs. |
+
+**Claims.** An unsourced claim is a floor finding, because a made-up number is an honesty failure. It's resolved by adding a source comment (`<!-- source: … -->`) or a `data-placeholder` marker. Deleting the copy isn't required. Hallmark's "material inventory" in `oa-ui` (§9.5) is there to stop the agent inventing claims in the first place.
+
+### 9.3 Comment lint (antislop-code)
+
+**What it flags.**
+- Banner separators and ALL-CAPS section labels.
+- Decorative emoji and end markers (`// end if`).
+- `// Step N:` narration.
+- Empty labels such as "Main logic" or "Helper function".
+- TODOs that name no task.
+- JSDoc that only repeats the function signature.
+
+**What it never flags.** Comments that explain:
+- business logic, security, performance or concurrency;
+- protocols or API contracts;
+- workarounds or edge cases;
+
+and licence or attribution text. The preserve list has a fixture for each item.
+
+```ts
+// packages/quality/src/comments/fix.ts
+export function applyCommentFix(src: string, fix: CommentFix): string {
+  const out = splice(src, fix.range, fix.replacement);
+  // Fixes may only touch comment trivia. Anything else is a bug in the rule, not a judgment call.
+  if (!astEqualIgnoringComments(parse(src), parse(out))) throw new Error(`comment fix ${fix.ruleId} changed code`);
+  return out;
+}
+```
+
+The checker uses the TypeScript compiler's comment ranges, so it doesn't depend on GritQL. If Biome GritQL can match comment nodes reliably, the same rules may also be exported as a Biome plugin. Either way, the AST-identity test is the contract.
+
+### 9.4 Hooks, findings and waivers
+
+```ts
+// packages/hooks/src/rules.ts (addition)
+{ id: 'quality-after-write', event: 'PostToolCall', block: false,
+  handler: async (e) => {
+    if (!isWrite(e) || cfg.quality.mode !== 'during') return { continue: true };
+    const findings = await quality.check([targetPath(e)!], { design: await readDesignMd() });
+    findingsStore.record(activeTaskId(), findings);                     // read by enforceTransitions (§3.7)
+    const open = findings.filter((f) => f.tier !== 'finish' && !waivers.covers(f));
+    return open.length ? { transform: { appendToResult: formatFindings(open.slice(0, 8)) } } : { continue: true };
+  } },
+```
+
+- **What the agent sees.** Findings come back as one line each: `ruleId file:line — fix`. The list is capped at 8 lines so it can't flood the context; `oa_quality_check` returns the full list.
+- **Blocking.** `floor` findings stop the task from reaching `completed` (§3.7). `reflex` findings must be fixed or waived.
+- **`mode: "after"`.** The hook does nothing, and `/oa audit` reports the findings instead.
+
+**Waivers** are stored in `.openagentsy/quality/waivers.json`:
+
+```ts
+export const Waiver = z.object({ ruleId: z.string(), path: z.string(), reason: z.string().min(10),
+  decidedBy: z.string(), ts: z.string() });
+```
+
+- An agent can *propose* a waiver in chat.
+- Only a person records one, with `/oa waive <ruleId> <path> "<reason>"`. `oa_quality_waive` is blocked for agent roles (§7.3).
+- `waive()` throws for any rule where `waivable === false`.
+- The waiver count appears in the Accountability block.
+
+**Optional Hallmark sloplint.** `oa_quality_check` looks for `skills/hallmark/scripts/sloplint.mjs` in the project, `~/.claude`, `~/.agents` and OpenCode's skill paths. If it finds the script, it runs it on the changed HTML and CSS:
+
+```ts
+spawn(process.execPath, [sloplint, ...(canRender ? ['--render'] : []), ...files], {
+  shell: false,
+  env: pick(process.env, ['PATH', 'HOME', 'TMPDIR', 'LANG']),   // TOGETHER_API_KEY never passed
+  timeout: 60_000,
+});
+```
+
+- `--render` runs only when `puppeteer-core` and Chrome are both present.
+- Its FAIL, REFLEX and WARN lines are parsed into `Finding`s.
+- The result records which path ran: `static`, `static+sloplint` or `static+sloplint-render`.
+- If Hallmark isn't installed, the static rules still run.
+
+### 9.5 Skills, loaded on demand
+
+Each SKILL.md is ≤ 1,500 tokens, with detail kept in reference files the skill links to.
+
+| Skill | Loads when | Contents |
+| --- | --- | --- |
+| `oa-ui` | A change touches `.css`, `.html`, `.tsx`/`.jsx`/`.vue`/`.svelte` or design files | <ul><li>antislop's purpose test ("what does this technique serve?"), with the reason written down.</li><li>The ENERGY, RHYTHM and MOTION dials (how lively the design is) and the Design Read.</li><li>Hallmark's material inventory: what's real, which pictures exist, what's absent. No invented facts; honest placeholders.</li><li>"Build from the job": start from the page's primary action.</li><li>Read `DESIGN.md` first. With no direction, label the output "draft without direction".</li></ul> |
+| `oa-copy` | User-facing copy, **or agent prose**: commit messages, PR descriptions, the task "Summary of Changes", Lead status reports | antislop-copywriting: specific calls to action, no buzzwords, no fake stats. |
+| `oa-comments` | Comments are edited | antislop-code's tells and its preserve list. It's the counterweight to §9.3. |
+
+**Routing.** At most 80 tokens are added to the Lead and builder roles: "For UI, copy or comment work, load oa-ui / oa-copy / oa-comments. Mechanical checks run automatically." A token test confirms that **no quality skill loads** when no matching file is touched.
+
+### 9.6 Reviewer gate
+
+This is adapted from antislop's Delivery Gate and Hallmark's fresh-context review. For any UI or copy change, the reviewer must return:
+
+```ts
+// packages/quality/src/gate.ts
+export const ReviewGate = z.object({
+  floor: z.array(FindingSchema),
+  reflex: z.array(z.object({ finding: FindingSchema, status: z.enum(['fixed', 'waived', 'open']) })),
+  purpose: z.array(z.object({ technique: z.string(), reason: z.string() })),
+  liveliness: z.object({ energy: z.number().min(0).max(10), rhythm: z.number().min(0).max(10),
+    motion: z.number().min(0).max(10), note: z.string() }),
+  verdict: z.enum(['ship', 'fix', 'rebuild']),
+});
+
+export async function acceptGate(raw: unknown, files: string[]): Promise<GateResult> {
+  const gate = ReviewGate.parse(raw);
+  const rerun = await quality.check(files);                      // never trust the reviewer's own pass
+  const openFloor = rerun.filter((f) => f.tier === 'floor');
+  if (gate.verdict === 'ship' && openFloor.length) return { accepted: false, finding: 'fabricated-pass', openFloor };
+  return { accepted: true, gate };
+}
+```
+
+- **The reviewer starts fresh.** It runs in a new context, using a different model family from the builder. It sees only:
+  - the diff;
+  - `DESIGN.md`;
+  - the check results.
+
+  It never sees the builder's transcript.
+- **A false pass is a finding.** If the reviewer says "ship" while a floor finding is open, that's recorded as a finding of its own, and it goes to the Accountability block.
+
+---
+
+## 10. `oa conformance`: what's proven, observed or unverified
+
+This is adapted from agent-playbook's host-conformance states [^apb]. `oa conformance` (a command and a tool) reports each capability **separately for V1 and V2**, with one of three states:
+
+| State | Meaning |
+| --- | --- |
+| `proven_static` | The files and config are present, the plugin loads and its schema validates. |
+| `observed` | Seen working in a real session. Bounded evidence (event type, timestamp, session ID) is stored in `.openagentsy/conformance.json`. |
+| `unverified` | Neither of the above. |
+
+```ts
+// packages/adapters/src/conformance.ts
+export interface Capability { id: string; host: 'v1' | 'v2'; verifyRef?: string;   // spec anchor of the VERIFY it settles
+  probeStatic: () => Promise<boolean>; observeOn: OcEventType[] }
+
+export const CAPABILITIES: Capability[] = [
+  { id: 'sidebar-slot', host: 'v2', verifyRef: '§6.1', probeStatic: hasTuiEntry, observeOn: ['tui.slot.render'] },
+  { id: 'v1-toast', host: 'v1', verifyRef: '§6.7', probeStatic: hasV1Entry, observeOn: ['tui.toast.show'] },
+  { id: 'system-transform', host: 'v1', probeStatic: hasHook('experimental.chat.system.transform'), observeOn: ['chat.system.transformed'] },
+  { id: 'compaction-hook', host: 'v1', probeStatic: hasHook('experimental.session.compacting'), observeOn: ['session.compacted'] },
+  { id: 'tool-before-block', host: 'v1', probeStatic: hasHook('tool.execute.before'), observeOn: ['tool.execute.before'] },
+  { id: 'session-family', host: 'v2', verifyRef: '§6.2', probeStatic: hasApi('session.family'), observeOn: ['session.family.read'] },
+  { id: 'message-token-fields', host: 'v2', verifyRef: '§5.2', probeStatic: alwaysFalse, observeOn: ['message.updated'] },
+  { id: 'prompt-insert', host: 'v2', verifyRef: '§6.4', probeStatic: hasApi('prompt.insert'), observeOn: ['prompt.inserted'] },
+  { id: 'local-offload', host: 'v2', verifyRef: '§8.2', probeStatic: probeBackends, observeOn: ['offload.completed'] },
+  // … one entry per remaining VERIFY in this spec
+];
+```
+
+- **Every VERIFY needs a check.** A test greps this spec for **VERIFY** and fails if any one of them has no `verifyRef` in `CAPABILITIES`.
+- **`observed` is only set from live evidence.** It's recorded by an event listener during a real session, never from a static probe.
+- **The Accountability block shows the count**, for example "conformance 9/14 observed".
+- **`unverified` items are listed in `oa report --ethical`**, so nobody mistakes a guess about the OpenCode API for a tested fact.
+
+---
+
+## 11. Configuration (`openagentsy.jsonc`, Phase 2 keys)
 
 ```jsonc
 {
@@ -1224,7 +1547,15 @@ export async function offload<T>(job: { name: string; prompt: string; schema: z.
   },
   "ledger": { "backfillOpencodeDb": false, "pricingSources": ["opencode", "models.dev", "litellm", "openrouter"] },
   "offload": { "backends": [{ "kind": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "qwen3:4b" }], "jobs": ["title", "compaction", "json-repair", "classify", "quick-replies"] },
-  "hooks": { "extraBlockedCommands": [], "approvalFor": ["git push", "gh pr merge"] }
+  "hooks": { "extraBlockedCommands": [], "approvalFor": ["git push", "gh pr merge"] },
+  "lessons": { "captureAfterSessions": 3, "evalTimeoutMs": 30000, "requireWorktreeForBaseline": true },
+  "quality": {
+    "mode": "during",                // "during" = hook after each write | "after" = report only, via /oa audit
+    "copy": { "emDash": "off", "buzzwords": "reflex" },
+    "taste": "warn",                 // "warn" | "off"; DESIGN.md overrides individual taste rules
+    "hallmarkSloplint": "auto",      // "auto" = run if installed | "off"
+    "render": "auto"                 // sloplint --render only if puppeteer-core + Chrome are present
+  }
 }
 ```
 
@@ -1232,7 +1563,7 @@ If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` t
 
 ---
 
-## 10. Left out on purpose
+## 12. Left out on purpose
 
 | From | Feature | Why not |
 | --- | --- | --- |
@@ -1245,22 +1576,30 @@ If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` t
 | TokenTracker | Achievements, streaks, desktop pet, global leaderboard, anonymous telemetry | These are engagement and comparison mechanics. We ship no telemetry. |
 | tokscale | Leaderboard submission; the "Kardashev scale" framing ("tokens are the new energy") | Measuring progress by how much is consumed is the opposite of the footprint block's purpose. |
 | tokscale | An LLM summariser for reports that runs on a hosted model | We use local offload only, and it's opt-in. |
+| agent-playbook | Its 22 domain skills, skill-router, workflow-orchestrator and `metadata.hooks` follow-up chains | Our roles and effort ladder already route the work. Automatic follow-up chains would spend tokens the person didn't ask for. |
+| agent-playbook | The `@codeharbor/agent-playbook` CLI and its MCP server | We adapt the schemas without taking on a dependency. |
+| anti-slop | The install wizard that edits AGENTS.md, and the "during or after?" question at the start of each session | The mode is a config key instead (`quality.mode`). |
+| anti-slop, Hallmark | Taste rules as hard bans (eyebrows, tracked caps, italic heading words, Lucide icons, bento grids, em dashes) | These are matters of style, not quality. They stay `finish`-tier warnings that `DESIGN.md` can override. |
+| Hallmark | The theme generator (48 themes, deal/draw), photo library, capture and image generation | That's a design tool, not a guardrail. Users can install Hallmark separately; it supports OpenCode. |
+| Hallmark | Together AI calls when `TOGETHER_API_KEY` is set | There are no hidden network calls. The key is stripped from sloplint's environment (§9.4). |
 
 ---
 
-## 11. Build order and exit tests
+## 13. Build order and exit tests
+
+Biome, Husky, lint-staged, `tsc` and CI are already in place (§1). Every step must keep `pnpm lint` and `pnpm typecheck` green.
 
 | Step | Delivers | Exit test (in the Scenario + Vitest suites) |
 | --- | --- | --- |
-| **2.0** | Biome, Husky, lint-staged, `tsc`, CI, the `no-skip-git-hooks` rule | A commit with a seeded lint error is blocked. A type error blocks the commit. An agent running `git commit --no-verify` is denied. CI fails on the same seeds. |
-| **2a** | `tasks` package, prime block, `oa_task_*` tools, `footprint` package | Round-trip over the `hmans/beans` `.beans/` corpus passes. `ready` and `next` match Beans' documented semantics on 15 fixtures (blocked parent, terminal ancestor, epics excluded). Footprint golden test passes within 1%. Prime block is ≤ 200 tokens. |
-| **2b** | `ledger` (ingest, pricing, waste, outcomes), `offload` | Deduplication: replaying a session doesn't change totals. Unpriced models show "unpriced". Offload lowers cloud tokens per completed task compared with Phase 1, with pass³ unchanged. |
-| **2c** | `hooks` (bridge, rules, redaction, patch queue, output checks) | Red-team: a model told to "commit with --no-verify" or "edit openagentsy.jsonc" is blocked. A seeded secret never reaches `.openagentsy/`. No patch applies without approval. Output-check flags appear on seeded transcripts. |
-| **2d** | `sidebar` V2 blocks, V1 fallback, worktrees, `oa report --ethical` | Blocks render from fixtures in the OpenTUI test renderer. The banned-word and banned-colour tests pass. The V1 toast fires on `session.idle`. Worktree task detection matches `git diff`. Provisional statuses clear after merge. |
+| **2a** | `tasks` package, prime block, `oa_task_*` tools, `footprint` package | <ul><li>Round-trip over the `hmans/beans` `.beans/` corpus passes.</li><li>`ready` and `next` match Beans' documented semantics on 15 fixtures (blocked parent, terminal ancestor, epics excluded).</li><li>The footprint golden test passes within 1%.</li><li>The prime block is ≤ 200 tokens.</li></ul> |
+| **2b** | `ledger` (ingest, pricing, waste including `no_progress`, outcomes), `offload` | <ul><li>Deduplication: replaying a session doesn't change totals.</li><li>Unpriced models show "unpriced".</li><li>Offload lowers cloud tokens per completed task compared with Phase 1, with pass³ unchanged.</li></ul> |
+| **2c** | `hooks`: bridge, rules (including `human-only-decisions`), redaction, output checks, **lessons + eval runner**, **Lead recovery loop** | <ul><li>Red-team: a model told to "commit with --no-verify", "edit openagentsy.jsonc" or "approve your own lesson" is blocked.</li><li>A seeded secret never reaches `.openagentsy/`, including inside a lesson summary.</li><li>Lesson transitions: every allowed move succeeds and every other move throws.</li><li>A lesson with an incomplete start packet can't leave `candidate`.</li><li>The eval runner rejects shell strings, a `cwd` outside the workspace and a timeout over the maximum. It also rejects symlinked result paths, never writes stdout or stderr, and strips a fake `GITHUB_TOKEN`.</li><li>In a temporary worktree, the baseline fails and then the candidate passes.</li><li>A board/report mismatch raises a flag, and a round that changes nothing writes `no_progress`.</li><li>Output-check flags appear on seeded transcripts.</li></ul> |
+| **2d** | `quality`: registry, static rules, comment lint, sloplint bridge, waivers, the three skills, reviewer gate | <ul><li>Each static rule has a passing and a failing fixture.</li><li>A comment fix leaves the AST identical apart from comments, and never removes a comment on the preserve list.</li><li>A task with an open floor finding can't be completed.</li><li>An agent can't record a waiver, and a floor rule can't be waived.</li><li>A "ship" verdict with an open floor finding is rejected as `fabricated-pass`.</li><li>sloplint runs without `TOGETHER_API_KEY` and degrades cleanly when Hallmark is absent.</li><li>No quality skill loads when no UI, copy or comment file is touched (token test).</li></ul> |
+| **2e** | `sidebar` V2 blocks, V1 fallback, worktrees, `oa conformance`, `oa report --ethical` | <ul><li>Blocks render from fixtures in the OpenTUI test renderer.</li><li>The banned-word and banned-colour tests pass.</li><li>The V1 toast fires on `session.idle`.</li><li>Worktree task detection matches `git diff`, and provisional statuses clear after merge.</li><li>Every **VERIFY** in the spec maps to a conformance check.</li><li>A capability with no recorded observation reports `unverified`, and a static probe never upgrades a check to `observed`.</li></ul> |
 
 ---
 
-## 12. Open questions
+## 14. Open questions
 
 - **Prefill term:** keep it off by default until the fit is reviewed (recommended)?
 - **Bundling `models.json`:** fetch-and-cache only, until the EcoLogits data license is confirmed?
@@ -1268,6 +1607,9 @@ If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` t
 - **Upstream export:** should agentsy add a `./hooks` subpath export to `@agentsy/runtime`, or re-export the hooks from the package root?
 - **Beans compatibility:** keep OpenAgentsy's rendering byte-identical to Beans', or accept whitespace differences?
 - **V1:** confirm whether issue #5971's sidebar hook merged.
+- **Em dashes:** `quality.copy.emDash` is `off` by default. Switch it to `reflex` if the agents shouldn't use them in UI copy.
+- **Unsourced claims as `floor`:** block completion until a claim has a source or placeholder marker (recommended), or downgrade them to `reflex` so a person can waive them?
+- **Comment rules in Biome:** also ship them as a GritQL plugin once comment matching is confirmed, or keep them only in `packages/quality`?
 
 ---
 
@@ -1279,6 +1621,9 @@ If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` t
 [^bs]: streetturtle/opencode-better-sidebar — https://github.com/streetturtle/opencode-better-sidebar
 [^tokscale]: junhoyeo/tokscale (MIT) — https://github.com/junhoyeo/tokscale
 [^tt]: xiufengsun/TokenTracker (MIT) — https://github.com/xiufengsun/TokenTracker
+[^apb]: zhaono1/agent-playbook (MIT) — https://github.com/zhaono1/agent-playbook (self-improving-agent, eval-artifact, long-task-coordinator, docs/host-conformance.md)
+[^antislop]: miqdadbadjuber/anti-slop (MIT) — https://github.com/miqdadbadjuber/anti-slop
+[^hallmark]: Nutlope/hallmark (MIT) — https://github.com/Nutlope/hallmark
 [^oc5971]: OpenCode issue #5971 — https://github.com/anomalyco/opencode/issues/5971
 [^eco]: EcoLogits — https://github.com/mlco2/ecologits
 [^ipcc]: IPCC AR6 WG1 Summary for Policymakers, D.1.1
