@@ -82,32 +82,41 @@ export async function findSkills(startDir: string): Promise<FoundSkill[]> {
   const found: FoundSkill[] = [];
 
   for (const dir of skillSearchDirs(startDir)) {
-    let entries: Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
+    const entries = await readDirSafe(dir);
+    if (!entries) continue;
     for (const entry of entries) {
-      if (entry.isDirectory()) {
-        const name = entry.name;
-        if (seen.has(name)) continue;
-        const path = join(dir, name, 'SKILL.md');
-        seen.add(name);
-        found.push({ name, path, source: dir });
-        continue;
-      }
-
-      // V2 also accepts a flat skills/<name>.md file.
-      if (entry.isFile() && entry.name.endsWith('.md')) {
-        const name = entry.name.replace(/\.md$/, '');
-        if (seen.has(name)) continue;
-        seen.add(name);
-        found.push({ name, path: join(dir, entry.name), source: dir });
+      const skill = skillOfEntry(dir, entry, seen);
+      if (skill) {
+        seen.add(skill.name);
+        found.push(skill);
       }
     }
   }
 
   return found;
+}
+
+/** The directory's entries, or nothing when the directory is not there. */
+async function readDirSafe(dir: string): Promise<Dirent[] | undefined> {
+  try {
+    return await readdir(dir, { withFileTypes: true });
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The skill one directory entry names, or nothing when the entry is not a
+ * skill or its name is already taken.
+ */
+function skillOfEntry(dir: string, entry: Dirent, seen: Set<string>): FoundSkill | undefined {
+  if (entry.isDirectory()) {
+    if (seen.has(entry.name)) return undefined;
+    return { name: entry.name, path: join(dir, entry.name, 'SKILL.md'), source: dir };
+  }
+  // V2 also accepts a flat skills/<name>.md file.
+  if (!entry.isFile() || !entry.name.endsWith('.md')) return undefined;
+  const name = entry.name.replace(/\.md$/, '');
+  if (seen.has(name)) return undefined;
+  return { name, path: join(dir, entry.name), source: dir };
 }

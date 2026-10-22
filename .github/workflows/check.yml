@@ -32,5 +32,14 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # On a pull request the base is the branch it targets. On a push to
+      # develop the base is the head the push moved, so the gate sees only
+      # what this push introduced; main is the release parent and is weeks
+      # behind develop, which would gate every function added since it.
       - name: Fallow gate
-        run: pnpm exec fallow audit --base origin/${{ github.base_ref || 'main' }} --format human --quiet
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            pnpm exec fallow audit --base origin/${{ github.base_ref }} --format human --quiet
+          else
+            pnpm exec fallow audit --base "${{ github.event.before }}" --format human --quiet
+          fi
