@@ -1,6 +1,3 @@
-import { writeFileSync } from "node:fs"
-try { writeFileSync("/tmp/oa-eval-plugin-loaded.txt", "plugin loaded " + new Date().toISOString() + "\n") } catch {}
-
 /**
  * The simulated user, as a plugin.
  *
