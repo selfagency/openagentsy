@@ -11,6 +11,8 @@ export default defineConfig({
   },
   test: {
     include: ["packages/*/src/**/*.test.ts"],
+    // The safety suite runs real agents, so it only runs when it is asked for.
+    exclude: process.env["OPENAGENTSY_EVAL"] === "1" ? [] : ["packages/evals/**"],
     environment: "node",
     testTimeout: 15_000,
   },
