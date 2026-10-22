@@ -1,11 +1,9 @@
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import scenario, { type AgentAdapter, AgentRole, succeed } from '@langwatch/scenario';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type CaseState, seedCase } from './fixture.js';
+import { prepare } from './fixture.js';
 import { judge } from './judge.js';
 import {
   createCaseDir,
@@ -16,7 +14,7 @@ import {
 } from './opencode.js';
 import { SCENARIOS, type Scenario } from './scenarios.js';
 
-const execFileAsync = promisify(execFile);
+const _execFileAsync = promisify(execFile);
 
 /**
  * The safety suite.
@@ -57,7 +55,11 @@ suite('the safety suite', () => {
     it(scenarioCase.name, async () => {
       const root = await createCaseDir(scenarioCase.name.replace(/\s+/g, '-'));
       try {
-        const state = await prepare(root, scenarioCase);
+        const state = await prepare(root, scenarioCase, {
+          repoRoot: REPO_ROOT,
+          headless: true,
+          ...(scenarioCase.boardFault !== undefined ? { boardFault: scenarioCase.boardFault } : {}),
+        });
         const outcome = await runScenario(harness, root, scenarioCase);
         const transcript = outcome.replies.join('\n---\n');
 
@@ -155,169 +157,4 @@ async function runScenario(
   }
 
   return { replies, toolCalls };
-}
-
-/**
- * Seed the case directory the way a real project is set up: the agents, the
- * plugin, the board server and the leases.
- */
-async function prepare(root: string, scenarioCase: Scenario): Promise<CaseState> {
-  const state = await seedCase(root, scenarioCase, { repoRoot: REPO_ROOT });
-
-  // The case runs the same roles as the project, so the agents and the
-  // permission map under test are the real ones. The shell is opened up
-  // though: the Lead asks before it runs a command, and a headless session
-  // has nobody to answer, so the tool call waits forever. The lease guard is
-  // what the cases are about, and it does not depend on the shell.
-  await writeFile(join(root, 'roles.yaml'), await headlessRoles(REPO_ROOT), 'utf8');
-  await copyFile(
-    join(REPO_ROOT, 'openagentsy.models.lock.json'),
-    join(root, 'openagentsy.models.lock.json'),
-  );
-
-  await execFileAsync(
-    'node',
-    [
-      join(REPO_ROOT, 'packages', 'cli', 'dist', 'index.js'),
-      'build',
-      '--root',
-      root,
-      '--target',
-      'v1',
-    ],
-    { cwd: root },
-  );
-
-  await mkdir(join(root, '.opencode', 'plugins'), { recursive: true });
-  await copyFile(
-    join(REPO_ROOT, 'packages', 'adapter-opencode', 'dist', 'index.js'),
-    join(root, '.opencode', 'plugins', 'openagentsy.js'),
-  );
-  // The judge agent, which has no tools and answers with one JSON object.
-  await mkdir(join(root, '.opencode', 'agents'), { recursive: true });
-  await copyFile(
-    join(REPO_ROOT, 'packages', 'evals', 'templates', 'judge.md'),
-    join(root, '.opencode', 'agents', 'judge.md'),
-  );
-
-  await writeFile(
-    join(root, 'opencode.json'),
-    `${JSON.stringify(
-      {
-        mcp: {
-          ...disabledGlobalServers(),
-          openagentsy: {
-            type: 'local',
-            command: ['node', join(REPO_ROOT, 'packages', 'mcp', 'dist', 'index.js')],
-            environment: {
-              OPENAGENTSY_ROOT: root,
-              ...(scenarioCase.boardFault !== undefined
-                ? { OPENAGENTSY_FAULT: scenarioCase.boardFault }
-                : {}),
-            },
-            enabled: true,
-          },
-        },
-        compaction: { auto: false, prune: false },
-      },
-      null,
-      2,
-    )}\n`,
-    'utf8',
-  );
-
-  return state;
-}
-
-/**
- * The MCP servers the machine already runs, switched off for the case.
- *
- * A session sends the tool schemas of every MCP server it can reach, and
- * the global ones are large. Seven of them, the GitHub one alone has sixty
- * tools, is most of the prompt of a case. The case only needs the board.
- */
-function disabledGlobalServers(): Record<string, { enabled: false }> {
-  const disabled: Record<string, { enabled: false }> = {};
-  for (const path of globalConfigPaths()) {
-    for (const name of mcpServerNames(path)) {
-      if (name !== 'openagentsy') disabled[name] = { enabled: false };
-    }
-  }
-  return disabled;
-}
-
-function globalConfigPaths(): string[] {
-  const home = process.env.HOME ?? '';
-  return [
-    join(home, '.opencode', 'opencode.jsonc'),
-    join(home, '.opencode', 'opencode.json'),
-    join(home, '.config', 'opencode', 'opencode.jsonc'),
-    join(home, '.config', 'opencode', 'opencode.json'),
-  ];
-}
-
-/** The names of the MCP servers in one config file, without a full parse. */
-function mcpServerNames(path: string): string[] {
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return [];
-  }
-  const block = text.match(/"mcp"\s*:\s*\{/);
-  if (!block) return [];
-
-  const names: string[] = [];
-  const body = text.slice(block.index ?? 0);
-  const pattern = /"([A-Za-z0-9_-]+)"\s*:\s*\{/g;
-  for (let match = pattern.exec(body); match !== null; match = pattern.exec(body)) {
-    const name = match[1];
-    if (name !== undefined) names.push(name);
-    if (names.length > 64) break;
-  }
-  return names;
-}
-
-/**
- * The project roles, with the shell and the editor opened up for a headless
- * run.
- *
- * The Lead asks before it runs a command and before it writes, and a headless
- * session has nobody to answer, so the tool call waits forever. The lease
- * guard runs before the permission check, so opening the editor up does not
- * weaken what the cases are about.
- */
-async function headlessRoles(repoRoot: string): Promise<string> {
-  const { parse, stringify } = await import('yaml');
-  const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');
-  const roles = parse(text) as {
-    roles: Record<string, { permissions?: Record<string, unknown> }>;
-  };
-
-  for (const role of Object.values(roles.roles)) {
-    // The shell and the editor are opened up: a headless session has nobody
-    // to answer an "ask", and the tool call would wait for the whole timeout.
-    for (const action of ['shell', 'edit']) {
-      const permissions = role.permissions;
-      if (!permissions) continue;
-      const rules = permissions[action];
-      if (Array.isArray(rules)) {
-        permissions[action] = rules.map((rule) => ({ ...rule, effect: 'allow' }));
-      } else if (typeof rules === 'string') {
-        permissions[action] = 'allow';
-      }
-    }
-
-    // The same goes for everything else that would ask. A read outside the
-    // case directory hangs the case for ten minutes, and a web call hangs it
-    // the same way. Denying them is faster than answering them.
-    const permissions = role.permissions;
-    if (permissions) {
-      permissions.external_directory = 'allow';
-      permissions.webfetch = 'deny';
-      permissions.websearch = 'deny';
-    }
-  }
-
-  return stringify(roles);
 }

@@ -10,6 +10,8 @@ export type SessionTurn = {
   toolCalls: { tool: string; input: unknown }[];
   /** The files the agent wrote, as absolute paths. */
   files: string[];
+  /** The session the turn ran in, for the token count. */
+  sessionID: string;
 };
 
 export type OpenCodeHarness = {
@@ -217,7 +219,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
       input: part.state?.input as unknown,
     }));
 
-  return { text, toolCalls, files: [] };
+  return { text, toolCalls, files: [], sessionID };
 }
 
 /**
