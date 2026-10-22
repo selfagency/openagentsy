@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { execFile } from "node:child_process"
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import scenario, { AgentRole, type AgentAdapter } from "@langwatch/scenario"
@@ -187,6 +188,7 @@ async function prepare(root: string, scenarioCase: Scenario): Promise<CaseState>
     `${JSON.stringify(
       {
         mcp: {
+          ...disabledGlobalServers(),
           openagentsy: {
             type: "local",
             command: ["node", join(REPO_ROOT, "packages", "mcp", "dist", "index.js")],
@@ -203,6 +205,55 @@ async function prepare(root: string, scenarioCase: Scenario): Promise<CaseState>
   )
 
   return state
+}
+
+/**
+ * The MCP servers the machine already runs, switched off for the case.
+ *
+ * A session sends the tool schemas of every MCP server it can reach, and
+ * the global ones are large. Seven of them, the GitHub one alone has sixty
+ * tools, is most of the prompt of a case. The case only needs the board.
+ */
+function disabledGlobalServers(): Record<string, { enabled: false }> {
+  const disabled: Record<string, { enabled: false }> = {}
+  for (const path of globalConfigPaths()) {
+    for (const name of mcpServerNames(path)) {
+      if (name !== "openagentsy") disabled[name] = { enabled: false }
+    }
+  }
+  return disabled
+}
+
+function globalConfigPaths(): string[] {
+  const home = process.env["HOME"] ?? ""
+  return [
+    join(home, ".opencode", "opencode.jsonc"),
+    join(home, ".opencode", "opencode.json"),
+    join(home, ".config", "opencode", "opencode.jsonc"),
+    join(home, ".config", "opencode", "opencode.json"),
+  ]
+}
+
+/** The names of the MCP servers in one config file, without a full parse. */
+function mcpServerNames(path: string): string[] {
+  let text: string
+  try {
+    text = readFileSync(path, "utf8")
+  } catch {
+    return []
+  }
+  const block = text.match(/"mcp"\s*:\s*\{/)
+  if (!block) return []
+
+  const names: string[] = []
+  const body = text.slice(block.index ?? 0)
+  const pattern = /"([A-Za-z0-9_-]+)"\s*:\s*\{/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(body)) !== null) {
+    names.push(match[1]!)
+    if (names.length > 64) break
+  }
+  return names
 }
 
 export { readAudit, readRecords }
