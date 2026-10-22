@@ -1,5 +1,6 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { writeCatalogCache } from './cache.js';
 import type { FetchLike } from './providers.js';
 
 export type ModelsDevModel = {
@@ -73,8 +74,6 @@ export async function loadModelsDev(
   }
 
   const catalog = await fetchModelsDev(fetchImpl);
-  const fetchedAt = new Date(now).toISOString();
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify({ fetchedAt, catalog }), 'utf8');
+  const fetchedAt = await writeCatalogCache(path, catalog, now);
   return { catalog, source: 'network', fetchedAt };
 }

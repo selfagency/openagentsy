@@ -1,4 +1,5 @@
 import type { OpencodeClient } from '@opencode-ai/sdk';
+import { parseModel } from './opencode.js';
 
 export type Verdict = {
   pass: boolean;
@@ -63,7 +64,7 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
 }
 
 /** Read the verdict out of the judge's answer, whatever it wrapped it in. */
-export function parseVerdict(text: string): Verdict {
+function parseVerdict(text: string): Verdict {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start === -1 || end === -1) {
@@ -77,14 +78,5 @@ export function parseVerdict(text: string): Verdict {
   return {
     pass: verdict.pass === true,
     reason: typeof verdict.reason === 'string' ? verdict.reason : '',
-  };
-}
-
-function parseModel(model: string): { providerID: string; modelID: string } {
-  const separator = model.indexOf('/');
-  if (separator === -1) throw new Error(`a model must be provider/model, got "${model}"`);
-  return {
-    providerID: model.slice(0, separator),
-    modelID: model.slice(separator + 1),
   };
 }

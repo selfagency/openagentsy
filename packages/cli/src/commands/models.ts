@@ -39,7 +39,7 @@ const PROVIDER_ALIASES: Record<string, ProviderSelection['provider']> = {
   'ollama-cloud': 'ollama-cloud',
 };
 
-export function parseProviders(input: string[]): ProviderSelection[] {
+function parseProviders(input: string[]): ProviderSelection[] {
   const seen = new Set<string>();
   const selections: ProviderSelection[] = [];
   for (const raw of input) {

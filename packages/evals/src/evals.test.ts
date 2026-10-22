@@ -193,12 +193,6 @@ async function prepare(root: string, scenarioCase: Scenario): Promise<CaseState>
     join(REPO_ROOT, 'packages', 'evals', 'templates', 'oa-judge.md'),
     join(root, '.opencode', 'agents', 'oa-judge.md'),
   );
-  // The simulated user, which answers the permission requests a headless
-  // session would otherwise wait on forever.
-  await copyFile(
-    join(REPO_ROOT, 'packages', 'evals', 'templates', 'eval-permissions.js'),
-    join(root, '.opencode', 'plugins', 'eval-permissions.js'),
-  );
 
   await writeFile(
     join(root, 'opencode.json'),

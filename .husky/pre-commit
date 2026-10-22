@@ -1,2 +1,3 @@
 pnpm exec lint-staged
 pnpm typecheck
+pnpm exec fallow audit --base HEAD~1 --format human --quiet || pnpm exec fallow audit --base develop --format human --quiet

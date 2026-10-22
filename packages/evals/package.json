@@ -12,7 +12,6 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@ai-sdk/openai": "^3.0.26",
     "@langwatch/scenario": "^1.7.0",
     "@openagentsy/core": "workspace:*",
     "@opencode-ai/sdk": "^1.19.3",

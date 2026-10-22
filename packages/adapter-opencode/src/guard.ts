@@ -2,15 +2,15 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { decideFromLeases, type Lease, loadRoles, type RoleDefinition } from '@openagentsy/core';
 
-export function stateDir(root: string): string {
+function stateDir(root: string): string {
   return join(root, '.openagentsy');
 }
 
-export function auditPath(root: string): string {
+function auditPath(root: string): string {
   return join(stateDir(root), 'audit.jsonl');
 }
 
-export function rungsPath(root: string): string {
+function rungsPath(root: string): string {
   return join(stateDir(root), 'rungs.json');
 }
 
@@ -21,11 +21,11 @@ export function rungsPath(root: string): string {
  * has no sqlite module, and a plugin that imports one fails to load at all.
  * The board writes this file instead.
  */
-export function leaseSnapshotPath(root: string): string {
+function leaseSnapshotPath(root: string): string {
   return join(stateDir(root), 'leases.json');
 }
 
-export async function readLeases(root: string): Promise<Lease[]> {
+async function readLeases(root: string): Promise<Lease[]> {
   try {
     const parsed: unknown = JSON.parse(await readFile(leaseSnapshotPath(root), 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return [];
@@ -244,7 +244,7 @@ export async function loadLock(root: string): Promise<LockFile | undefined> {
   }
 }
 
-export async function loadRole(root: string, name: string): Promise<RoleDefinition | undefined> {
+async function loadRole(root: string, name: string): Promise<RoleDefinition | undefined> {
   try {
     const roles = await loadRoles(join(root, 'roles.yaml'));
     return roles.roles[name];

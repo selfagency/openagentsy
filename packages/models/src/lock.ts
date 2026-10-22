@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { RoleDefinition, RolesFile } from '@openagentsy/core';
-import { type Rejection, type SelectOptions, selectModel } from './score.js';
+import { type Rejection, type Selection, type SelectOptions, selectModel } from './score.js';
 import type { Candidate, ModelLock, ModelLockEntry, ProviderModel } from './types.js';
 
 export const LOCK_FILE_NAME = 'openagentsy.models.lock.json';
@@ -66,6 +66,23 @@ export type BuildLockResult = {
  * The reviewer is selected after the builder so it can be kept off the
  * builder's creator, which is the cross family rule from the plan.
  */
+/** Record what the selector chose for one role. */
+function record(
+  entries: Record<string, ModelLockEntry>,
+  reasons: Record<string, string>,
+  rejected: Record<string, Rejection[]>,
+  role: { name: string },
+  selection: Selection,
+): void {
+  entries[role.name] = {
+    model: selection.model.openCodeId,
+    ...(selection.runnerUp ? { runnerUp: selection.runnerUp.openCodeId } : {}),
+    evidence: selection.evidence,
+    ladder: [],
+  };
+  reasons[role.name] = selection.reason;
+  rejected[role.name] = selection.rejected;
+}
 export function buildLock(input: BuildLockInput): BuildLockResult {
   const { roles, candidates } = input;
   const entries: Record<string, ModelLockEntry> = {};
@@ -98,14 +115,7 @@ export function buildLock(input: BuildLockInput): BuildLockResult {
       failures[role.name] = error instanceof Error ? error.message : String(error);
       return;
     }
-    entries[role.name] = {
-      model: selection.model.openCodeId,
-      ...(selection.runnerUp ? { runnerUp: selection.runnerUp.openCodeId } : {}),
-      evidence: selection.evidence,
-      ladder: [],
-    };
-    reasons[role.name] = selection.reason;
-    rejected[role.name] = selection.rejected;
+    record(entries, reasons, rejected, role, selection);
   };
 
   for (const role of rest) selectSimple(role);
@@ -124,14 +134,7 @@ export function buildLock(input: BuildLockInput): BuildLockResult {
       failures[role.name] = error instanceof Error ? error.message : String(error);
       continue;
     }
-    entries[role.name] = {
-      model: selection.model.openCodeId,
-      ...(selection.runnerUp ? { runnerUp: selection.runnerUp.openCodeId } : {}),
-      evidence: selection.evidence,
-      ladder: [],
-    };
-    reasons[role.name] = selection.reason;
-    rejected[role.name] = selection.rejected;
+    record(entries, reasons, rejected, role, selection);
   }
 
   for (const role of Object.values(roles.roles)) {

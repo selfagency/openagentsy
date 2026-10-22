@@ -216,7 +216,8 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   return { text, toolCalls, files: [] };
 }
 
-function parseModel(model: string): { providerID: string; modelID: string } {
+/** A model is written provider/model. */
+export function parseModel(model: string): { providerID: string; modelID: string } {
   const separator = model.indexOf('/');
   if (separator === -1) throw new Error(`a model must be provider/model, got "${model}"`);
   return {

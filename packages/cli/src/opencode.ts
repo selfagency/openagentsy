@@ -41,18 +41,13 @@ export function targetForVersion(version: OpenCodeVersion): Target {
 /** Project config file names, in the order OpenCode prefers them. */
 export const PROJECT_CONFIG_NAMES = ['opencode.json', 'opencode.jsonc'] as const;
 
-export const GLOBAL_CONFIG_NAMES = [
-  join(homedir(), '.config', 'opencode', 'opencode.json'),
-  join(homedir(), '.config', 'opencode', 'opencode.jsonc'),
-] as const;
-
 /**
  * Directories that hold skills, in the order OpenCode searches them. The
  * first skill found with a given name wins, so a user-level skill can
  * silently shape every project. `openagentsy doctor` prints where each skill
  * came from for exactly that reason.
  */
-export function skillSearchDirs(startDir: string): string[] {
+function skillSearchDirs(startDir: string): string[] {
   const dirs: string[] = [];
 
   let current = startDir;
