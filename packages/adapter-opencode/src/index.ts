@@ -1,12 +1,16 @@
+import type { ClientLike } from './client.js';
 import {
-  loadLock,
+  appendAudit,
+  POLICIES,
   planClimb,
   readRungs,
   recordClimb,
   refuseClimb,
   roleNameOf,
+  rungTarget,
   writeRungs,
 } from './guard.js';
+import { harvest } from './harvest.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
@@ -25,29 +29,6 @@ import { guardWrite } from './write-guard.js';
  *   - applies the reasoning effort level of the rung a role climbed to
  *   - offers the oa_effort tool, which is the only way to climb
  */
-
-type ProviderModelInfo = {
-  variants?: Record<string, Record<string, unknown>>;
-};
-
-type ClientLike = {
-  provider: {
-    list: () => Promise<{
-      data?: { all?: { id: string; models: Record<string, ProviderModelInfo> }[] };
-    }>;
-  };
-  session: {
-    promptAsync: (options: {
-      path: { id: string };
-      body: {
-        noReply?: boolean;
-        agent?: string;
-        model?: { providerID: string; modelID: string };
-        parts: { type: 'text'; text: string; synthetic?: boolean; ignored?: boolean }[];
-      };
-    }) => Promise<unknown>;
-  };
-};
 
 async function variantOptions(
   client: ClientLike,
@@ -85,7 +66,6 @@ const effortTool = (root: string, client: ClientLike) =>
       await recordClimb(root, role, plan.rungIndex, args.reason);
 
       const target = plan.target;
-
       const separator = target.model.indexOf('/');
       if (separator !== -1) {
         const providerID = target.model.slice(0, separator);
@@ -131,6 +111,41 @@ export type ServerHooks = {
   tool?: Record<string, unknown>;
 };
 
+/**
+ * A session ended. It gives its effort rung back, and the archivist takes
+ * what it learned.
+ */
+async function onSessionIdle(
+  client: ClientLike,
+  root: string,
+  sessionID: string,
+  agent: string,
+): Promise<void> {
+  const role = roleNameOf(agent);
+
+  const rungs = await readRungs(root);
+  if (rungs[role]) {
+    delete rungs[role];
+    await writeRungs(root, rungs);
+  }
+
+  // A harvest that fails must not break the session that is closing, so it
+  // is caught here and put on the record.
+  try {
+    await harvest({ client, root, directory: root, sessionID, role, agent });
+  } catch (error) {
+    await appendAudit(root, {
+      policyId: POLICIES.harvestFailed.id,
+      policyVersion: POLICIES.harvestFailed.version,
+      actor: agent,
+      action: 'harvest',
+      resource: sessionID,
+      effect: 'deny',
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function setupServer(
   client: ClientLike,
   directory: string,
@@ -144,12 +159,7 @@ async function setupServer(
     'chat.params': async (input, output) => {
       sessionAgents.set(input.sessionID, input.agent);
       const role = roleNameOf(input.agent);
-      const rungs = await readRungs(root);
-      const rung = rungs[role];
-      if (!rung || rung.rungIndex === 0) return;
-
-      const lock = await loadLock(root);
-      const target = lock?.roles[role]?.ladder[rung.rungIndex];
+      const target = await rungTarget(root, role);
       if (!target) return;
 
       const options = await variantOptions(client, target.model, target.variant);
@@ -158,7 +168,7 @@ async function setupServer(
 
     'tool.execute.before': async (input, output) => {
       const agent = sessionAgents.get(input.sessionID);
-      await guardWrite(root, input.tool, output.args, agent);
+      await guardWrite(root, input.tool, output.args, agent, input.sessionID);
     },
 
     event: async ({ event }) => {
@@ -167,11 +177,7 @@ async function setupServer(
       if (!sessionID) return;
       const agent = sessionAgents.get(sessionID);
       if (!agent) return;
-      const role = roleNameOf(agent);
-      const rungs = await readRungs(root);
-      if (!rungs[role]) return;
-      delete rungs[role];
-      await writeRungs(root, rungs);
+      await onSessionIdle(client, root, sessionID, agent);
     },
 
     tool: {

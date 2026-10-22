@@ -1,10 +1,10 @@
 import {
-  loadLock,
   planClimb,
   readRungs,
   recordClimb,
   refuseClimb,
   roleNameOf,
+  rungTarget,
   writeRungs,
 } from './guard.js';
 import { guardWrite } from './write-guard.js';
@@ -163,12 +163,7 @@ async function applyRung(
   agent: string,
 ): Promise<void> {
   const role = roleNameOf(agent);
-  const rungs = await readRungs(root);
-  const rung = rungs[role];
-  if (!rung || rung.rungIndex === 0) return;
-
-  const lock = await loadLock(root);
-  const target = lock?.roles[role]?.ladder[rung.rungIndex];
+  const target = await rungTarget(root, role);
   if (!target) return;
   const separator = target.model.indexOf('/');
   if (separator === -1) return;

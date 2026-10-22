@@ -23,17 +23,47 @@ function targetPathOf(args: unknown): string | undefined {
 }
 
 /**
+ * Record one decision.
+ *
+ * The audit line is written before the block is reported, so a blocked write
+ * is always on record.
+ */
+async function recordDecision(
+  root: string,
+  entry: {
+    actor: string;
+    action: string;
+    resource: string;
+    effect: 'allow' | 'deny';
+    detail: string;
+    policyId: string;
+    sessionID?: string | undefined;
+  },
+): Promise<void> {
+  await appendAudit(root, {
+    policyId: entry.policyId,
+    policyVersion: 'v1',
+    actor: entry.actor,
+    action: entry.action,
+    resource: entry.resource,
+    effect: entry.effect,
+    detail: entry.detail,
+    sessionID: entry.sessionID,
+  });
+}
+
+/**
  * Check a write against the leases, and record the decision.
  *
  * Throws when the write is refused, so the agent is told and the tool call
- * ends. The audit line is written before the block is reported, so a blocked
- * write is always on record.
+ * ends.
  */
 export async function guardWrite(
   root: string,
   toolName: string,
   args: unknown,
   agent: string | undefined,
+  sessionID?: string,
 ): Promise<void> {
   if (!WRITE_TOOLS.has(toolName)) return;
   if (!agent) return;
@@ -43,39 +73,38 @@ export async function guardWrite(
 
   const absolute = path.startsWith('/') ? path : `${root}/${path}`;
   const decision = await decideWrite(root, absolute, agent);
-  const resource = absolute;
 
   if (decision.effect === 'deny') {
-    await appendAudit(root, {
+    await recordDecision(root, {
       policyId: 'oa.lease.write',
-      policyVersion: 'v1',
       actor: agent,
       action: toolName,
-      resource,
+      resource: absolute,
       effect: 'deny',
       detail: decision.reason,
+      sessionID,
     });
-    await appendAudit(root, {
+    await recordDecision(root, {
       policyId: 'oa.scope.violation',
-      policyVersion: 'v1',
       actor: agent,
       action: toolName,
-      resource,
+      resource: absolute,
       effect: 'deny',
       detail: decision.reason,
+      sessionID,
     });
     throw new Error(
       `OpenAgentsy blocked this write. ${decision.reason} Ask the Lead for a lease, then retry.`,
     );
   }
 
-  await appendAudit(root, {
+  await recordDecision(root, {
     policyId: 'oa.lease.write',
-    policyVersion: 'v1',
     actor: agent,
     action: toolName,
-    resource,
+    resource: absolute,
     effect: 'allow',
     detail: decision.reason,
+    sessionID,
   });
 }

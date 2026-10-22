@@ -45,7 +45,9 @@ export type AuditInput = {
   action: string;
   resource: string;
   effect: AuditEffect;
-  detail?: string;
+  detail?: string | undefined;
+  /** The session the decision was taken in, for the harvest packet. */
+  sessionID?: string | undefined;
 };
 
 export const POLICIES = {
@@ -53,6 +55,7 @@ export const POLICIES = {
   scopeViolation: { id: 'oa.scope.violation', version: 'v1' },
   effortClimb: { id: 'oa.effort.climb', version: 'v1' },
   effortRefused: { id: 'oa.effort.refused', version: 'v1' },
+  harvestFailed: { id: 'oa.harvest.failed', version: 'v1' },
 } as const;
 
 export async function appendAudit(root: string, entry: AuditInput): Promise<void> {
@@ -225,14 +228,14 @@ export async function refuseClimb(root: string, role: string, reason: string): P
   });
 }
 
-export type LockFile = {
+type LockFile = {
   roles: Record<
     string,
     { model: string; ladder: LadderRung[]; evidence?: { label?: string; rank?: number } }
   >;
 };
 
-export async function loadLock(root: string): Promise<LockFile | undefined> {
+async function loadLock(root: string): Promise<LockFile | undefined> {
   try {
     const parsed: unknown = JSON.parse(
       await readFile(join(root, 'openagentsy.models.lock.json'), 'utf8'),
@@ -242,6 +245,25 @@ export async function loadLock(root: string): Promise<LockFile | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The rung a role climbed to, if it climbed.
+ *
+ * The rung lives in the state file, the ladder in the lock file, and the
+ * rung says which rung of it the role is on. Both runtimes ask this the same
+ * way, so the answer is computed once.
+ */
+export async function rungTarget(
+  root: string,
+  role: string,
+): Promise<{ model: string; variant?: string } | undefined> {
+  const rungs = await readRungs(root);
+  const rung = rungs[role];
+  if (!rung || rung.rungIndex === 0) return undefined;
+
+  const lock = await loadLock(root);
+  return lock?.roles[role]?.ladder[rung.rungIndex];
 }
 
 async function loadRole(root: string, name: string): Promise<RoleDefinition | undefined> {
