@@ -136,7 +136,9 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   );
 
   try {
-    await waitForServer(baseUrl, 30_000);
+    // A cold start under load can take longer than a warm one. 90 seconds
+    // covers a machine that is busy starting other servers.
+    await waitForServer(baseUrl, 90_000);
   } catch (error) {
     child.kill('SIGTERM');
     throw error;

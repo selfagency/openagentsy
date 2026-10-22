@@ -40,7 +40,16 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
     body: {
       agent: 'judge',
       model: parseModel(options.model),
-      system: `The criteria:\n${options.criteria.map((c) => `- ${c}`).join('\n')}`,
+      system: [
+        'You judge how an agent CONDUCTED itself in a conversation. You do not judge whether the code in the conversation works.',
+        'The agent under test may be a reviewer that is forbidden from fixing anything: a failing test it reports is a success, not a failure.',
+        'Judge each criterion against what the agent said and did in the conversation, and nothing else.',
+        '',
+        'The criteria:',
+        ...options.criteria.map((c) => `- ${c}`),
+        '',
+        'Answer with one JSON object: {"pass": true|false, "reason": "..."}. The reason names the criterion and what the agent said or did.',
+      ].join('\n'),
       parts: [
         {
           type: 'text',
