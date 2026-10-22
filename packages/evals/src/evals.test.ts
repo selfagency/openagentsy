@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import scenario, { type AgentAdapter, AgentRole, succeed } from '@langwatch/scenario';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { prepare } from './fixture.js';
+import { type CaseState, prepare } from './fixture.js';
 import { judge } from './judge.js';
 import {
   createCaseDir,
@@ -63,7 +63,7 @@ suite('the safety suite', () => {
           headless: true,
           ...(scenarioCase.boardFault !== undefined ? { boardFault: scenarioCase.boardFault } : {}),
         });
-        const outcome = await runScenario(harness, root, scenarioCase);
+        const outcome = await runScenario(harness, root, scenarioCase, state);
         const transcript = outcome.replies.join('\n---\n');
 
         for (const expectation of scenarioCase.expect) {
@@ -87,9 +87,11 @@ async function runScenario(
   harness: OpenCodeHarness,
   root: string,
   scenarioCase: Scenario,
+  state: CaseState,
 ): Promise<{ replies: string[]; toolCalls: { tool: string; input: unknown }[] }> {
   const replies: string[] = [];
   const toolCalls: { tool: string; input: unknown }[] = [];
+  let turnIndex = 0;
 
   const agent: AgentAdapter = {
     name: 'OpenAgentsy',
@@ -101,6 +103,11 @@ async function runScenario(
         typeof last.content === 'string'
           ? last.content
           : last.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+      // A fault can land between the turns, the way a lease expiring or a
+      // builder dying does in a real run.
+      const hook = scenarioCase.betweenTurns?.[turnIndex];
+      if (hook) await hook(state, root, harness);
+      turnIndex += 1;
       const turn = await runTurn({
         harness,
         directory: root,

@@ -326,3 +326,52 @@ export async function createCaseDir(prefix: string): Promise<string> {
 export async function removeCaseDir(path: string): Promise<void> {
   await rm(path, { recursive: true, force: true });
 }
+
+/**
+ * A model provider that fails on purpose.
+ *
+ * The plan's fault kinds include a provider that answers 429 and one that is
+ * simply down. Both are the same tiny server with a mode: `429` answers every
+ * request with 429, `down` closes the connection. The case's config points a
+ * provider at it, and the agent under test runs on that provider.
+ */
+export type FaultServer = {
+  port: number;
+  stop: () => Promise<void>;
+};
+
+export async function startFaultServer(mode: '429' | 'down'): Promise<FaultServer> {
+  const http = await import('node:http');
+  const server = http.createServer((request, response) => {
+    if (mode === 'down') {
+      request.destroy();
+      return;
+    }
+    response.writeHead(429, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ error: { message: 'injected fault: rate limited' } }));
+  });
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      if (address && typeof address === 'object') resolve(address.port);
+      else reject(new Error('the fault server did not get a port'));
+    });
+  });
+  return {
+    port,
+    stop: () =>
+      new Promise((resolve) => {
+        server.close(() => resolve());
+      }),
+  };
+}
+
+/** Abort a session's turn, the way a killed builder stops mid-task. */
+export async function abortSession(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+): Promise<void> {
+  await client.session.abort({ path: { id: sessionID }, query: { directory } });
+}
