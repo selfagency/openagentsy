@@ -114,6 +114,7 @@ roles:
       primarySignal: agentic
       hardRequirements: [tool_calls, reasoning_variants, large_context]
       costStance: quality_first
+      expectedCallsPer5h: 200
     effort:
       startVariant: medium
       ceilingVariant: xhigh
@@ -145,6 +146,7 @@ roles:
       hardRequirements: [tool_calls]
       costStance: cheapest
       minimumRank: 40
+      expectedCallsPer5h: 2000
     effort:
       startVariant: low
       ceilingVariant: medium
@@ -178,6 +180,7 @@ roles:
       hardRequirements: [tool_calls]
       costStance: cheapest
       minimumRank: 40
+      expectedCallsPer5h: 200
     effort:
       startVariant: low
       ceilingVariant: medium
@@ -241,9 +244,11 @@ roles:
       hardRequirements: [tool_calls]
       costStance: balanced
       benchmark: swe_bench_verified
+      expectedCallsPer5h: 500
     effort:
       startVariant: medium
       ceilingVariant: high
+      ceilingModelRole: advisor
       climbTriggers: [test_failed_twice, touches_concurrency, touches_auth, touches_migrations]
 
   reviewer:
@@ -289,6 +294,7 @@ roles:
       hardRequirements: [tool_calls]
       costStance: balanced
       differentCreatorThan: builder
+      expectedCallsPer5h: 50
     effort:
       startVariant: high
       ceilingVariant: high
@@ -316,6 +322,7 @@ roles:
       primarySignal: overall
       hardRequirements: [reasoning_variants]
       costStance: ignore_cost
+      expectedCallsPer5h: 20
     effort:
       startVariant: high
       ceilingVariant: high
@@ -347,6 +354,8 @@ roles:
       primarySignal: long_context
       hardRequirements: []
       costStance: cheapest
+      minimumContext: 100000
+      expectedCallsPer5h: 50
     effort:
       startVariant: low
       ceilingVariant: low

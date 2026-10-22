@@ -15,13 +15,15 @@ const BOARD_RECORD = `\`\`\`json
 }
 \`\`\``
 
-function effortSection(role: RoleDefinition): string {
+function effortSection(role: RoleDefinition, variants: EffortVariants): string {
+  const start = variants.start ?? role.effort.startVariant
+  const ceiling = variants.ceiling ?? role.effort.ceilingVariant
   const triggers = role.effort.climbTriggers
   if (triggers.length === 0) {
-    return `Start at \`${role.effort.startVariant}\`. This role does not climb.`
+    return `Start at \`${start}\`. This role does not climb.`
   }
   return [
-    `Start at \`${role.effort.startVariant}\`. Ceiling \`${role.effort.ceilingVariant}\`.`,
+    `Start at \`${start}\`. Ceiling \`${ceiling}\`.`,
     "",
     "Climb one rung only on a concrete trigger, never on a feeling that the task is hard:",
     ...triggers.map((trigger) => `- \`${trigger}\``),
@@ -29,6 +31,8 @@ function effortSection(role: RoleDefinition): string {
     "Say why you climbed, in the board record.",
   ].join("\n")
 }
+
+export type EffortVariants = { start?: string; ceiling?: string }
 
 function criticalRules(role: RoleDefinition): string[] {
   const rules = [
@@ -51,7 +55,7 @@ function criticalRules(role: RoleDefinition): string[] {
  * The agent prompt body. Everything here is derived from the role definition,
  * so a role is described in exactly one place.
  */
-export function renderPrompt(role: RoleDefinition): string {
+export function renderPrompt(role: RoleDefinition, variants: EffortVariants = {}): string {
   const lines: string[] = [
     `# ${role.name}`,
     "",
@@ -81,7 +85,7 @@ export function renderPrompt(role: RoleDefinition): string {
     "",
     "## Reasoning effort",
     "",
-    effortSection(role),
+    effortSection(role, variants),
     "",
     "## What not to do",
     "",

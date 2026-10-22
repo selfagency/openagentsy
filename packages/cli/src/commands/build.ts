@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path"
 import { agentId, loadRoles, type Target } from "@openagentsy/core"
 import { agentFileName, renderAgent } from "../generate/agent.js"
 import { COMMANDS, renderCommand } from "../generate/commands.js"
-import { lockEntryFor, readModelLock } from "../generate/lock.js"
+import { lockEntryFor, lockVariants, readModelLock } from "../generate/lock.js"
 
 export type BuildOptions = {
   root: string
@@ -74,11 +74,15 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   const agents: string[] = []
   for (const role of Object.values(roles.roles)) {
     const entry = lockEntryFor(lock, role.name)
+    const variants = lockVariants(entry)
     const content = renderAgent(role, roles, {
       target: options.target,
       ...(entry?.model ? { model: entry.model } : {}),
       // V1 agent frontmatter has no variant field, so only V2 can pin one.
-      ...(options.target === "v2" ? { modelVariant: role.effort.startVariant } : {}),
+      ...(options.target === "v2" && variants.start !== undefined
+        ? { modelVariant: variants.start }
+        : {}),
+      effort: variants,
     })
     const path = join(outDir, "agents", agentFileName(role.name))
     await writeFileAt(path, content)

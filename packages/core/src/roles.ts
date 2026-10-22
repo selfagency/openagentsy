@@ -136,6 +136,12 @@ function parseModelProfile(value: unknown, where: string): ModelProfile {
   if (value.minimumRank !== undefined) {
     profile.minimumRank = asNumber(value.minimumRank, `${where}.minimumRank`)
   }
+  if (value.minimumContext !== undefined) {
+    profile.minimumContext = asNumber(value.minimumContext, `${where}.minimumContext`)
+  }
+  if (value.expectedCallsPer5h !== undefined) {
+    profile.expectedCallsPer5h = asNumber(value.expectedCallsPer5h, `${where}.expectedCallsPer5h`)
+  }
   if (value.benchmark !== undefined) {
     profile.benchmark = asString(value.benchmark, `${where}.benchmark`)
   }
@@ -152,11 +158,15 @@ function parseEffort(value: unknown, where: string): EffortLadder {
   if (!isRecord(value)) {
     throw new RolesError(`${where}: expected a mapping`)
   }
-  return {
+  const effort: EffortLadder = {
     startVariant: asString(value.startVariant, `${where}.startVariant`),
     ceilingVariant: asString(value.ceilingVariant, `${where}.ceilingVariant`),
     climbTriggers: asStringArray(value.climbTriggers ?? [], `${where}.climbTriggers`),
   }
+  if (value.ceilingModelRole !== undefined) {
+    effort.ceilingModelRole = asString(value.ceilingModelRole, `${where}.ceilingModelRole`)
+  }
+  return effort
 }
 
 /**

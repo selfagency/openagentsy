@@ -4,17 +4,18 @@ import { join } from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-import { appendAudit, POLICIES } from "./audit.js"
-import { checkBudget, listBudgets, recordUsage, setBudget } from "./budgets.js"
-import { migrate, openDatabase } from "./db.js"
-import { checkLease, grantLeases, listLeases } from "./leases.js"
-import { BoardError, createRecord, listRecords } from "./records.js"
-import { CONFIDENCE_LEVELS, RECORD_KINDS } from "./types.js"
+import { appendAudit, POLICIES, writeLeaseSnapshot } from "@openagentsy/core"
+import { checkBudget, listBudgets, recordUsage, setBudget } from "@openagentsy/core"
+import { migrate, openDatabase } from "@openagentsy/core"
+import { checkLease, grantLeases, listLeases } from "@openagentsy/core"
+import { BoardError, createRecord, listRecords } from "@openagentsy/core"
+import { CONFIDENCE_LEVELS, RECORD_KINDS } from "@openagentsy/core"
 
 const root = process.env["OPENAGENTSY_ROOT"] ?? process.cwd()
 const stateDir = join(root, ".openagentsy")
 const databasePath = join(stateDir, "board.sqlite")
 const auditPath = join(stateDir, "audit.jsonl")
+const leaseSnapshotPath = join(stateDir, "leases.json")
 
 await mkdir(stateDir, { recursive: true })
 const db = openDatabase(databasePath)
@@ -131,6 +132,9 @@ server.registerTool(
   async (input) => {
     try {
       const result = grantLeases(db, input)
+      // The plugin cannot open the database, so the board publishes the leases
+      // as a file the plugin can read.
+      await writeLeaseSnapshot(leaseSnapshotPath, listLeases(db))
       for (const lease of result.granted) {
         await appendAudit(auditPath, {
           policyId: POLICIES.leaseGrant.id,

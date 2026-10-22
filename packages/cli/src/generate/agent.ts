@@ -14,6 +14,7 @@ export type AgentRenderOptions = {
   target: Target
   model?: string
   modelVariant?: string
+  effort?: { start?: string; ceiling?: string }
 }
 
 type Frontmatter = Record<string, unknown>
@@ -79,7 +80,7 @@ export function renderAgent(
           options.modelVariant,
         )
 
-  return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role)}`
+  return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role, options.effort ?? {})}`
 }
 
 export function agentFileName(roleName: string): string {

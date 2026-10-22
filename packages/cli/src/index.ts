@@ -3,15 +3,18 @@ import { parseArgs } from "node:util"
 import type { Target } from "@openagentsy/core"
 import { runBuild } from "./commands/build.js"
 import { formatDoctorReport, runDoctor } from "./commands/doctor.js"
+import { runModels } from "./commands/models.js"
 import { runSetup } from "./commands/setup.js"
 import { detectOpenCode, targetForVersion } from "./opencode.js"
 
 const USAGE = `openagentsy <command> [options]
 
 Commands:
-  build     Generate the agent, command and skill files for a target OpenCode version
-  doctor    Report what is installed, where it came from, and what is missing
-  setup     Write the OpenCode config for OpenAgentsy
+  build              Generate the agent, command and skill files for a target OpenCode version
+  doctor             Report what is installed, where it came from, and what is missing
+  setup              Write the OpenCode config for OpenAgentsy
+  models init        Pick a model for every role and write the model lock file
+  models refresh     Re-pick the models, show what changed, and write the lock file
 
 Options:
   --root <dir>        Project root (default: current directory)
@@ -20,6 +23,11 @@ Options:
   --roles <file>      Roles file (default: <root>/roles.yaml)
   --lock <file>       Model lock file (default: <root>/openagentsy.models.lock.json)
   --config <file>     Config file for setup (default: <root>/opencode.json)
+  --providers <list>  Providers for models init, comma separated
+  --allow-training    Allow models whose terms train on prompts
+  --allow-retention   Allow models that are not zero data retention
+  --key <key>         BenchLM key, for the keyed REST API
+  --yes               Write the lock file without asking
   --dry-run           Print what setup would write without writing it
   -h, --help          Show this help
 `
@@ -42,6 +50,11 @@ async function main(argv: string[]): Promise<number> {
       lock: { type: "string" },
       config: { type: "string" },
       "dry-run": { type: "boolean" },
+      providers: { type: "string" },
+      "allow-training": { type: "boolean" },
+      "allow-retention": { type: "boolean" },
+      key: { type: "string" },
+      yes: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   })
@@ -94,10 +107,50 @@ async function main(argv: string[]): Promise<number> {
       for (const key of result.changed) {
         process.stdout.write(`  ${key}\n`)
       }
+      if (result.pluginPath) {
+        process.stdout.write(
+          `  ${result.dryRun ? "would install" : "installed"} ${result.pluginPath}\n`,
+        )
+      } else {
+        process.stdout.write("  no plugin bundle found, run: pnpm build\n")
+      }
       if (result.dryRun) {
         process.stdout.write("\n")
         process.stdout.write(result.content)
       }
+      return 0
+    }
+
+    case "models": {
+      const sub = positionals[1] ?? "init"
+      if (sub !== "init" && sub !== "refresh") {
+        process.stderr.write(`unknown models subcommand: ${sub}\n`)
+        return 1
+      }
+      const result = await runModels({
+        root,
+        providers: values.providers?.split(",") ?? ["opencode-go", "ollama-cloud"],
+        ...(values["allow-training"] ? { allowTraining: true } : {}),
+        ...(values["allow-retention"] ? { allowRetention: true } : {}),
+        ...(values.key ? { key: values.key } : {}),
+        ...(values.yes ? { yes: true } : {}),
+      })
+      process.stdout.write(`model selection for ${result.changes.length} roles\n`)
+      for (const change of result.changes) {
+        const from = change.from && change.from !== change.to ? `${change.from} -> ` : ""
+        process.stdout.write(`  ${change.role.padEnd(12)}${from}${change.to}\n`)
+        process.stdout.write(`               ${change.note}\n`)
+        for (const rejection of (result.rejected[change.role] ?? []).slice(0, 3)) {
+          process.stdout.write(`               not ${rejection.openCodeId}: ${rejection.reason}\n`)
+        }
+      }
+      for (const [role, reason] of Object.entries(result.failures)) {
+        process.stdout.write(`  ${role.padEnd(12)}no model available\n`)
+        process.stdout.write(`               ${reason}\n`)
+      }
+      process.stdout.write(
+        result.written ? `\nwrote ${result.path}\n` : `\nnot written, pass --yes to write ${result.path}\n`,
+      )
       return 0
     }
 

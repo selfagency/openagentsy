@@ -1,6 +1,7 @@
+import { mkdir, writeFile } from "node:fs/promises"
+import { dirname, isAbsolute, join } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
-import { isAbsolute, join } from "node:path"
-import { matchesGlob, normalizePath, relativeToRoot, isInsideRoot } from "@openagentsy/core"
+import { matchesGlob, normalizePath, relativeToRoot, isInsideRoot } from "../paths.js"
 import type { Lease, LeaseDecision } from "./types.js"
 
 type LeaseRow = {
@@ -79,14 +80,58 @@ export function listLeases(db: DatabaseSync, bean?: string): Lease[] {
   return rows.map(toLease)
 }
 
+export type LeaseSnapshot = {
+  updatedAt: string
+  leases: Lease[]
+}
+
+/**
+ * Publish the leases as a plain file.
+ *
+ * The board owns the database, but the OpenCode plugin cannot read it: the
+ * plugin runtime has no sqlite module, so a plugin that opens the database
+ * fails to load at all. The plugin reads this file instead. The database stays
+ * the source of truth and this file is written from it.
+ */
+export async function writeLeaseSnapshot(path: string, leases: Lease[]): Promise<void> {
+  const snapshot: LeaseSnapshot = { updatedAt: new Date().toISOString(), leases }
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8")
+}
+
 export type CheckLeaseInput = {
   path: string
   root: string
   agent?: string
 }
 
+export function decideFromLeases(
+  leases: Lease[],
+  path: string,
+  root: string,
+  agent: string | undefined,
+): LeaseDecision {
+  const relative = relativeToRoot(root, path)
+  const matches = leases
+    .filter((lease) => matchesGlob(lease.glob, relative))
+    .sort((a, b) => b.glob.length - a.glob.length)
+
+  const winner = matches[0]
+  if (!winner) {
+    return { path: relative, status: "unleased" }
+  }
+
+  return {
+    path: relative,
+    status: agent !== undefined && agent !== winner.agent ? "conflict" : "leased",
+    agent: winner.agent,
+    bean: winner.bean,
+    glob: winner.glob,
+  }
+}
+
 /**
- * Decide whether one path may be written.
+ * Decide whether one path may be written, reading the leases from the board.
  *
  * The most specific matching glob wins, so `src/api/**` beats `src/**`. When
  * the holder is a different agent the answer is a conflict, not a permission.
@@ -96,25 +141,5 @@ export function checkLease(db: DatabaseSync, input: CheckLeaseInput): LeaseDecis
   if (!isInsideRoot(input.root, absolute)) {
     return { path: normalizePath(input.path), status: "unleased" }
   }
-
-  const path = relativeToRoot(input.root, absolute)
-  const leases = listLeases(db)
-
-  const matches = leases
-    .filter((lease) => matchesGlob(lease.glob, path))
-    .sort((a, b) => b.glob.length - a.glob.length)
-
-  const winner = matches[0]
-  if (!winner) {
-    return { path, status: "unleased" }
-  }
-
-  const decision: LeaseDecision = {
-    path,
-    status: input.agent !== undefined && input.agent !== winner.agent ? "conflict" : "leased",
-    agent: winner.agent,
-    bean: winner.bean,
-    glob: winner.glob,
-  }
-  return decision
+  return decideFromLeases(listLeases(db), absolute, input.root, input.agent)
 }

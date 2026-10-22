@@ -9,6 +9,7 @@ export type ModelLockEntry = {
     date?: string
   }
   date?: string
+  ladder: { model: string; variant?: string }[]
 }
 
 export type ModelLock = {
@@ -39,4 +40,17 @@ export async function readModelLock(path: string): Promise<ModelLock | undefined
 
 export function lockEntryFor(lock: ModelLock | undefined, role: string): ModelLockEntry | undefined {
   return lock?.roles[role]
+}
+
+/** The effort levels the lock says this role runs at. */
+export function lockVariants(
+  entry: ModelLockEntry | undefined,
+): { start?: string; ceiling?: string } {
+  const ladder = entry?.ladder ?? []
+  const first = ladder[0]
+  const last = ladder[ladder.length - 1]
+  return {
+    ...(first?.variant !== undefined ? { start: first.variant } : {}),
+    ...(last?.variant !== undefined ? { ceiling: last.variant } : {}),
+  }
 }

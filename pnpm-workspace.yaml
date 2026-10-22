@@ -4,3 +4,4 @@ packages:
 # esbuild ships a platform binary via a postinstall script. vitest needs it.
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true

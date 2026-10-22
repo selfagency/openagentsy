@@ -39,6 +39,9 @@ export type ModelProfile = {
   hardRequirements: string[]
   costStance: CostStance
   minimumRank?: number
+  minimumContext?: number
+  /** Expected calls in a five hour window, used for the quota check. */
+  expectedCallsPer5h?: number
   benchmark?: string
   differentCreatorThan?: string
 }
@@ -47,6 +50,8 @@ export type EffortLadder = {
   startVariant: string
   ceilingVariant: string
   climbTriggers: string[]
+  /** Role whose model the ceiling rung uses. Defaults to the role itself. */
+  ceilingModelRole?: string
 }
 
 export type RoleDefinition = {

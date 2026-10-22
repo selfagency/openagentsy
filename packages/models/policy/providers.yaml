@@ -1,0 +1,176 @@
+# Retention and quota data that no API exposes.
+#
+# models.dev has no retention field and the OpenCode Go model list has no
+# quota, so both come from the provider documentation and are checked in here
+# with their source. Nothing in this file is a guess: an entry either names a
+# documented value or the model falls back to the provider default.
+#
+# Checked: 2026-10-22
+# Sources:
+#   - https://opencode.ai/v2/docs/console/go/
+#   - https://opencode.ai/docs/zen/
+#   - https://ollama.com/search?c=cloud
+
+version: 1
+
+defaults:
+  trainsOnPrompts: false
+  zeroDataRetention: true
+  retentionDays: 0
+
+providers:
+  opencode-go:
+    source: https://opencode.ai/v2/docs/console/go/
+    checkedAt: "2026-10-22"
+    note: >-
+      Go meters each model separately: a rolling 5 hour window of 20 percent of
+      that model's monthly cap, 50 percent weekly, 100 percent monthly.
+    models:
+      kimi-k3:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+        requestsPer5h: 110
+        requestsPer5hPlus: 440
+      kimi-k2.7-code:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+        requestsPer5h: 110
+        requestsPer5hPlus: 440
+      kimi-k2.6:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+        requestsPer5h: 110
+        requestsPer5hPlus: 440
+      deepseek-v4.1-flash:
+        monthlyCapUsd: 80
+        monthlyCapUsdPlus: 160
+        requestsPer5h: 34670
+        requestsPer5hPlus: 69330
+      deepseek-v4-pro:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+        requestsPer5h: 110
+        requestsPer5hPlus: 440
+      gemini-4-argon-contributor:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+        retentionDays: 30
+        monthlyCapUsd: 60
+        monthlyCapUsdPlus: 240
+        requestsPer5h: 440
+        requestsPer5hPlus: 440
+        note: limited time, two times the cap
+      muse-spark-1.2-contributor:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+        retentionDays: 30
+      muse-spark-1.3-contributor:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+        retentionDays: 30
+      grok-4.7:
+        zeroDataRetention: false
+        retentionDays: 30
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+      grok-4.6:
+        zeroDataRetention: false
+        retentionDays: 30
+      gpt-6-luna:
+        zeroDataRetention: false
+        retentionDays: 30
+      gpt-5.6-luna:
+        zeroDataRetention: false
+        retentionDays: 30
+      claude-haiku-5-5:
+        zeroDataRetention: false
+        retentionDays: 30
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+      beam-free:
+        zeroDataRetention: false
+        retentionDays: 30
+      longcat-2.0:
+        zeroDataRetention: true
+      mimo-v2.5:
+        zeroDataRetention: true
+      mimo-v2.6-flash:
+        zeroDataRetention: true
+      qwen3.8-max:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+      qwen3.8-flash:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 60
+      glm-5.3:
+        monthlyCapUsd: 15
+        monthlyCapUsdPlus: 120
+      glm-5.2:
+        monthlyCapUsd: 60
+        monthlyCapUsdPlus: 180
+
+  opencode:
+    source: https://opencode.ai/docs/zen/
+    checkedAt: "2026-10-22"
+    note: >-
+      Zen is zero retention and no training by default. The exceptions are the
+      free and hosted variants below.
+    models:
+      big-pickle:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      beam-free:
+        zeroDataRetention: false
+        retentionDays: 30
+      flint-40b-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      exo-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      jev-1.13:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      jev-1.13-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      mimo-v2.6-flash-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      nemotron-3.5-super-vl-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      nemotron-3.5-lightning-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      deepseek-v4.1-flash-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      glm-5.3-flash-free:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      test:
+        trainsOnPrompts: true
+        zeroDataRetention: false
+      grok-4.7:
+        zeroDataRetention: false
+        retentionDays: 30
+      gpt-6-luna:
+        zeroDataRetention: false
+        retentionDays: 30
+      gpt-5.6-luna:
+        zeroDataRetention: false
+        retentionDays: 30
+      claude-haiku-5-5:
+        zeroDataRetention: false
+        retentionDays: 30
+
+  ollama-cloud:
+    source: https://ollama.com/search?c=cloud
+    checkedAt: "2026-10-22"
+    note: Ollama states it does not use cloud requests to train models.
+
+  ollama:
+    source: https://ollama.com
+    checkedAt: "2026-10-22"
+    note: Local models never leave the machine.
