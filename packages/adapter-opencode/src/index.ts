@@ -1,9 +1,5 @@
-import { relativeToRoot } from '@openagentsy/core';
 import {
-  appendAudit,
-  decideWrite,
   loadLock,
-  POLICIES,
   planClimb,
   readRungs,
   recordClimb,
@@ -12,6 +8,8 @@ import {
   writeRungs,
 } from './guard.js';
 import { tool } from './tool.js';
+import { setupV2, type V2Context } from './v2.js';
+import { guardWrite } from './write-guard.js';
 
 /**
  * OpenAgentsy for OpenCode.
@@ -50,18 +48,6 @@ type ClientLike = {
     }) => Promise<unknown>;
   };
 };
-
-const WRITE_TOOLS = new Set(['edit', 'write', 'patch', 'apply_patch']);
-
-function targetPathOf(args: unknown): string | undefined {
-  if (typeof args !== 'object' || args === null) return undefined;
-  const record = args as Record<string, unknown>;
-  for (const key of ['filePath', 'path', 'file']) {
-    const value = record[key];
-    if (typeof value === 'string' && value.length > 0) return value;
-  }
-  return undefined;
-}
 
 async function variantOptions(
   client: ClientLike,
@@ -125,65 +111,6 @@ const effortTool = (root: string, client: ClientLike) =>
       return `Climbed to rung ${plan.rungIndex}: ${target.model} ${target.variant ?? 'default'}. Say why in your board record.`;
     },
   });
-
-/**
- * The lease check. A write is allowed only when a lease covers the path and
- * the lease belongs to the agent asking.
- */
-async function guardWrite(
-  root: string,
-  toolName: string,
-  args: unknown,
-  agent: string | undefined,
-): Promise<void> {
-  if (!WRITE_TOOLS.has(toolName)) return;
-  if (!agent) return;
-
-  const path = targetPathOf(args);
-  if (!path) return;
-
-  const absolute = path.startsWith('/') ? path : `${root}/${path}`;
-  const decision = await decideWrite(root, absolute, agent);
-
-  if (decision.effect === 'deny') {
-    const resource = relativeToRoot(root, absolute);
-    // The audit line is written before the block is reported, so a blocked
-    // write is always on record.
-    await appendAudit(root, {
-      policyId: POLICIES.leaseWrite.id,
-      policyVersion: POLICIES.leaseWrite.version,
-      actor: agent,
-      action: toolName,
-      resource,
-      effect: 'deny',
-      detail: decision.reason,
-    });
-    await appendAudit(root, {
-      policyId: POLICIES.scopeViolation.id,
-      policyVersion: POLICIES.scopeViolation.version,
-      actor: agent,
-      action: toolName,
-      resource,
-      effect: 'deny',
-      detail: decision.reason,
-    });
-    throw new Error(
-      `OpenAgentsy blocked this write. ${decision.reason} Ask the Lead for a lease, then retry.`,
-    );
-  }
-
-  // A write that was allowed is on record too. A record that only holds the
-  // refusals cannot answer "was this file ever written?".
-  await appendAudit(root, {
-    policyId: POLICIES.leaseWrite.id,
-    policyVersion: POLICIES.leaseWrite.version,
-    actor: agent,
-    action: toolName,
-    resource: relativeToRoot(root, absolute),
-    effect: 'allow',
-    detail: decision.reason,
-  });
-}
 
 export type ServerHooks = {
   'chat.params'?: (
@@ -264,29 +191,10 @@ const server = async (input: {
 /**
  * OpenCode 2. The same rules, reached through the V2 plugin API.
  *
- * This path is written from the V2 documentation and has not been run against
- * a V2 build, because V2 is not installed on this machine. The V1 path above
- * is verified end to end.
+ * The V2 path lives in its own module because the API is a different shape:
+ * a plugin registers hooks and transforms on a context, where V1 returns a
+ * map of hook names.
  */
-const setup = async (ctx: {
-  tool?: { hook?: (name: string, cb: (input: unknown) => Promise<void>) => void };
-  event?: { subscribe?: (options: { signal?: AbortSignal }) => void };
-  session?: { hook?: (name: string, cb: (input: unknown) => Promise<void>) => void };
-}): Promise<void> => {
-  const root = process.cwd();
-  const sessionAgents = new Map<string, string>();
-
-  ctx.tool?.hook?.('execute.before', async (input: unknown) => {
-    const record = (input ?? {}) as { tool?: string; sessionID?: string; args?: unknown };
-    const agent = record.sessionID ? sessionAgents.get(record.sessionID) : undefined;
-    await guardWrite(root, record.tool ?? '', record.args, agent);
-  });
-
-  ctx.session?.hook?.('model.request', async (input: unknown) => {
-    const record = (input ?? {}) as { sessionID?: string; agent?: string };
-    if (!record.sessionID || !record.agent) return;
-    sessionAgents.set(record.sessionID, record.agent);
-  });
-};
+const setup = async (ctx: V2Context): Promise<(() => void) | undefined> => setupV2(ctx);
 
 export default { id: 'openagentsy', setup, server };
