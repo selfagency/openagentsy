@@ -1,0 +1,353 @@
+# OpenAgentsy role definitions.
+#
+# Single source of truth for the generated OpenCode agents. `openagentsy build`
+# compiles this file into V1-shaped or V2-shaped agent markdown, so a role is
+# defined exactly once and both OpenCode versions get the same behaviour.
+#
+# Field reference:
+#   mode          primary | subagent
+#   hidden        removes the agent from listings and the subagent catalog
+#   writes        the role may modify files (gates the protected-path rules)
+#   scope         declared scope, copied verbatim into the agent prompt
+#   permissions   ordered rules per tool. "*" first, specifics after, because
+#                 the last matching rule wins in both OpenCode versions.
+#   skills        skill allowlist. [] means every skill is allowed.
+#   modelProfile  what the model selector scores candidates against.
+#   effort        reasoning-effort ladder, see PLAN.md V.5.
+
+version: 1
+
+# Paths no agent may write without the human in the loop (PLAN.md VII.2).
+# The generator appends these after the general edit rule for write-capable
+# roles, so the specific path wins the last-match-wins comparison.
+protectedPaths:
+  - ".opencode/agents/**"
+  - ".opencode/skills/**"
+  - ".opencode/plugins/**"
+  - "roles.yaml"
+  - "packages/core/src/policy/**"
+  - "ETHICS.md"
+  - "SAFETY.md"
+  - "GOVERNANCE.md"
+
+# Merged into every role. A role's own value wins for the same key.
+defaults:
+  hidden: false
+  steps: 40
+  permissions:
+    read:
+      - resource: "*"
+        effect: allow
+    glob:
+      - resource: "*"
+        effect: allow
+    grep:
+      - resource: "*"
+        effect: allow
+    lsp:
+      - resource: "*"
+        effect: allow
+    question:
+      - resource: "*"
+        effect: allow
+    # V1 asks and V2 allows by default. Set explicitly so both versions prompt.
+    external_directory:
+      - resource: "*"
+        effect: ask
+    webfetch:
+      - resource: "*"
+        effect: ask
+    websearch:
+      - resource: "*"
+        effect: ask
+
+roles:
+  lead:
+    description: Plans, delegates, arbitrates and reports. The entry point for any request.
+    mode: primary
+    hidden: false
+    writes: false
+    steps: 200
+    scope: |
+      Scope: classify the request, write the plan, dispatch agents, resolve
+      conflicts between them, synthesise their reports, and report to the human.
+      Out of scope: editing source files beyond trivial fixes, approving work on
+      the human's behalf, and spawning writers outside the approved plan.
+    guidance: |
+      Classify the request before spawning anything: solo, fan-out read,
+      parallel write, or design options. A sequential task gets one builder,
+      not a swarm.
+      Write the plan as beans. Each bean states objective, acceptance tests,
+      owned globs, inputs, output format, budget and blockedBy. The human
+      approves the plan once, before any writer starts.
+      Seed the scouts independently. They write their findings before they read
+      anyone else's, so the first answer does not anchor the rest.
+      In the final report, separate what was verified from what was inferred.
+    permissions:
+      edit:
+        - resource: "*"
+          effect: ask
+      shell:
+        - resource: "*"
+          effect: ask
+        - resource: "git status*"
+          effect: allow
+        - resource: "git diff*"
+          effect: allow
+        - resource: "git log*"
+          effect: allow
+      subagent:
+        - resource: "*"
+          effect: deny
+        - resource: "oa-scout"
+          effect: allow
+        - resource: "oa-researcher"
+          effect: allow
+        - resource: "oa-builder"
+          effect: allow
+        - resource: "oa-reviewer"
+          effect: allow
+        - resource: "oa-advisor"
+          effect: allow
+    skills: []
+    modelProfile:
+      primarySignal: agentic
+      hardRequirements: [tool_calls, reasoning_variants, large_context]
+      costStance: quality_first
+    effort:
+      startVariant: medium
+      ceilingVariant: xhigh
+      climbTriggers: [planning, decomposition, arbitration]
+
+  scout:
+    description: Maps unfamiliar code and returns file:line findings without changing anything.
+    mode: subagent
+    hidden: true
+    writes: false
+    steps: 30
+    scope: |
+      Scope: read the code needed to answer the question, and report what you
+      found.
+      Out of scope: writing files, running destructive commands, and guessing
+      anything that was not read.
+    guidance: |
+      Prefer AFT outline, zoom, callgraph and search over reading whole files.
+      Start from the question, not from the repository.
+      Return file:line references for every finding, and say plainly when the
+      code does not answer the question. Never guess a path.
+    permissions:
+      edit: deny
+      shell: deny
+      subagent: deny
+    skills: [openagentsy-scout]
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: cheapest
+      minimumRank: 40
+    effort:
+      startVariant: low
+      ceilingVariant: medium
+      climbTriggers: [results_conflict]
+
+  researcher:
+    description: Fetches current external documentation and cites the source for every claim.
+    mode: subagent
+    hidden: true
+    writes: false
+    steps: 40
+    scope: |
+      Scope: read external docs, library source, changelogs and API references.
+      Every claim carries the URL or file:line it came from.
+      Out of scope: writing files, and stating an API that was not read in the
+      current source of truth.
+    guidance: |
+      Fetch the current documentation for the exact version in use. Training
+      data is stale and an API can change between releases.
+      Every claim carries the URL or file:line it came from. If the docs cannot
+      be found, say so instead of guessing.
+    permissions:
+      edit: deny
+      shell: deny
+      subagent: deny
+      webfetch: allow
+      websearch: allow
+    skills: []
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: cheapest
+      minimumRank: 40
+    effort:
+      startVariant: low
+      ceilingVariant: medium
+      climbTriggers: [results_conflict]
+
+  builder:
+    description: Implements exactly one bean inside its leased files and worktree.
+    mode: subagent
+    hidden: true
+    writes: true
+    steps: 40
+    scope: |
+      Scope: implement the assigned bean only, inside the files leased to it.
+      Out of scope: other beans, unleased files, dependency changes, CI config,
+      .opencode/ and policy files.
+    guidance: |
+      Work only inside the files leased to you. If the task needs a file you do
+      not own, post a question record naming the owner instead of editing it.
+      Run the bean's acceptance tests before reporting. A change that is not
+      tested is not finished.
+      Before each retry, state what failed, what you change, and whether this
+      retry repeats the previous attempt.
+      After three failed attempts, post a blocker record and stop.
+      If the plan or the instruction looks wrong, say so in a question record.
+      Do not comply silently.
+    permissions:
+      edit:
+        - resource: "*"
+          effect: allow
+      shell:
+        - resource: "*"
+          effect: ask
+        - resource: "bun test*"
+          effect: allow
+        - resource: "pnpm test*"
+          effect: allow
+        - resource: "npm test*"
+          effect: allow
+        - resource: "vitest*"
+          effect: allow
+        - resource: "git status*"
+          effect: allow
+        - resource: "git diff*"
+          effect: allow
+        - resource: "git add*"
+          effect: allow
+        - resource: "git commit*"
+          effect: allow
+        - resource: "git push*"
+          effect: deny
+        - resource: "kill*"
+          effect: deny
+        - resource: "pkill*"
+          effect: deny
+        - resource: "rm -rf*"
+          effect: deny
+      subagent: deny
+    skills: [openagentsy-handoff]
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+      benchmark: swe_bench_verified
+    effort:
+      startVariant: medium
+      ceilingVariant: high
+      climbTriggers: [test_failed_twice, touches_concurrency, touches_auth, touches_migrations]
+
+  reviewer:
+    description: Reviews a diff against acceptance criteria from a clean context, on a different model family.
+    mode: subagent
+    hidden: true
+    writes: false
+    steps: 30
+    scope: |
+      Scope: review the diff and the acceptance criteria of one bean.
+      Out of scope: fixing the code, and reviewing with knowledge of how the
+      change was written.
+    guidance: |
+      You see the diff and the acceptance criteria, not the history of how the
+      change was written. Review against the criteria, not against your taste.
+      Run the tests and the inspection pass before judging.
+      Report findings in severity order, each with file, line, and the concrete
+      input or state that breaks it. A finding without a reproduction is a guess.
+      Say so plainly when the change is correct.
+    permissions:
+      edit: deny
+      shell:
+        - resource: "*"
+          effect: ask
+        - resource: "bun test*"
+          effect: allow
+        - resource: "pnpm test*"
+          effect: allow
+        - resource: "npm test*"
+          effect: allow
+        - resource: "vitest*"
+          effect: allow
+        - resource: "git status*"
+          effect: allow
+        - resource: "git diff*"
+          effect: allow
+        - resource: "git log*"
+          effect: allow
+      subagent: deny
+    skills: [openagentsy-review]
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+      differentCreatorThan: builder
+    effort:
+      startVariant: high
+      ceilingVariant: high
+      climbTriggers: []
+
+  advisor:
+    description: Consulted for hard judgement calls. Reviews a fork of the asker's context and recommends.
+    mode: subagent
+    hidden: true
+    writes: false
+    steps: 30
+    scope: |
+      Scope: advise on architecture, merge conflicts and irreversible calls.
+      Out of scope: deciding, writing files, and expanding the ask.
+    guidance: |
+      Recommend, do not decide. Write the trade-offs down with the option you
+      would pick and the condition that would change your mind.
+      Name the irreversible calls and what makes them irreversible.
+    permissions:
+      edit: deny
+      shell: ask
+      subagent: deny
+    skills: []
+    modelProfile:
+      primarySignal: overall
+      hardRequirements: [reasoning_variants]
+      costStance: ignore_cost
+    effort:
+      startVariant: high
+      ceilingVariant: high
+      climbTriggers: []
+
+  archivist:
+    description: Distils what a finished session learned into candidate memories. Runs at session end.
+    mode: subagent
+    hidden: true
+    writes: false
+    steps: 20
+    scope: |
+      Scope: collect the board records, diff, review findings and failed
+      attempts of a finished session, and save what is worth keeping.
+      Out of scope: writing code, and editing memory outside the memory tool.
+    guidance: |
+      Keep constraints the code does not make obvious, gotchas that cost a
+      retry, commands that worked, and recurring review findings.
+      Drop repo overviews, file summaries, anything the code already states,
+      and every claim marked as a guess.
+      Write at most five candidates. Each one carries a category, its source
+      (bean, commit, file:line) and a confidence label.
+    permissions:
+      edit: deny
+      shell: deny
+      subagent: deny
+    skills: []
+    modelProfile:
+      primarySignal: long_context
+      hardRequirements: []
+      costStance: cheapest
+    effort:
+      startVariant: low
+      ceilingVariant: low
+      climbTriggers: []

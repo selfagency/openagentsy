@@ -1,0 +1,16 @@
+{
+  "mcp": {
+    "openagentsy": {
+      "type": "local",
+      "command": [
+        "node",
+        "packages/mcp/dist/index.js"
+      ],
+      "enabled": true
+    }
+  },
+  "compaction": {
+    "auto": false,
+    "prune": false
+  }
+}
