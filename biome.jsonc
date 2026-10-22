@@ -13,7 +13,8 @@
       "!**/.openagentsy",
       "!**/.opencode",
       "!**/.tmp",
-      "!**/*.md"
+      "!**/*.md",
+      "!pnpm-lock.yaml"
     ]
   },
   "formatter": {
