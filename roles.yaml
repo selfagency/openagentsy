@@ -315,6 +315,8 @@ roles:
           effect: allow
         - resource: "vitest*"
           effect: allow
+        - resource: "node --test*"
+          effect: allow
         - resource: "git status*"
           effect: allow
         - resource: "git diff*"
