@@ -1,3 +1,9 @@
 pnpm exec lint-staged
 pnpm typecheck
-pnpm exec fallow audit --base HEAD~1 --format human --quiet || pnpm exec fallow audit --base develop --format human --quiet
+# The changed-code gate. HEAD is the base because the staged changes sit on
+# top of it, so only what this commit introduces can fail the gate.
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  pnpm exec fallow audit --base HEAD --format human --quiet
+else
+  pnpm exec fallow audit --base develop --format human --quiet
+fi
