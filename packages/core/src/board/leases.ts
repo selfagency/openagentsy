@@ -156,6 +156,7 @@ export function decideFromLeases(
   path: string,
   root: string,
   agent: string | undefined,
+  resolveName: (name: string) => string = (name) => name,
 ): LeaseDecision {
   const relative = relativeToRoot(root, path);
   const matches = leaseList
@@ -167,9 +168,13 @@ export function decideFromLeases(
     return { path: relative, status: 'unleased' };
   }
 
+  // The two names are resolved before they are compared, so a lease that
+  // names the role and a session that names the agent are one agent.
+  const same = sameAgent(resolveName(agent ?? ''), resolveName(winner.agent));
+
   return {
     path: relative,
-    status: agent !== undefined && !sameAgent(agent, winner.agent) ? 'conflict' : 'leased',
+    status: agent !== undefined && !same ? 'conflict' : 'leased',
     agent: winner.agent,
     bean: winner.bean,
     glob: winner.glob,

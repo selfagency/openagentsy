@@ -103,6 +103,33 @@ export type WriteDecision = {
 };
 
 /**
+ * The role behind a name, in whichever spelling the name uses.
+ *
+ * A role is known by its key in the roles file and by the agent name it
+ * carries: the Lead's key is 'lead' and its agent name is 'agentsy'. A lease
+ * that names one and a session that names the other are the same agent, so
+ * both sides are resolved to the role key before they are compared. A name
+ * that is not a role at all keeps its own spelling, so a custom agent's
+ * lease still works.
+ */
+function roleKeyOf(roles: { roles: Record<string, RoleDefinition> }, name: string): string {
+  const lower = name.toLowerCase();
+  for (const [key, role] of Object.entries(roles.roles)) {
+    if (key.toLowerCase() === lower) return key;
+    if (role.agentName?.toLowerCase() === lower) return key;
+  }
+  // The agent files are named after the role with an 'oa-' prefix, and the
+  // role key is without it.
+  if (lower.startsWith('oa-')) {
+    const stripped = lower.slice(3);
+    for (const key of Object.keys(roles.roles)) {
+      if (key.toLowerCase() === stripped) return key;
+    }
+  }
+  return name;
+}
+
+/**
  * Decide whether one path may be written.
  *
  * The rules are the ones in the core package, not a second copy.
@@ -120,7 +147,9 @@ export async function decideWrite(
     };
   }
 
-  const decision = decideFromLeases(leases, path, root, agent);
+  const roles = await loadRoles(join(root, 'roles.yaml'));
+  const resolve = (name: string) => roleKeyOf(roles, name);
+  const decision = decideFromLeases(leases, path, root, agent, resolve);
   if (decision.status === 'unleased') {
     return {
       effect: 'deny',

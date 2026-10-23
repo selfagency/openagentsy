@@ -13,6 +13,23 @@ protectedPaths: []
 defaults:
   permissions: {}
 roles:
+  lead:
+    agentName: agentsy
+    description: Plans
+    mode: primary
+    writes: false
+    scope: the plan
+    guidance: delegate
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+    effort:
+      startVariant: low
+      ceilingVariant: high
+      climbTriggers: []
   builder:
     description: Implements a bean
     mode: subagent
@@ -116,6 +133,25 @@ describe('decideWrite', () => {
     const decision = await decideWrite(root, join(root, 'src/app.ts'), 'oa-builder');
     expect(decision.effect).toBe('deny');
     expect(decision.reason).toContain('no leases');
+  });
+
+  it('covers a lease taken under the role when the session carries the agent name', async () => {
+    await publishLease('oa-lead', 'src/**');
+    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'agentsy');
+    expect(decision.effect).toBe('allow');
+  });
+
+  it('covers a lease taken under the agent name when the session carries the role', async () => {
+    await publishLease('agentsy', 'src/**');
+    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'oa-lead');
+    expect(decision.effect).toBe('allow');
+  });
+
+  it('still separates two different roles', async () => {
+    await publishLease('oa-builder', 'src/**');
+    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'agentsy');
+    expect(decision.effect).toBe('deny');
+    expect(decision.owner).toBe('oa-builder');
   });
 });
 
