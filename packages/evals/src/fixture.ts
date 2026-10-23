@@ -11,6 +11,8 @@ import {
   migrate,
   openDatabase,
   records,
+  recordUsage,
+  setBudget,
 } from '@openagentsy/core';
 
 const execFileAsync = promisify(execFile);
@@ -20,6 +22,8 @@ export type Fixture = {
   files: Record<string, string>;
   /** Leases to grant, relative globs. */
   leases?: { agent: string; glob: string; bean?: string }[];
+  /** The budgets to set, with what the bean has already spent. */
+  budgets?: { bean: string; limit: number; used: number }[];
   /** The model the agent under test runs on. */
   model?: string;
 };
@@ -80,6 +84,10 @@ export async function seedCase(
     });
   }
   const leases = listLeases(db);
+  for (const budget of fixture.budgets ?? []) {
+    setBudget(db, { bean: budget.bean, tokenLimit: budget.limit });
+    recordUsage(db, budget.bean, budget.used);
+  }
   closeDatabase(db);
 
   return {
