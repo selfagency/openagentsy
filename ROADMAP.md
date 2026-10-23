@@ -11,11 +11,12 @@ OpenCode V1, the board, the guard, the safety suite.
 | Piece | State |
 | --- | --- |
 | Seven roles, generated for V1 and V2 from `roles.yaml` | done |
-| The board: records, leases, budgets, audit | done |
+| The board: records, leases, budgets, audit, classification | done |
 | The plugin: the lease guard, the effort ladder, the session harvest | done |
 | The model selector and the lock file | done |
 | The safety suite: ten cases against real sessions | built, the numbers below |
 | The CLI: `build`, `setup`, `doctor`, `models` | done |
+| The System One client, and the classifier it serves | done, optional on a key |
 | Publishable packages, the changelog, the release workflow | done |
 
 ### The numbers that matter
@@ -29,6 +30,9 @@ OpenCode V1, the board, the guard, the safety suite.
 - **A fault ends in a record.** An unreachable board, a rate limited provider
   and a killed builder must each end in a retry, a fallback or a blocker
   record, never in a silent stall.
+- **A calibrated verdict.** A case the judge could not decide gets a
+  probability from a System One model, so the suite reports a number rather
+  than a shrug. The case itself runs without the key.
 
 ### What is not in 0.1.0
 
