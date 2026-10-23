@@ -243,7 +243,17 @@ export function replyPartsOf(messages: readonly unknown[]): {
     const role = (message as { info?: { role?: string } }).info?.role;
     return role === undefined || role === 'assistant';
   });
-  const last = assistant.at(-1) as
+
+  // A climb posts a message of its own into the session: the model switch
+  // is a synthetic turn, and it carries no reply. The reply is the last
+  // assistant message that is not that one, or the turn looks like it
+  // produced nothing at all.
+  const spoken = assistant.filter((message) => {
+    const parts = (message as { parts?: { synthetic?: boolean; ignored?: boolean }[] }).parts ?? [];
+    return parts.some((part) => part.synthetic !== true && part.ignored !== true);
+  });
+
+  const last = (spoken.at(-1) ?? assistant.at(-1)) as
     | { parts?: { type: string; text?: string; tool?: string; state?: { input?: unknown } }[] }
     | undefined;
   const parts = last?.parts ?? [];
@@ -329,6 +339,10 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     query: { directory },
   });
   let last = messages.data?.at(-1);
+  // The whole list, not only the last message: a climb puts a synthetic
+  // message at the end of the session, and the reply is the message before
+  // it.
+  let replyFrom: readonly unknown[] = messages.data ?? [];
 
   // A rate limited turn is the provider's answer, not the agent's. The free
   // model tiers answer with 429 when a burst trips their limit, so the turn
@@ -350,17 +364,15 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
       // The turn came back. The reply is this one, not the refusal that
       // came before it.
       last = recovered;
+      replyFrom = again.data ?? [];
       break;
     }
   }
 
-  const { text, toolCalls } = replyPartsOf(
-    last === undefined ? [] : [{ info: { role: 'assistant' }, parts: last.parts ?? [] }],
-  );
+  const { text, toolCalls } = replyPartsOf(replyFrom);
 
   return { text, toolCalls, files: [], sessionID };
 }
-
 /**
  * Wait until the session has nothing left to do.
  *

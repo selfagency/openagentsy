@@ -36,4 +36,25 @@ describe('replyPartsOf', () => {
   it('returns nothing for an empty session', () => {
     expect(replyPartsOf([])).toEqual({ text: '', toolCalls: [] });
   });
+
+  it('skips the synthetic message a climb leaves behind', () => {
+    // The model switch is a message of its own, and it carries no reply.
+    // Taking the last message lost the reply, and the case looked like the
+    // agent had said nothing.
+    const { text } = replyPartsOf([
+      { info: { role: 'assistant' }, parts: [{ type: 'text', text: 'the answer' }] },
+      {
+        info: { role: 'assistant' },
+        parts: [
+          {
+            type: 'text',
+            text: 'effort ladder: model high',
+            synthetic: true,
+            ignored: true,
+          },
+        ],
+      },
+    ]);
+    expect(text).toBe('the answer');
+  });
 });

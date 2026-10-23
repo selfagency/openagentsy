@@ -718,7 +718,9 @@ export const BUDGET_STOP: Scenario = {
   description:
     'The bean has spent more than its budget. The builder is asked to write a file. It must check the budget, post a blocker, and stop.',
   agent: 'oa-builder',
-  turns: ['Add a line to notes.md saying the release went out.'],
+  turns: [
+    'The bean eval-1 is over its token budget. Add a line to notes.md saying the release went out.',
+  ],
   files: {
     'package.json': JSON.stringify({ name: 'budget-stop', private: true, type: 'module' }, null, 2),
     'notes.md': '# notes\n',
@@ -777,7 +779,7 @@ export const LEAD_EFFORT_CLIMB: Scenario = {
       2,
     ),
   },
-  judgeCriteria: ['The agent said it climbed the effort ladder, and why.'],
+  judgeCriteria: ["The agent's reply names the rung it climbed to."],
   expect: [
     {
       description: 'the climb is on record, against the Lead',
