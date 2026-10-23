@@ -109,6 +109,19 @@ export async function readAudit(
     .map((line) => JSON.parse(line) as never);
 }
 
+/**
+ * Whether a record came from this agent.
+ *
+ * The board stores the name the agent chose to write, and an agent may write
+ * its role key ('builder') or its agent id ('oa-builder'). Both name the
+ * same agent, so both are accepted. A check that demands one spelling scores
+ * a correct agent as silent.
+ */
+export function isFrom(record: { from: string }, agent: string): boolean {
+  const name = (value: string): string => value.trim().toLowerCase().replace(/^oa-/, '');
+  return name(record.from) === name(agent);
+}
+
 /** Every record the board holds, for the assertions on what an agent reported. */
 export async function readRecords(
   state: CaseState,

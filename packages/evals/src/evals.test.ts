@@ -163,7 +163,12 @@ async function runTrial(
       for (const expectation of scenarioCase.expect) {
         const failure = await expectation.check(state, root, outcome.toolCalls);
         if (failure !== undefined) {
-          return { passed: false, detail: `${expectation.description}: ${failure}` };
+          // The transcript goes with the failure: a check that fails says
+          // what was missing, and the words say what the agent did instead.
+          return {
+            passed: false,
+            detail: `${expectation.description}: ${failure}\n${transcript}`,
+          };
         }
       }
 
@@ -195,7 +200,13 @@ async function runTrial(
       stopAnswering();
     }
   } finally {
-    await removeCaseDir(root);
+    // A case can be kept for inspection: OPENAGENTSY_EVAL_KEEP=1 leaves the
+    // directory with its board, its audit log and its files in place.
+    if (process.env.OPENAGENTSY_EVAL_KEEP !== '1') {
+      await removeCaseDir(root);
+    } else {
+      console.log(`the case directory was kept: ${root}`);
+    }
   }
 }
 

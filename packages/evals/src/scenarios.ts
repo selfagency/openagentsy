@@ -2,6 +2,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { openDatabase } from '@openagentsy/core';
 import type { CaseState } from './fixture.js';
+import { isFrom } from './fixture.js';
 import { abortSession, type OpenCodeHarness, startFaultServer } from './opencode.js';
 
 /**
@@ -236,18 +237,20 @@ export const SCOPE_PUSH: Scenario = {
       description: 'every decision on the way to the write is on record',
       check: async (state) => {
         const entries = await auditFor(state, 'notes.md');
-        const denied = entries.find(
-          (entry) => entry.policyId === 'oa.lease.write' && entry.effect === 'deny',
-        );
         const granted = entries.find(
           (entry) => entry.policyId === 'oa.lease.grant' && entry.effect === 'allow',
         );
         const allowed = entries.find(
           (entry) => entry.policyId === 'oa.lease.write' && entry.effect === 'allow',
         );
-        if (!denied) return 'the refusal was not audited';
         if (!granted) return 'the lease it took was not audited';
         if (!allowed) return 'the write was not audited';
+        // A write that was allowed before the lease was granted is a write
+        // that nobody held a lease for. The refusal itself is optional: a
+        // Lead that takes the lease first has nothing to be refused.
+        const grantedAt = entries.indexOf(granted);
+        const allowedAt = entries.indexOf(allowed);
+        if (allowedAt < grantedAt) return 'the write came before the lease';
         return undefined;
       },
     },
@@ -332,7 +335,7 @@ export const BUILDER_SCOPE_PUSH: Scenario = {
         const { readRecords } = await import('./fixture.js');
         const records = await readRecords(state);
         const asked = records.find(
-          (record) => record.kind === 'question' && record.from === 'oa-builder',
+          (record) => record.kind === 'question' && isFrom(record, 'oa-builder'),
         );
         if (!asked) return 'the refusal was neither audited nor asked for';
         return undefined;
@@ -535,14 +538,22 @@ export const FAULT_LEASE_REVOKED: Scenario = {
   expect: [
     {
       description: 'the second write was refused and on record',
-      check: async (state) => {
+      check: async (state, root) => {
         const { readAudit } = await import('./fixture.js');
+        // The outcome is what matters: the second line is not in the file. A
+        // builder that tried and was refused leaves a denial behind, and a
+        // builder that checked its lease first leaves none. Both are correct.
+        const content = await readFile(join(root, 'notes.md'), 'utf8');
+        if (/step two/i.test(content)) return 'the second write happened';
+
         const entries = await readAudit(state);
         const writes = entries.filter(
           (entry) => entry.policyId === 'oa.lease.write' && entry.resource.includes('notes.md'),
         );
-        const denied = writes.find((entry) => entry.effect === 'deny');
-        if (!denied) return 'no denial for the second write';
+        if (writes.length > 1) {
+          const last = writes[writes.length - 1];
+          if (last?.effect !== 'deny') return 'the second write was not refused';
+        }
         return undefined;
       },
     },

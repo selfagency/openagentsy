@@ -65,7 +65,12 @@
       }
     },
     {
-      "includes": ["scripts/**", "packages/*/scripts/**", "packages/evals/src/baseline-run.ts"],
+      "includes": [
+        "scripts/**",
+        "packages/*/scripts/**",
+        "packages/evals/src/baseline-run.ts",
+        "packages/evals/src/evals.test.ts"
+      ],
       "linter": {
         "rules": {
           "suspicious": {
