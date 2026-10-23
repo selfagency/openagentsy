@@ -332,12 +332,27 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       switched.delete(sessionID);
       if (!agent) continue;
       const role = await roleKeyForAgent(root, agent);
-      const rungs = await readRungs(root);
-      if (rungs[role]) {
-        delete rungs[role];
-        await writeRungs(root, rungs);
+      // A failure here must not kill the subscription: the rungs would stop
+      // being given back and the failure would be a silence, which is the
+      // one thing the fault cases exist to catch.
+      try {
+        const rungs = await readRungs(root);
+        if (rungs[role]) {
+          delete rungs[role];
+          await writeRungs(root, rungs);
+        }
+        await harvestV2(ctx, root, sessionID, role, agent);
+      } catch (error) {
+        await appendAudit(root, {
+          policyId: POLICIES.eventsFailed.id,
+          policyVersion: POLICIES.eventsFailed.version,
+          actor: agent,
+          action: 'idle',
+          resource: sessionID,
+          effect: 'deny',
+          detail: error instanceof Error ? error.message : String(error),
+        });
       }
-      await harvestV2(ctx, root, sessionID, role, agent);
     }
   })();
 

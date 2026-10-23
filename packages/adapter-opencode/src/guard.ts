@@ -64,6 +64,7 @@ export const POLICIES = {
   effortRefused: { id: 'oa.effort.refused', version: 'v1' },
   harvestFailed: { id: 'oa.harvest.failed', version: 'v1' },
   stateUnreadable: { id: 'oa.state.unreadable', version: 'v1' },
+  eventsFailed: { id: 'oa.events.failed', version: 'v1' },
 } as const;
 
 export async function appendAudit(root: string, entry: AuditInput): Promise<void> {
@@ -89,7 +90,7 @@ export async function readRungs(root: string): Promise<RungState> {
     // A file that cannot be read is not a failure: a project that never
     // climbed has no file. A file that cannot be parsed is a failure, and
     // saying so saves a session of guessing.
-    await reportUnreadable(rungsPath(root), error);
+    await reportUnreadable(root, rungsPath(root), error);
     return {};
   }
 }
@@ -107,12 +108,16 @@ const reported = new Set<string>();
  *
  * The audit log is the project's channel for anything that has to be
  * noticed, and a state file the guard cannot read is exactly that.
+ *
+ * The root comes from the caller. It used to be cut out of the path by
+ * string surgery, and the lock file does not live under `.openagentsy/`, so
+ * the cut produced a root of the file name minus its last character, and
+ * the audit line landed in a directory nobody reads.
  */
-async function reportUnreadable(path: string, error: unknown): Promise<void> {
+async function reportUnreadable(root: string, path: string, error: unknown): Promise<void> {
   if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
   if (reported.has(path)) return;
   reported.add(path);
-  const root = path.slice(0, path.indexOf('/.openagentsy/'));
   await appendAudit(root, {
     policyId: POLICIES.stateUnreadable.id,
     policyVersion: POLICIES.stateUnreadable.version,
@@ -330,7 +335,7 @@ async function loadLock(root: string): Promise<LockFile | undefined> {
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     return parsed as LockFile;
   } catch (error) {
-    await reportUnreadable(path, error);
+    await reportUnreadable(root, path, error);
     return undefined;
   }
 }

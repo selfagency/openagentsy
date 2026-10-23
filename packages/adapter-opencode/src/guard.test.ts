@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDatabase, grantLeases, migrate, openDatabase } from '@openagentsy/core';
@@ -117,6 +117,27 @@ describe('roleNameOf', () => {
 
   it('leaves a name that is not prefixed alone', () => {
     expect(roleNameOf('build')).toBe('build');
+  });
+});
+
+describe('an unreadable state file', () => {
+  it('audits a corrupt lock file to the root, with no junk directory', async () => {
+    // The lock file does not live under .openagentsy/, so the root used to
+    // be cut out of the path by string surgery and the audit line landed in
+    // a directory nobody reads.
+    const broken = await mkdtemp(join(tmpdir(), 'openagentsy-broken-'));
+    await writeFile(join(broken, 'roles.yaml'), ROLES, 'utf8');
+    await writeFile(join(broken, 'openagentsy.models.lock.json'), '{ not json', 'utf8');
+    await mkdir(join(broken, '.openagentsy'), { recursive: true });
+
+    await planClimb(broken, 'builder', 'the test failed twice');
+
+    const audit = await readFile(join(broken, '.openagentsy', 'audit.jsonl'), 'utf8');
+    const entry = JSON.parse(audit.trim().split('\n')[0] ?? '{}') as { policyId?: string };
+    expect(entry.policyId).toBe('oa.state.unreadable');
+    // Nothing outside .openagentsy/ was created.
+    const entries = await readdir(broken);
+    expect(entries.filter((name) => name.endsWith('.jso'))).toEqual([]);
   });
 });
 

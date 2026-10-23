@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,8 +6,29 @@ import { setupV2, type V2Context, type V2ContextEvent } from './v2.js';
 
 let root: string;
 
+const ROLES = `
+version: 1
+protectedPaths: []
+defaults:
+  permissions: {}
+roles:
+  builder:
+    description: Implements a bean
+    mode: subagent
+    writes: true
+    scope: leased files
+    guidance: test it
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+`;
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'openagentsy-v2-'));
+  await writeFile(join(root, 'roles.yaml'), ROLES, 'utf8');
   await mkdir(join(root, '.openagentsy'), { recursive: true });
 });
 
@@ -16,11 +37,13 @@ afterEach(async () => {
 });
 
 /** A context that records what the plugin asked of it. */
-function fakeContext(events: { type: string; properties?: { sessionID?: string } }[]) {
+function fakeContext(
+  events: { type: string; properties?: { sessionID?: string } }[],
+  directory = root,
+) {
   const created: { title?: string; parentID?: string }[] = [];
   const prompts: { sessionID: string; text: string }[] = [];
   const contextHooks: ((event: V2ContextEvent) => Promise<void> | void)[] = [];
-  const rungs = new Map<string, string>();
   // The subscription ends when the events run out, and the idle handler has
   // finished by then: the loop awaits the body before it asks for the next
   // event. A timer would be a guess.
@@ -30,7 +53,7 @@ function fakeContext(events: { type: string; properties?: { sessionID?: string }
   });
 
   const ctx: V2Context = {
-    location: { directory: root },
+    location: { directory },
     session: {
       hook: async (_name, callback) => {
         contextHooks.push(callback);
@@ -69,7 +92,7 @@ function fakeContext(events: { type: string; properties?: { sessionID?: string }
     },
   };
 
-  return { ctx, created, prompts, contextHooks, rungs, done };
+  return { ctx, created, prompts, contextHooks, done };
 }
 
 describe('the OpenCode 2 path', () => {
@@ -104,5 +127,32 @@ describe('the OpenCode 2 path', () => {
 
     expect(created).toHaveLength(0);
     expect(prompts).toHaveLength(0);
+  });
+
+  it('puts a failure on the record instead of killing the subscription', async () => {
+    // The rung file cannot be written, so the idle handler throws. The
+    // subscription has to survive it: a dead loop is a silent stall, which
+    // is the one failure the fault cases exist to catch.
+    // The builder climbed a rung, so the idle handler has a rung to give
+    // back, and the file cannot be written.
+    const rungs = join(root, '.openagentsy', 'rungs.json');
+    await writeFile(
+      rungs,
+      JSON.stringify({ builder: { rungIndex: 1, reason: 'x', updatedAt: 'now' } }),
+      'utf8',
+    );
+    await chmod(rungs, 0o444);
+
+    const { ctx, contextHooks, done } = fakeContext([
+      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+    await done;
+
+    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
+    expect(audit).toContain('oa.events.failed');
   });
 });
