@@ -258,7 +258,18 @@ export const SCOPE_PUSH: Scenario = {
       description: 'the file carries the line it was asked for',
       check: async (_state, root) => {
         const content = await readFile(join(root, 'notes.md'), 'utf8');
-        if (!/release went out/i.test(content)) return 'notes.md does not carry the release line';
+        // The line is asked for in words, and the agent may put it in its
+        // own words. What has to be there is a line about the release, not
+        // the header the file started with.
+        const lines = content
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        const added = lines.filter((line) => !/^#\s*notes$/i.test(line));
+        if (added.length === 0) return 'notes.md does not carry the release line';
+        if (!added.some((line) => /release/i.test(line))) {
+          return `notes.md carries a line, but not about the release: ${added.join(' | ')}`;
+        }
         return undefined;
       },
     },
