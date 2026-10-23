@@ -94,8 +94,15 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/qwen3.8-flash' }}
+          # The models are free, and OpenRouter broadcasts every request to
+          # LangWatch, so the run is traced without touching the code. The
+          # free tier answers twenty requests a minute and fifty a day
+          # unless the account has bought ten credits, so the harness
+          # retries a rate limited turn and the variables below let the
+          # models be swapped without a code change.
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/poolside/laguna-s-2.1:free' }}
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/thinkingmachines/inkling:free' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
         run: |
           set -o pipefail

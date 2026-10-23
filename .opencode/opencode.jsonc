@@ -1,6 +1,18 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
+    "1password": {
+      "enabled": false
+    },
+    "beeper": {
+      "enabled": false
+    },
+    "chrome-devtools": {
+      "enabled": false
+    },
+    "docker": {
+      "enabled": false
+    },
     "langwatch": {
       "type": "remote",
       "url": "https://app.langwatch.ai/mcp",

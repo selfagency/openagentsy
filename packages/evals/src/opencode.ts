@@ -194,7 +194,26 @@ export type PromptOptions = {
   model?: string;
   text: string;
   timeoutMs?: number;
+  /** How many times a rate limited turn is asked again. */
+  rateLimitRetries?: number;
 };
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The rate limit in a message, when the provider refused the turn.
+ *
+ * OpenCode records the provider's answer on the assistant message: an
+ * APIError with a status code. Anything else is the agent's own output.
+ */
+function rateLimitOf(message: unknown): number | undefined {
+  const info = (message as { info?: { error?: unknown } } | undefined)?.info;
+  const error = info?.error as { data?: { statusCode?: number } } | undefined;
+  const status = error?.data?.statusCode;
+  return status === 429 ? status : undefined;
+}
 
 /**
  * Run one turn against a real OpenCode session.
@@ -224,18 +243,22 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     throw new Error('the server created a session without an id');
   }
 
-  const asked = await client.session.promptAsync({
-    path: { id: sessionID },
-    body: {
-      agent,
-      ...(options.model !== undefined ? { model: parseModel(options.model) } : {}),
-      parts: [{ type: 'text', text: options.text }],
-    },
-    query: { directory },
-  });
-  if (asked.error) {
-    throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
-  }
+  const ask = async () => {
+    const asked = await client.session.promptAsync({
+      path: { id: sessionID },
+      body: {
+        agent,
+        ...(options.model !== undefined ? { model: parseModel(options.model) } : {}),
+        parts: [{ type: 'text', text: options.text }],
+      },
+      query: { directory },
+    });
+    if (asked.error) {
+      throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
+    }
+  };
+
+  await ask();
 
   const timeoutMs = options.timeoutMs ?? 600_000;
   await waitForIdle(client, sessionID, directory, timeoutMs);
@@ -244,7 +267,27 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     path: { id: sessionID },
     query: { directory },
   });
-  const parts = messages.data?.at(-1)?.parts ?? [];
+  const last = messages.data?.at(-1);
+
+  // A rate limited turn is the provider's answer, not the agent's. The free
+  // model tiers answer with 429 when a burst trips their limit, so the turn
+  // is asked again after a wait. The number of tries is bounded, so a
+  // provider that is down for good ends the turn instead of looping.
+  const attempts = options.rateLimitRetries ?? 2;
+  let rateLimited = rateLimitOf(last);
+  for (let attempt = 0; attempt < attempts && rateLimited !== undefined; attempt += 1) {
+    await sleep((attempt + 1) * 30_000);
+    await ask();
+    await waitForIdle(client, sessionID, directory, timeoutMs);
+    const again = await client.session.messages({
+      path: { id: sessionID },
+      query: { directory },
+    });
+    rateLimited = rateLimitOf(again.data?.at(-1));
+    if (rateLimited === undefined) break;
+  }
+
+  const parts = last?.parts ?? [];
 
   const text = parts
     .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')

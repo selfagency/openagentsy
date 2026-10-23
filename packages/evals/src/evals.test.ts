@@ -37,7 +37,8 @@ const _execFileAsync = promisify(execFile);
 const ENABLED = process.env.OPENAGENTSY_EVAL === '1';
 const REPO_ROOT = process.env.OPENAGENTSY_REPO_ROOT ?? join(import.meta.dirname, '..', '..', '..');
 const MODEL = process.env.OPENAGENTSY_EVAL_MODEL;
-const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'opencode-go/qwen3.8-flash';
+const JUDGE_MODEL =
+  process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'openrouter/thinkingmachines/inkling:free';
 
 const suite = ENABLED ? describe : describe.skip;
 
