@@ -1,7 +1,5 @@
 import { type ClientLike, sessionAdapter } from './client.js';
 import {
-  appendAudit,
-  POLICIES,
   planClimb,
   readRungs,
   recordClimb,
@@ -10,7 +8,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { harvest } from './harvest.js';
+import { harvest, recordHarvestFailure } from './harvest.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
@@ -140,15 +138,7 @@ async function onSessionIdle(
       agent,
     });
   } catch (error) {
-    await appendAudit(root, {
-      policyId: POLICIES.harvestFailed.id,
-      policyVersion: POLICIES.harvestFailed.version,
-      actor: agent,
-      action: 'harvest',
-      resource: sessionID,
-      effect: 'deny',
-      detail: error instanceof Error ? error.message : String(error),
-    });
+    await recordHarvestFailure(root, { agent, sessionID, error });
   }
 }
 

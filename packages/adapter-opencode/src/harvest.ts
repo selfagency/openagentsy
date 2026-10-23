@@ -95,6 +95,29 @@ export async function harvest(
   return { harvested: true, reason: `the archivist was given the packet of ${sessionID}` };
 }
 
+/**
+ * A harvest that failed, on the record.
+ *
+ * The failure is put on the record rather than thrown, because a harvest
+ * that fails must not break the session that is closing. Both runtimes do
+ * this the same way.
+ */
+export async function recordHarvestFailure(
+  root: string,
+  input: { agent: string; sessionID: string; error: unknown },
+): Promise<void> {
+  const { appendAudit, POLICIES } = await import('./guard.js');
+  await appendAudit(root, {
+    policyId: POLICIES.harvestFailed.id,
+    policyVersion: POLICIES.harvestFailed.version,
+    actor: input.agent,
+    action: 'harvest',
+    resource: input.sessionID,
+    effect: 'deny',
+    detail: input.error instanceof Error ? input.error.message : String(input.error),
+  });
+}
+
 /** The words of the session, trimmed to the end, where the outcome is. */
 function transcriptOf(messages: { parts?: { type: string; text?: string }[] }[]): string {
   const texts: string[] = [];

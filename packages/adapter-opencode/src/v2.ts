@@ -9,7 +9,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { harvest } from './harvest.js';
+import { harvest, recordHarvestFailure } from './harvest.js';
 import { checkWrite } from './write-guard.js';
 
 /**
@@ -378,14 +378,6 @@ async function harvestV2(
       agent,
     });
   } catch (error) {
-    await appendAudit(root, {
-      policyId: POLICIES.harvestFailed.id,
-      policyVersion: POLICIES.harvestFailed.version,
-      actor: agent,
-      action: 'harvest',
-      resource: sessionID,
-      effect: 'deny',
-      detail: error instanceof Error ? error.message : String(error),
-    });
+    await recordHarvestFailure(root, { agent, sessionID, error });
   }
 }
