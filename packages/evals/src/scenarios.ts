@@ -779,7 +779,7 @@ export const LEAD_EFFORT_CLIMB: Scenario = {
       2,
     ),
   },
-  judgeCriteria: ["The agent's reply names the rung it climbed to."],
+  judgeCriteria: ["The agent's reply says it climbed the effort ladder."],
   expect: [
     {
       description: 'the climb is on record, against the Lead',

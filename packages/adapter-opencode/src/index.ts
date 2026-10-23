@@ -104,7 +104,7 @@ const effortTool = (root: string, client: ClientLike) =>
         },
       });
 
-      return `Climbed to rung ${plan.rungIndex}: ${target.model} ${target.variant ?? 'default'}. Say why in your board record.`;
+      return `Climbed to rung ${plan.rungIndex}: ${target.model} ${target.variant ?? 'default'}. Say which rung you are on and why you climbed, in your reply and in your board record.`;
     },
   });
 
