@@ -62,17 +62,24 @@ function surfaceRank(candidate: Candidate, surface: Surface | undefined): number
   return candidate.ranks[surface]?.rank;
 }
 
+/** The reason one hard requirement cuts a candidate, or nothing when it passes. */
+function hardRequirementRejection(candidate: Candidate, requirement: string): string | undefined {
+  if (requirement === 'tool_calls' && !candidate.model.tools) return 'no tool calling';
+  if (requirement === 'reasoning_variants' && !candidate.model.reasoning) {
+    return 'no reasoning variants';
+  }
+  if (requirement === 'large_context') {
+    const context = candidate.model.contextWindow;
+    if (context === undefined) return 'context window unknown';
+    if (context < LARGE_CONTEXT_TOKENS) return `context window ${context} is too small`;
+  }
+  return undefined;
+}
+
 function passesRequirements(candidate: Candidate, profile: ModelProfile): string | undefined {
   for (const requirement of profile.hardRequirements) {
-    if (requirement === 'tool_calls' && !candidate.model.tools) return 'no tool calling';
-    if (requirement === 'reasoning_variants' && !candidate.model.reasoning) {
-      return 'no reasoning variants';
-    }
-    if (requirement === 'large_context') {
-      const context = candidate.model.contextWindow;
-      if (context === undefined) return 'context window unknown';
-      if (context < LARGE_CONTEXT_TOKENS) return `context window ${context} is too small`;
-    }
+    const reason = hardRequirementRejection(candidate, requirement);
+    if (reason) return reason;
   }
   if (profile.minimumContext !== undefined) {
     const context = candidate.model.contextWindow;
@@ -100,6 +107,143 @@ function passesPrivacy(candidate: Candidate, options: SelectOptions): string | u
   return undefined;
 }
 
+/** The candidates one profile eliminates, with the reason each was cut. */
+function filterCandidates(
+  candidates: Candidate[],
+  profile: ModelProfile,
+  surface: Surface | undefined,
+  options: SelectOptions,
+): { eligible: Candidate[]; rejected: Rejection[] } {
+  const excluded = new Set((options.excludeCreators ?? []).map((creator) => creator.toLowerCase()));
+  const rejected: Rejection[] = [];
+  const eligible: Candidate[] = [];
+
+  for (const candidate of candidates) {
+    const id = candidate.model.openCodeId;
+    const reason =
+      (excluded.has(candidate.model.creator?.toLowerCase() ?? '')
+        ? 'same creator as the builder'
+        : undefined) ??
+      passesRequirements(candidate, profile) ??
+      passesPrivacy(candidate, options) ??
+      rankRejection(candidate, profile, surface);
+
+    if (reason) {
+      rejected.push({ openCodeId: id, reason });
+    } else {
+      eligible.push(candidate);
+    }
+  }
+
+  return { eligible, rejected };
+}
+
+/** The rank-based rejection, or nothing when the candidate clears the threshold. */
+function rankRejection(
+  candidate: Candidate,
+  profile: ModelProfile,
+  surface: Surface | undefined,
+): string | undefined {
+  if (profile.minimumRank === undefined) return undefined;
+  const rank = surfaceRank(candidate, surface);
+  if (rank === undefined) return 'unranked';
+  if (rank > profile.minimumRank) return `rank ${rank} is below the threshold`;
+  return undefined;
+}
+
+/** The candidate the cost stance picks, with the reason it was picked. */
+function applyCostStance(
+  eligible: Candidate[],
+  best: Candidate,
+  profile: ModelProfile,
+  surface: Surface | undefined,
+  balanceWindow: number,
+): { chosen: Candidate; reasonParts: string[] } {
+  const reasonParts: string[] = [];
+
+  if (profile.costStance === 'cheapest') {
+    const cheapest = cheapestOf(eligible);
+    if (!cheapest) throw new Error('no model meets the requirements');
+    reasonParts.push(
+      profile.minimumRank === undefined
+        ? 'cheapest model that meets the requirements'
+        : 'cheapest model that clears the rank threshold',
+    );
+    return { chosen: cheapest, reasonParts };
+  }
+
+  if (profile.costStance === 'balanced') {
+    const bestRank = surfaceRank(best, surface) ?? Number.MAX_SAFE_INTEGER;
+    const withinWindow = eligible.filter((candidate) => {
+      const rank = surfaceRank(candidate, surface) ?? Number.MAX_SAFE_INTEGER;
+      return rank <= bestRank + balanceWindow;
+    });
+    const cheapest = cheapestOf(withinWindow);
+    if (!cheapest) throw new Error('no model meets the requirements');
+    reasonParts.push(`best price within ${balanceWindow} ranks of the leader`);
+    return { chosen: cheapest, reasonParts };
+  }
+
+  reasonParts.push(profile.costStance === 'ignore_cost' ? 'highest ranked' : 'quality first');
+  return { chosen: best, reasonParts };
+}
+
+/** The supported model that beats an estimated one inside the margin, or nothing. */
+function supportedAlternative(
+  eligible: Candidate[],
+  chosen: Candidate,
+  surface: Surface | undefined,
+  evidenceMargin: number,
+): Candidate | undefined {
+  const chosenRank = surfaceRank(chosen, surface);
+  const chosenEvidence = surface ? chosen.ranks[surface]?.evidence : undefined;
+  if (chosenEvidence !== 'estimated' || chosenRank === undefined) return undefined;
+
+  return eligible
+    .filter((candidate) => {
+      const rank = surfaceRank(candidate, surface);
+      const evidence = surface ? candidate.ranks[surface]?.evidence : undefined;
+      return (
+        evidence === 'supported' &&
+        rank !== undefined &&
+        rank >= chosenRank &&
+        rank <= chosenRank + evidenceMargin
+      );
+    })
+    .sort((a, b) => (surfaceRank(a, surface) ?? 0) - (surfaceRank(b, surface) ?? 0))[0];
+}
+
+/** The order the role's signal decides: the leader first, then by blended cost. */
+function byRank(
+  profile: ModelProfile,
+  surface: Surface | undefined,
+): (a: Candidate, b: Candidate) => number {
+  return (a, b) => {
+    if (profile.primarySignal === 'long_context') {
+      const diff = (b.model.contextWindow ?? 0) - (a.model.contextWindow ?? 0);
+      if (diff !== 0) return diff;
+    } else {
+      const rankA = surfaceRank(a, surface) ?? Number.MAX_SAFE_INTEGER;
+      const rankB = surfaceRank(b, surface) ?? Number.MAX_SAFE_INTEGER;
+      if (rankA !== rankB) return rankA - rankB;
+    }
+    return blendedCost(a.model) - blendedCost(b.model);
+  };
+}
+
+/** The reason the choice carries, led by the rank it has. */
+function reasonOf(chosen: Candidate, surface: Surface | undefined, stanceParts: string[]): string {
+  const rank = surface ? chosen.ranks[surface]?.rank : undefined;
+  const label = surface ? chosen.ranks[surface]?.evidence : undefined;
+  const parts = [...stanceParts];
+  if (rank !== undefined) {
+    parts.unshift(`${surface} rank ${rank}${label ? `, ${label} evidence` : ''}`);
+  } else {
+    parts.unshift('no ranking, chosen on cost and requirements');
+  }
+  return parts.join(', ');
+}
+
 /**
  * Pick the model for one role.
  *
@@ -113,46 +257,8 @@ export function selectModel(options: SelectOptions): Selection {
   const surface = SURFACE_FOR_SIGNAL[profile.primarySignal];
   const evidenceMargin = options.evidenceMargin ?? 3;
   const balanceWindow = options.balanceWindow ?? 5;
-  const excluded = new Set((options.excludeCreators ?? []).map((creator) => creator.toLowerCase()));
 
-  const rejected: Rejection[] = [];
-  const eligible: Candidate[] = [];
-
-  for (const candidate of candidates) {
-    const id = candidate.model.openCodeId;
-
-    if (excluded.has(candidate.model.creator?.toLowerCase() ?? '')) {
-      rejected.push({ openCodeId: id, reason: 'same creator as the builder' });
-      continue;
-    }
-
-    const requirement = passesRequirements(candidate, profile);
-    if (requirement) {
-      rejected.push({ openCodeId: id, reason: requirement });
-      continue;
-    }
-
-    const privacy = passesPrivacy(candidate, options);
-    if (privacy) {
-      rejected.push({ openCodeId: id, reason: privacy });
-      continue;
-    }
-
-    if (profile.minimumRank !== undefined) {
-      const rank = surfaceRank(candidate, surface);
-      if (rank === undefined) {
-        rejected.push({ openCodeId: id, reason: 'unranked' });
-        continue;
-      }
-      if (rank > profile.minimumRank) {
-        rejected.push({ openCodeId: id, reason: `rank ${rank} is below the threshold` });
-        continue;
-      }
-    }
-
-    eligible.push(candidate);
-  }
-
+  const { eligible, rejected } = filterCandidates(candidates, profile, surface, options);
   if (eligible.length === 0) {
     throw new Error(
       `no model satisfies the ${profile.primarySignal} profile for this role. ` +
@@ -163,70 +269,19 @@ export function selectModel(options: SelectOptions): Selection {
     );
   }
 
-  const byRank = (a: Candidate, b: Candidate): number => {
-    if (profile.primarySignal === 'long_context') {
-      const diff = (b.model.contextWindow ?? 0) - (a.model.contextWindow ?? 0);
-      if (diff !== 0) return diff;
-    } else {
-      const rankA = surfaceRank(a, surface) ?? Number.MAX_SAFE_INTEGER;
-      const rankB = surfaceRank(b, surface) ?? Number.MAX_SAFE_INTEGER;
-      if (rankA !== rankB) return rankA - rankB;
-    }
-    return blendedCost(a.model) - blendedCost(b.model);
-  };
-
-  const sorted = [...eligible].sort(byRank);
+  const sorted = [...eligible].sort(byRank(profile, surface));
   const best = sorted[0];
   if (!best) {
     throw new Error(`no model meets the requirements for the ${profile.primarySignal} signal`);
   }
 
-  let chosen = best;
-  const reasonParts: string[] = [];
+  const stance = applyCostStance(eligible, best, profile, surface, balanceWindow);
+  let chosen = stance.chosen;
 
-  if (profile.costStance === 'cheapest') {
-    const cheapest = cheapestOf(eligible);
-    if (!cheapest) throw new Error('no model meets the requirements');
-    chosen = cheapest;
-    reasonParts.push(
-      profile.minimumRank === undefined
-        ? 'cheapest model that meets the requirements'
-        : 'cheapest model that clears the rank threshold',
-    );
-  } else if (profile.costStance === 'balanced') {
-    const bestRank = surfaceRank(best, surface) ?? Number.MAX_SAFE_INTEGER;
-    const withinWindow = eligible.filter((candidate) => {
-      const rank = surfaceRank(candidate, surface) ?? Number.MAX_SAFE_INTEGER;
-      return rank <= bestRank + balanceWindow;
-    });
-    const cheapest = cheapestOf(withinWindow);
-    if (!cheapest) throw new Error('no model meets the requirements');
-    chosen = cheapest;
-    reasonParts.push(`best price within ${balanceWindow} ranks of the leader`);
-  } else {
-    reasonParts.push(profile.costStance === 'ignore_cost' ? 'highest ranked' : 'quality first');
-  }
-
-  const chosenRank = surfaceRank(chosen, surface);
-  const chosenEvidence = surface ? chosen.ranks[surface]?.evidence : undefined;
-
-  if (chosenEvidence === 'estimated' && chosenRank !== undefined) {
-    const supported = eligible
-      .filter((candidate) => {
-        const rank = surfaceRank(candidate, surface);
-        const evidence = surface ? candidate.ranks[surface]?.evidence : undefined;
-        return (
-          evidence === 'supported' &&
-          rank !== undefined &&
-          rank >= chosenRank &&
-          rank <= chosenRank + evidenceMargin
-        );
-      })
-      .sort((a, b) => (surfaceRank(a, surface) ?? 0) - (surfaceRank(b, surface) ?? 0))[0];
-    if (supported) {
-      chosen = supported;
-      reasonParts.push('estimated evidence did not beat the supported model by enough');
-    }
+  const supported = supportedAlternative(eligible, chosen, surface, evidenceMargin);
+  if (supported) {
+    chosen = supported;
+    stance.reasonParts.push('estimated evidence did not beat the supported model by enough');
   }
 
   const runnerUp = sorted.find(
@@ -237,16 +292,10 @@ export function selectModel(options: SelectOptions): Selection {
   const score = surface ? chosen.ranks[surface]?.score : undefined;
   const label = surface ? chosen.ranks[surface]?.evidence : undefined;
 
-  if (rank !== undefined) {
-    reasonParts.unshift(`${surface} rank ${rank}${label ? `, ${label} evidence` : ''}`);
-  } else {
-    reasonParts.unshift('no ranking, chosen on cost and requirements');
-  }
-
   return {
     model: chosen.model,
     ...(runnerUp ? { runnerUp: runnerUp.model } : {}),
-    reason: reasonParts.join(', '),
+    reason: reasonOf(chosen, surface, stance.reasonParts),
     evidence: {
       source: 'benchlm',
       ...(label ? { label } : {}),

@@ -40,7 +40,7 @@ jobs:
       - name: Fallow gate
         run: |
           if [ -n "${{ github.base_ref }}" ]; then
-            bunx fallow audit --base origin/${{ github.base_ref }} --format human --quiet
+            bunx fallow audit --health-baseline .fallow/health-baseline.json --base origin/${{ github.base_ref }} --format human --quiet
           else
-            bunx fallow audit --base "${{ github.event.before }}" --format human --quiet
+            bunx fallow audit --health-baseline .fallow/health-baseline.json --base "${{ github.event.before }}" --format human --quiet
           fi

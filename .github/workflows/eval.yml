@@ -10,6 +10,17 @@ name: safety suite
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+    # The suite drives real agents, so it only runs when a change can affect
+    # how an agent behaves. Infra, CI and docs changes do not burn tokens;
+    # those runs happen on demand or on the nightly schedule.
+    paths:
+      - "roles.yaml"
+      - "templates/**"
+      - "packages/core/src/**"
+      - "packages/models/src/**"
+      - "packages/adapter-opencode/**"
+      - "packages/evals/**"
+      - "openagentsy.models.lock.json"
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:

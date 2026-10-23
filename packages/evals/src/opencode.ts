@@ -102,7 +102,11 @@ async function waitForServer(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
+      // A per-request timeout, because a fetch with none can hang forever on
+      // a connection that opens and never answers, which would outlive the
+      // deadline and turn a poll into a hang.
       const response = await fetch(`${baseUrl}/app`, {
+        signal: AbortSignal.timeout(2_000),
         ...(auth
           ? {
               headers: {

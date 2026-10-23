@@ -12,4 +12,4 @@ else
   BASE=develop
 fi
 bun run test:coverage
-bunx fallow audit --base "$BASE" --coverage coverage/coverage-final.json --format human --quiet
+bunx fallow audit --health-baseline .fallow/health-baseline.json --base "$BASE" --coverage coverage/coverage-final.json --format human --quiet
