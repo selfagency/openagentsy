@@ -28,6 +28,13 @@ export type GrantLeasesResult = {
   granted: Lease[];
   conflicts: { glob: string; agent: string; bean: string }[];
   /**
+   * The leases the agent already held under this bean.
+   *
+   * A grant of a glob the agent already holds is not a new lease, and
+   * saying so keeps the caller from reading the empty result as a refusal.
+   */
+  alreadyHeld: { glob: string; agent: string; bean: string }[];
+  /**
    * The writers already on the board, when the grant would put one more over
    * the cap. The grant is refused: the writers are capped, not suggested.
    */
@@ -73,6 +80,60 @@ function holdsAnyLease(db: BoardDatabase, agent: string): boolean {
  * algebra, so those surface as a conflict in `checkLease` instead. The check
  * is the enforcement point, the grant records intent.
  */
+/**
+ * The outcome of one glob in a grant.
+ */
+type GlobOutcome =
+  | { kind: 'granted'; lease: Lease }
+  | { kind: 'free' }
+  | { kind: 'held'; glob: string; agent: string; bean: string }
+  | { kind: 'conflict'; glob: string; agent: string; bean: string }
+  | { kind: 'overCap'; writers: number; cap: number };
+
+/**
+ * What one glob means for this grant.
+ *
+ * The same agent may hold the glob already, and then the grant is either
+ * the lease it holds or a change of plan: the bean is what the lease is
+ * attributed to, and a silent no-op would leave the board pointing at the
+ * old one.
+ */
+function decideGlob(
+  db: BoardDatabase,
+  glob: string,
+  input: GrantLeasesInput,
+  cap: number | undefined,
+): GlobOutcome {
+  const existing = db.select().from(leases).where(eq(leases.glob, glob)).all();
+  const taken = existing.find((row) => !sameAgent(row.agent, input.agent));
+  if (taken) {
+    return { kind: 'conflict', glob, agent: taken.agent, bean: taken.bean };
+  }
+
+  const mine = existing.find((row) => sameAgent(row.agent, input.agent));
+  if (mine) {
+    if (mine.bean === input.bean) {
+      return { kind: 'held', glob, agent: mine.agent, bean: mine.bean };
+    }
+    db.update(leases).set({ bean: input.bean }).where(eq(leases.id, mine.id)).run();
+    const moved = db.select().from(leases).where(eq(leases.id, mine.id)).get();
+    if (moved) return { kind: 'granted', lease: moved };
+  }
+
+  // The cap counts writers, and only a new writer counts. The Lead grants
+  // leases to the writers of the plan, and three is the number the plan
+  // allows at once.
+  if (cap !== undefined && existing.length === 0) {
+    const writers = writerCount(db);
+    const alreadyAWriter = writers > 0 && holdsAnyLease(db, input.agent);
+    if (!alreadyAWriter && writers >= cap) {
+      return { kind: 'overCap', writers, cap };
+    }
+  }
+
+  return { kind: 'free' };
+}
+
 export function grantLeases(
   db: BoardDatabase,
   input: GrantLeasesInput,
@@ -80,6 +141,7 @@ export function grantLeases(
 ): GrantLeasesResult {
   const granted: Lease[] = [];
   const conflicts: { glob: string; agent: string; bean: string }[] = [];
+  const alreadyHeld: { glob: string; agent: string; bean: string }[] = [];
   const grantedAt = new Date().toISOString();
   const cap = options.writerCap;
 
@@ -87,22 +149,26 @@ export function grantLeases(
     const glob = normalizePath(rawGlob);
     if (glob.length === 0) continue;
 
-    const existing = db.select().from(leases).where(eq(leases.glob, glob)).all();
-    const taken = existing.find((row) => !sameAgent(row.agent, input.agent));
-    if (taken) {
-      conflicts.push({ glob, agent: taken.agent, bean: taken.bean });
+    const outcome = decideGlob(db, glob, input, cap);
+    if (outcome.kind === 'conflict') {
+      conflicts.push({ glob: outcome.glob, agent: outcome.agent, bean: outcome.bean });
       continue;
     }
-
-    // The cap counts writers, and only a new writer counts. The Lead grants
-    // leases to the writers of the plan, and three is the number the plan
-    // allows at once.
-    if (cap !== undefined && existing.length === 0) {
-      const writers = writerCount(db);
-      const alreadyAWriter = writers > 0 && holdsAnyLease(db, input.agent);
-      if (!alreadyAWriter && writers >= cap) {
-        return { granted, conflicts, capReached: { writers, cap } };
-      }
+    if (outcome.kind === 'held') {
+      alreadyHeld.push({ glob: outcome.glob, agent: outcome.agent, bean: outcome.bean });
+      continue;
+    }
+    if (outcome.kind === 'overCap') {
+      return {
+        granted,
+        conflicts,
+        alreadyHeld,
+        capReached: { writers: outcome.writers, cap: outcome.cap },
+      };
+    }
+    if (outcome.kind === 'granted') {
+      granted.push(outcome.lease);
+      continue;
     }
 
     const inserted = db
@@ -114,7 +180,7 @@ export function grantLeases(
     if (inserted) granted.push(inserted);
   }
 
-  return { granted, conflicts };
+  return { granted, conflicts, alreadyHeld };
 }
 
 export type ReleaseLeaseInput = {

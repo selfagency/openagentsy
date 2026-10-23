@@ -333,6 +333,20 @@ server.registerTool(
           detail: `bean ${lease.bean}`,
         });
       }
+      for (const held of result.alreadyHeld) {
+        // The agent already holds this one, so nothing was granted and
+        // nothing was refused. The result says which, so the caller does
+        // not read the empty list as a failure.
+        await appendAudit(auditPath, {
+          policyId: POLICIES.leaseGrant.id,
+          policyVersion: POLICIES.leaseGrant.version,
+          actor: input.agent,
+          action: 'lease_grant',
+          resource: held.glob,
+          effect: 'allow',
+          detail: `already held on bean ${held.bean}`,
+        });
+      }
       for (const conflict of result.conflicts) {
         await appendAudit(auditPath, {
           policyId: POLICIES.leaseDeny.id,

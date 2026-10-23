@@ -152,6 +152,37 @@ describe('the writer cap', () => {
   });
 });
 
+describe('grantLeases', () => {
+  it('says so when the agent already holds the glob', () => {
+    // A grant of a glob the agent holds is not a new lease, and an empty
+    // result reads like a refusal.
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    const second = grantLeases(db, {
+      bean: 'proj-42',
+      agent: 'builder-1',
+      globs: ['src/**'],
+    });
+    expect(second.granted).toHaveLength(0);
+    expect(second.alreadyHeld).toHaveLength(1);
+    expect(second.alreadyHeld[0]?.glob).toBe('src/**');
+  });
+
+  it('moves the lease to the new bean when the plan changes', () => {
+    // The bean is what the lease is attributed to. A silent no-op would
+    // leave the board pointing at the old plan.
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    const second = grantLeases(db, {
+      bean: 'proj-43',
+      agent: 'builder-1',
+      globs: ['src/**'],
+    });
+    expect(second.granted).toHaveLength(1);
+    expect(second.granted[0]?.bean).toBe('proj-43');
+    expect(listLeases(db)).toHaveLength(1);
+    expect(listLeases(db)[0]?.bean).toBe('proj-43');
+  });
+});
+
 describe('revokeLease', () => {
   it('takes the lease away from the agent that holds it', () => {
     grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
