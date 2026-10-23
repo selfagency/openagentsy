@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,47 @@ const SERVER = fileURLToPath(new URL('../dist/index.js', import.meta.url));
 
 let root: string;
 let client: Client;
+
+/**
+ * A stand-in for the System One service.
+ *
+ * The board tool talks to the real service in a project that has a key. In a
+ * test the answer has to come from somewhere, and the somewhere is here.
+ */
+async function startFakeJev(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    let body = '';
+    request.on('data', (chunk) => {
+      body += String(chunk);
+    });
+    request.on('end', () => {
+      const sent = JSON.parse(body) as { questions: Record<string, unknown> };
+      const name = Object.keys(sent.questions)[0] ?? 'dispatch';
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          model: 'jev-1.14.0',
+          answers: {
+            [name]: {
+              type: 'choice',
+              choice: 'solo',
+              confidence: 0.97,
+              probabilities: { solo: 0.97, 'fanout-read': 0.03 },
+            },
+          },
+          usage: { input_tokens: 120, output_tokens: 30 },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
 
 async function call(name: string, args: Record<string, unknown> = {}): Promise<any> {
   const result = await client.callTool({ name, arguments: args });
@@ -25,6 +67,9 @@ beforeAll(async () => {
     if (value !== undefined) env[key] = value;
   }
   env.OPENAGENTSY_ROOT = root;
+  // The board in a test has no key, so the classification tool says so
+  // instead of calling a service.
+  delete env.TYPESAFE_API_KEY;
 
   client = new Client({ name: 'board-test', version: '0.1.0' });
   await client.connect(new StdioClientTransport({ command: 'node', args: [SERVER], env }));
@@ -44,7 +89,8 @@ describe('the board server over stdio', () => {
     expect(names).toContain('board_lease_grant');
     expect(names).toContain('board_budget');
     expect(names).toContain('board_budget_set');
-    expect(names.length).toBe(5);
+    expect(names).toContain('board_classify');
+    expect(names.length).toBe(6);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
@@ -204,5 +250,54 @@ describe('the board server over stdio', () => {
     expect(result.isError).toBe(true);
     const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
     expect(text).toContain('blocker');
+  });
+
+  it('says it cannot classify when the board has no System One key', async () => {
+    const decision = await call('board_classify', { request: 'fix a typo in README.md' });
+    expect(decision.available).toBe(false);
+    expect(decision.reason).toContain('TYPESAFE_API_KEY');
+    expect(decision.profiles).toEqual(['solo', 'fanout-read', 'parallel-write', 'design-options']);
+  });
+});
+
+describe('the board with a System One key', () => {
+  let keyed: Client;
+  let fake: { url: string; close: () => Promise<void> };
+
+  beforeAll(async () => {
+    fake = await startFakeJev();
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) env[key] = value;
+    }
+    env.OPENAGENTSY_ROOT = root;
+    env.TYPESAFE_API_KEY = 'test-key';
+    env.OPENAGENTSY_JEV_ENDPOINT = fake.url;
+
+    keyed = new Client({ name: 'board-test-keyed', version: '0.1.0' });
+    await keyed.connect(new StdioClientTransport({ command: 'node', args: [SERVER], env }));
+  }, 30_000);
+
+  afterAll(async () => {
+    await keyed.close();
+    await fake.close();
+  });
+
+  it('classifies a request into the dispatch profiles', async () => {
+    const result = await keyed.callTool({
+      name: 'board_classify',
+      arguments: { request: 'fix a typo in README.md' },
+    });
+    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
+    const decision = JSON.parse(text) as {
+      available: boolean;
+      profile: string;
+      confidence: number;
+      probabilities: Record<string, number>;
+    };
+    expect(decision.available).toBe(true);
+    expect(decision.profile).toBe('solo');
+    expect(decision.confidence).toBe(0.97);
+    expect(decision.probabilities['fanout-read']).toBe(0.03);
   });
 });

@@ -10,6 +10,7 @@ import {
   checkBudget,
   checkLease,
   createRecord,
+  dispatchProfileCriteria,
   grantLeases,
   listBudgets,
   listLeases,
@@ -22,6 +23,7 @@ import {
   releaseLease,
   setBudget,
 } from '@openagentsy/core';
+import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
 
 const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
@@ -90,6 +92,7 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
 - board_budget: the token budgets. op=check reports whether a bean is over its budget; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.
 - board_budget_set: set a token budget for a bean. The Lead only.
+- board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
 
 /**
@@ -479,6 +482,80 @@ server.registerTool(
       }
 
       return text({ budgets: listBudgets(db) });
+    } catch (error) {
+      return failure(error);
+    }
+  },
+);
+
+// --- classification ---------------------------------------------------------
+
+/**
+ * Classify a request into the dispatch profiles.
+ *
+ * The Lead has to decide how much of the system a request deserves before it
+ * spawns anything, and that decision decides the token spend. A System One
+ * model answers it with a probability for each profile and a confidence, so
+ * the Lead can take the cheaper plan when it is not sure.
+ *
+ * The tool is advisory. Without a key, or with the service down, it says so
+ * and the Lead classifies the request itself.
+ */
+server.registerTool(
+  'board_classify',
+  {
+    description:
+      'Classify a request into the dispatch profiles, with the probability of each and the confidence. The Lead calls this before it spawns anything, and takes the cheaper plan when the confidence is low. Without a System One key it says so, and the Lead classifies the request itself.',
+    inputSchema: {
+      request: z.string().describe('The request, as the human phrased it'),
+      profiles: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe(
+          'The profiles to classify into, each with what it covers. The default is the four dispatch profiles.',
+        ),
+    },
+  },
+  async (input) => {
+    try {
+      const profiles = input.profiles ?? dispatchProfileCriteria();
+      if (!isJevAvailable()) {
+        return text({
+          available: false,
+          reason:
+            'no System One key is configured, so no decision was made. Set TYPESAFE_API_KEY in the environment, or classify the request yourself.',
+          profiles: Object.keys(profiles),
+        });
+      }
+
+      const client = createJevClient();
+      const outcome = await client.systemOne({
+        state: { request: input.request },
+        questions: {
+          dispatch: choice('How should this request be handled by the agent team?', profiles),
+        },
+      });
+
+      if (!outcome.ok) {
+        return text({ available: false, reason: outcome.reason });
+      }
+
+      const answer = outcome.response.answers.dispatch;
+      if (answer === undefined || answer.type !== 'choice') {
+        return text({
+          available: false,
+          reason: 'the System One answer was not a choice, so no decision was made.',
+        });
+      }
+
+      return text({
+        available: true,
+        model: outcome.response.model,
+        profile: answer.choice,
+        confidence: answer.confidence,
+        probabilities: answer.probabilities,
+        usage: outcome.response.usage,
+      });
     } catch (error) {
       return failure(error);
     }

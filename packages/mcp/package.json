@@ -7,11 +7,13 @@
   },
   "scripts": {
     "build": "tsc -b tsconfig.json && chmod +x dist/index.js",
-    "typecheck": "tsc -b tsconfig.json"
+    "typecheck": "tsc -b tsconfig.json",
+    "probe:classify": "bun scripts/probe-classify.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",
     "@openagentsy/core": "0.1.0",
+    "@openagentsy/jev": "*",
     "zod": "^4.6.0"
   },
   "devDependencies": {
