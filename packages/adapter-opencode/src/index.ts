@@ -176,6 +176,9 @@ async function setupServer(
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;
       const agent = sessionAgents.get(sessionID);
+      // The map is per server, and a server lives for the whole project, so
+      // an entry that is never dropped grows for as long as it runs.
+      sessionAgents.delete(sessionID);
       if (!agent) return;
       await onSessionIdle(client, root, sessionID, agent);
     },

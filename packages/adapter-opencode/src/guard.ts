@@ -63,6 +63,7 @@ export const POLICIES = {
   effortClimb: { id: 'oa.effort.climb', version: 'v1' },
   effortRefused: { id: 'oa.effort.refused', version: 'v1' },
   harvestFailed: { id: 'oa.harvest.failed', version: 'v1' },
+  stateUnreadable: { id: 'oa.state.unreadable', version: 'v1' },
 } as const;
 
 export async function appendAudit(root: string, entry: AuditInput): Promise<void> {
@@ -84,9 +85,43 @@ export async function readRungs(root: string): Promise<RungState> {
     const parsed: unknown = JSON.parse(await readFile(rungsPath(root), 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return {};
     return parsed as RungState;
-  } catch {
+  } catch (error) {
+    // A file that cannot be read is not a failure: a project that never
+    // climbed has no file. A file that cannot be parsed is a failure, and
+    // saying so saves a session of guessing.
+    await reportUnreadable(rungsPath(root), error);
     return {};
   }
+}
+
+/**
+ * The state files that could not be read, already reported.
+ *
+ * The rung file is read on every model request, so a file that cannot be
+ * parsed would otherwise put the same line in the audit log on every turn.
+ */
+const reported = new Set<string>();
+
+/**
+ * Put an unreadable state file on the record.
+ *
+ * The audit log is the project's channel for anything that has to be
+ * noticed, and a state file the guard cannot read is exactly that.
+ */
+async function reportUnreadable(path: string, error: unknown): Promise<void> {
+  if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+  if (reported.has(path)) return;
+  reported.add(path);
+  const root = path.slice(0, path.indexOf('/.openagentsy/'));
+  await appendAudit(root, {
+    policyId: POLICIES.stateUnreadable.id,
+    policyVersion: POLICIES.stateUnreadable.version,
+    actor: 'guard',
+    action: 'read',
+    resource: path,
+    effect: 'deny',
+    detail: `the state file could not be read: ${(error as Error).message}`,
+  });
 }
 
 export async function writeRungs(root: string, state: RungState): Promise<void> {
@@ -272,13 +307,13 @@ type LockFile = {
 };
 
 async function loadLock(root: string): Promise<LockFile | undefined> {
+  const path = join(root, 'openagentsy.models.lock.json');
   try {
-    const parsed: unknown = JSON.parse(
-      await readFile(join(root, 'openagentsy.models.lock.json'), 'utf8'),
-    );
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     return parsed as LockFile;
-  } catch {
+  } catch (error) {
+    await reportUnreadable(path, error);
     return undefined;
   }
 }
