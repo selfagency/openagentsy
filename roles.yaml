@@ -149,6 +149,12 @@ roles:
       openagentsy_board_lease_grant:
         - resource: "*"
           effect: allow
+      # A lease is only ever released by the agent that holds it, so a
+      # session that dies holding one holds its files for good. The Lead is
+      # the lease authority, so the Lead can take them back.
+      openagentsy_board_lease_revoke:
+        - resource: "*"
+          effect: allow
       openagentsy_board_budget_set:
         - resource: "*"
           effect: allow
@@ -189,6 +195,7 @@ roles:
       # The Lead owns the leases. The board cannot verify who is calling it,
       # so the tool is taken away here rather than trusted there.
       openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
     skills: [openagentsy-scout]
     modelProfile:
@@ -227,6 +234,7 @@ roles:
       # The Lead owns the leases. The board cannot verify who is calling it,
       # so the tool is taken away here rather than trusted there.
       openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
     skills: []
     modelProfile:
@@ -298,6 +306,7 @@ roles:
       # The Lead owns the leases. The board cannot verify who is calling it,
       # so the tool is taken away here rather than trusted there.
       openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
     skills: [openagentsy-handoff]
     modelProfile:
@@ -352,6 +361,7 @@ roles:
       # The Lead owns the leases. The board cannot verify who is calling it,
       # so the tool is taken away here rather than trusted there.
       openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
     skills: [openagentsy-review]
     modelProfile:
@@ -385,6 +395,7 @@ roles:
       # The Lead owns the leases. The board cannot verify who is calling it,
       # so the tool is taken away here rather than trusted there.
       openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
     skills: []
     modelProfile:
@@ -426,6 +437,7 @@ roles:
       # The Lead owns the leases. The board cannot verify who is calling it,
       # so the tool is taken away here rather than trusted there.
       openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
     skills: []
     modelProfile:

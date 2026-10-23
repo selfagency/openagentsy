@@ -87,10 +87,11 @@ describe('the board server over stdio', () => {
     expect(names).toContain('board_record');
     expect(names).toContain('board_lease');
     expect(names).toContain('board_lease_grant');
+    expect(names).toContain('board_lease_revoke');
     expect(names).toContain('board_budget');
     expect(names).toContain('board_budget_set');
     expect(names).toContain('board_classify');
-    expect(names.length).toBe(6);
+    expect(names.length).toBe(7);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
@@ -153,6 +154,30 @@ describe('the board server over stdio', () => {
       globs: ['src/api/**'],
     });
     expect(second.conflicts).toHaveLength(1);
+  });
+
+  it('takes a lease back for an agent that is not using it', async () => {
+    await call('board_lease_grant', {
+      bean: 'proj-42',
+      agent: 'builder-1',
+      globs: ['src/revoked/**'],
+    });
+    const revoked = await call('board_lease_revoke', { glob: 'src/revoked/**' });
+    expect(revoked.revoked).toBe(true);
+    expect(revoked.lease.agent).toBe('builder-1');
+
+    // The path is free again.
+    const decision = await call('board_lease', {
+      op: 'check',
+      path: join(root, 'src/revoked/search.ts'),
+      agent: 'builder-2',
+    });
+    expect(decision.status).toBe('unleased');
+  });
+
+  it('says so when there is no lease to take back', async () => {
+    const revoked = await call('board_lease_revoke', { glob: 'nothing/here/**' });
+    expect(revoked.revoked).toBe(false);
   });
 
   it('reports a conflict when another agent holds the file', async () => {

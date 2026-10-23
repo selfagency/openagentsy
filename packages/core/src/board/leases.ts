@@ -153,6 +153,30 @@ export function releaseLease(
   return { released: true, lease: held };
 }
 
+/**
+ * Take a lease away.
+ *
+ * A lease is normally released by the agent that holds it, and nothing else
+ * can free a path. A session that dies holding a lease leaves it locked,
+ * and three of those put the board over the writer cap for good: there is
+ * no other way to free a path, and the cap is enforced in the board.
+ *
+ * The Lead is the lease authority, so the Lead can revoke. The holder's
+ * consent is not asked for: that is the point, because the holder is the
+ * one that is gone.
+ */
+export function revokeLease(
+  db: BoardDatabase,
+  input: { glob: string },
+): { revoked: boolean; lease?: Lease } {
+  const glob = normalizePath(input.glob);
+  const held = db.select().from(leases).where(eq(leases.glob, glob)).get();
+  if (!held) return { revoked: false };
+
+  db.delete(leases).where(eq(leases.id, held.id)).run();
+  return { revoked: true, lease: held };
+}
+
 export function listLeases(db: BoardDatabase, bean?: string): Lease[] {
   const rows =
     bean === undefined

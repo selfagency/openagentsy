@@ -22,6 +22,7 @@ import {
   RECORD_KINDS,
   recordUsage,
   releaseLease,
+  revokeLease,
   setBudget,
 } from '@openagentsy/core';
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
@@ -91,6 +92,7 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_record: the records, the hand-off between agents. op=post leaves a typed record (kind is status, contract, question, blocker or finding; every record carries a confidence: verified, inferred or guess). op=inbox reads the records addressed to you and marks them read, a cursor at a time.
 - board_lease: the leases, which agent may write which file. op=check asks whether you may write a path. op=release gives a lease back, and only the holder may release it. op=list lists the leases.
 - board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
+- board_lease_revoke: take a lease back from an agent that is not using it, for example a session that died holding it. The Lead only.
 - board_budget: the token budgets. op=check reports whether a bean is over its budget; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.
 - board_budget_set: set a token budget for a bean. The Lead only.
 - board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
@@ -502,6 +504,36 @@ server.registerTool(
  * The tool is advisory. Without a key, or with the service down, it says so
  * and the Lead classifies the request itself.
  */
+server.registerTool(
+  'board_lease_revoke',
+  {
+    description:
+      'Take a lease away from an agent that is not using it any more, for example a session that died holding it. The Lead only; every other role has this tool denied by name. A lease is otherwise only ever released by the agent that holds it, so a dead session holds its files until the Lead revokes them.',
+    inputSchema: {
+      glob: z.string().describe('The path glob to take back'),
+    },
+  },
+  async (input) => {
+    try {
+      const result = revokeLease(db, { glob: required(input.glob, 'glob') });
+      if (result.lease) {
+        await appendAudit(auditPath, {
+          policyId: POLICIES.leaseRevoke.id,
+          policyVersion: POLICIES.leaseRevoke.version,
+          actor: 'lead',
+          action: 'lease_revoke',
+          resource: result.lease.glob,
+          effect: 'allow',
+          detail: `taken from ${result.lease.agent} on bean ${result.lease.bean}`,
+        });
+      }
+      return text(result);
+    } catch (error) {
+      return failure(error);
+    }
+  },
+);
+
 server.registerTool(
   'board_classify',
   {

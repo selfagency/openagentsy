@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { BoardDatabase } from './db.js';
 import { migrate, openDatabase } from './db.js';
-import { checkLease, grantLeases, listLeases, releaseLease, writerCount } from './leases.js';
+import {
+  checkLease,
+  grantLeases,
+  listLeases,
+  releaseLease,
+  revokeLease,
+  writerCount,
+} from './leases.js';
 
 let db: BoardDatabase;
 
@@ -142,6 +149,33 @@ describe('the writer cap', () => {
     );
     expect(result.granted).toHaveLength(1);
     expect(result.capReached).toBeUndefined();
+  });
+});
+
+describe('revokeLease', () => {
+  it('takes the lease away from the agent that holds it', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    const result = revokeLease(db, { glob: 'src/**' });
+    expect(result.revoked).toBe(true);
+    expect(result.lease?.agent).toBe('builder-1');
+    expect(listLeases(db)).toHaveLength(0);
+  });
+
+  it('says so when there is no lease to take back', () => {
+    expect(revokeLease(db, { glob: 'nothing/**' }).revoked).toBe(false);
+  });
+
+  it('frees the writer for another agent', () => {
+    // Three dead sessions holding a lease would put the board over the
+    // writer cap for good, and the cap is enforced in the board.
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    revokeLease(db, { glob: 'src/**' });
+    const granted = grantLeases(db, {
+      bean: 'proj-43',
+      agent: 'builder-2',
+      globs: ['src/**'],
+    });
+    expect(granted.granted).toHaveLength(1);
   });
 });
 

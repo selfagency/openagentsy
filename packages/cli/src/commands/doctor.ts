@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import {
   agentIdOf,
   closeDatabase,
+  type Lease,
   listLeases,
   loadRoles,
   openDatabase,
@@ -120,6 +121,50 @@ async function countAuditLines(path: string): Promise<number> {
   }
 }
 
+/**
+ * What the compaction settings say.
+ *
+ * Compaction off is right for a memory integration that shrinks the context
+ * itself, and there is no such integration yet, so a long Lead session grows
+ * without a bound.
+ */
+function compactionWarnings(config: ConfigReport): string[] {
+  const warnings: string[] = [];
+  if (config.compactionAuto === true) {
+    warnings.push('compaction.auto is true. Magic Context requires compaction to be off.');
+  }
+  if (config.compactionPrune === true) {
+    warnings.push('compaction.prune is true, it removes tool output the Lead still needs.');
+  }
+  if (config.compactionAuto === false) {
+    warnings.push(
+      'compaction is off and no memory integration is installed, so a long Lead session grows without a bound. Run: openagentsy setup (without --magic-context), or accept the tradeoff.',
+    );
+  }
+  return warnings;
+}
+
+/**
+ * The leases that may belong to a session that is gone.
+ *
+ * A lease is only ever released by the agent that holds it, so a session
+ * that died holding one holds its files until the Lead revokes it. A lease
+ * that is a week old is worth saying out loud.
+ */
+function staleLeaseWarnings(held: Lease[]): string[] {
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const warnings: string[] = [];
+  for (const lease of held) {
+    const age = Date.now() - new Date(lease.grantedAt).getTime();
+    if (age <= week) continue;
+    const days = Math.floor(age / (24 * 60 * 60 * 1000));
+    warnings.push(
+      `a lease on ${lease.glob} was taken ${days} days ago and may be a dead session's. The Lead can take it back with board_lease_revoke.`,
+    );
+  }
+  return warnings;
+}
+
 export async function runDoctor(root: string): Promise<DoctorReport> {
   const warnings: string[] = [];
   const version = await detectOpenCode();
@@ -131,20 +176,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
 
   const config = await readProjectConfig(root);
 
-  if (config.compactionAuto === true) {
-    warnings.push('compaction.auto is true. Magic Context requires compaction to be off.');
-  }
-  if (config.compactionPrune === true) {
-    warnings.push('compaction.prune is true, it removes tool output the Lead still needs.');
-  }
-  if (config.compactionAuto === false) {
-    // Compaction off is right for a memory integration that shrinks the
-    // context itself. There is no such integration yet, so a long Lead
-    // session grows without a bound.
-    warnings.push(
-      'compaction is off and no memory integration is installed, so a long Lead session grows without a bound. Run: openagentsy setup (without --magic-context), or accept the tradeoff.',
-    );
-  }
+  warnings.push(...compactionWarnings(config));
   if (!config.exists) {
     warnings.push('no project config found, run: openagentsy setup');
   }
@@ -187,7 +219,9 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   if (databaseExists) {
     const db = openDatabase(databasePath);
     try {
-      leaseCount = listLeases(db).length;
+      const held = listLeases(db);
+      leaseCount = held.length;
+      warnings.push(...staleLeaseWarnings(held));
     } finally {
       closeDatabase(db);
     }
