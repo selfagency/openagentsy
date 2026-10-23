@@ -34,11 +34,14 @@ export type SessionClient = {
   }) => Promise<unknown>;
 };
 
+/** The provider inventory the client returns. */
+export type ProviderInventory = {
+  data?: { all?: { id: string; models: Record<string, ProviderModelInfo> }[] };
+};
+
 export type ClientLike = {
   provider: {
-    list: () => Promise<{
-      data?: { all?: { id: string; models: Record<string, ProviderModelInfo> }[] };
-    }>;
+    list: () => Promise<ProviderInventory>;
   };
   session: SessionClient;
 };

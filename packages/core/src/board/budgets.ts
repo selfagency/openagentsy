@@ -43,15 +43,25 @@ export function setBudget(db: BoardDatabase, input: SetBudgetInput): Budget {
   return toBudget(upserted);
 }
 
+/**
+ * Record what a bean has spent.
+ *
+ * The number is a snapshot, not a running total: the caller reports what it
+ * has spent so far, and the board holds the last report. A report that is
+ * lower than the one before it is kept, because a lower number is a
+ * measurement that went backwards, not a budget that got smaller.
+ */
 export function recordUsage(
   db: BoardDatabase,
   bean: string,
   tokensUsed: number,
 ): Budget | undefined {
   const updatedAt = new Date().toISOString();
+  const current = db.select().from(budgets).where(eq(budgets.bean, bean)).get();
+  const reported = current && current.tokensUsed > tokensUsed ? current.tokensUsed : tokensUsed;
   const updated = db
     .update(budgets)
-    .set({ tokensUsed, updatedAt })
+    .set({ tokensUsed: reported, updatedAt })
     .where(eq(budgets.bean, bean))
     .returning()
     .get();

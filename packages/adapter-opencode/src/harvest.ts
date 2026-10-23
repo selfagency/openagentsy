@@ -1,5 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { createReadStream, type ReadStream } from 'node:fs';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { appendAudit, POLICIES } from './guard.js';
 
 /**
@@ -135,23 +136,31 @@ function transcriptOf(messages: { parts?: { type: string; text?: string }[] }[])
 
 /** The decisions the guard took in the session: the writes and the refusals. */
 async function decisionsOf(root: string, sessionID: string): Promise<string[]> {
-  let text: string;
-  try {
-    text = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
-  } catch {
-    return [];
-  }
+  const path = join(root, '.openagentsy', 'audit.jsonl');
   const lines: string[] = [];
-  for (const line of text.split('\n')) {
-    if (line.trim().length === 0) continue;
-    let entry: { sessionID?: string; action?: string; resource?: string; effect?: string };
-    try {
-      entry = JSON.parse(line) as typeof entry;
-    } catch {
-      continue;
+  // The audit log grows for as long as the board lives, and it is read at
+  // every session end, so it is read a line at a time.
+  let handle: ReadStream | undefined;
+  try {
+    handle = createReadStream(path, { encoding: 'utf8' });
+    const linesOf = createInterface({ input: handle, crlfDelay: Infinity });
+    for await (const line of linesOf) {
+      if (line.trim().length === 0) continue;
+      let entry: { sessionID?: string; action?: string; resource?: string; effect?: string };
+      try {
+        entry = JSON.parse(line) as typeof entry;
+      } catch {
+        continue;
+      }
+      if (entry.sessionID !== sessionID) continue;
+      lines.push(
+        `${entry.action ?? 'action'} ${entry.resource ?? ''} ${entry.effect ?? ''}`.trim(),
+      );
     }
-    if (entry.sessionID !== sessionID) continue;
-    lines.push(`${entry.action ?? 'action'} ${entry.resource ?? ''} ${entry.effect ?? ''}`.trim());
+  } catch {
+    return lines;
+  } finally {
+    handle?.close();
   }
   return lines;
 }

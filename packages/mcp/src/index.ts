@@ -12,6 +12,7 @@ import {
   createRecord,
   dispatchProfileCriteria,
   grantLeases,
+  type Lease,
   listBudgets,
   listLeases,
   listRecords,
@@ -375,8 +376,8 @@ async function releaseLeases(input: {
 }): Promise<{ content: { type: 'text'; text: string }[] }> {
   const bean = required(input.bean, 'bean');
   const agent = required(input.agent, 'agent');
-  const released = [];
-  const notHeld = [];
+  const released: Lease[] = [];
+  const notHeld: string[] = [];
   for (const glob of required(input.globs, 'globs')) {
     const result = releaseLease(db, { bean, agent, glob });
     if (result.released && result.lease) {

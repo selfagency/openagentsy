@@ -1,5 +1,7 @@
-import { type ClientLike, sessionAdapter } from './client.js';
+import { type ClientLike, type ProviderInventory, sessionAdapter } from './client.js';
 import {
+  appendAudit,
+  POLICIES,
   planClimb,
   readRungs,
   recordClimb,
@@ -32,6 +34,7 @@ async function variantOptions(
   client: ClientLike,
   modelId: string,
   variant: string | undefined,
+  inventory?: Promise<ProviderInventory>,
 ): Promise<Record<string, unknown> | undefined> {
   if (!variant) return undefined;
   const separator = modelId.indexOf('/');
@@ -39,7 +42,9 @@ async function variantOptions(
   const providerID = modelId.slice(0, separator);
   const modelID = modelId.slice(separator + 1);
 
-  const providers = await client.provider.list();
+  // The inventory changes rarely and the request happens on every model
+  // call of a climbed session, so it is asked for once.
+  const providers = await (inventory ?? client.provider.list());
   const provider = providers.data?.all?.find((entry) => entry.id === providerID);
   const model = provider?.models?.[modelID];
   return model?.variants?.[variant];
@@ -65,26 +70,39 @@ const effortTool = (root: string, client: ClientLike) =>
 
       const target = plan.target;
       const separator = target.model.indexOf('/');
-      if (separator !== -1) {
-        const providerID = target.model.slice(0, separator);
-        const modelID = target.model.slice(separator + 1);
-        await client.session.promptAsync({
-          path: { id: context.sessionID },
-          body: {
-            noReply: true,
-            agent: context.agent,
-            model: { providerID, modelID },
-            parts: [
-              {
-                type: 'text',
-                text: `effort ladder: ${target.model} ${target.variant ?? 'default'}`,
-                synthetic: true,
-                ignored: true,
-              },
-            ],
-          },
+      if (separator === -1) {
+        // The lock entry has no provider, so there is no model to switch
+        // to. The rung is recorded, and saying it climbed would be a lie.
+        await appendAudit(root, {
+          policyId: POLICIES.effortRefused.id,
+          policyVersion: POLICIES.effortRefused.version,
+          actor: context.agent,
+          action: 'effort',
+          resource: target.model,
+          effect: 'deny',
+          detail:
+            'the lock entry has no provider/model id, so the climb was recorded but not applied',
         });
+        return `Recorded rung ${plan.rungIndex} for ${target.model}, but the lock entry has no provider/model id, so no model was switched.`;
       }
+      const providerID = target.model.slice(0, separator);
+      const modelID = target.model.slice(separator + 1);
+      await client.session.promptAsync({
+        path: { id: context.sessionID },
+        body: {
+          noReply: true,
+          agent: context.agent,
+          model: { providerID, modelID },
+          parts: [
+            {
+              type: 'text',
+              text: `effort ladder: ${target.model} ${target.variant ?? 'default'}`,
+              synthetic: true,
+              ignored: true,
+            },
+          ],
+        },
+      });
 
       return `Climbed to rung ${plan.rungIndex}: ${target.model} ${target.variant ?? 'default'}. Say why in your board record.`;
     },
@@ -149,16 +167,19 @@ async function setupServer(
 ): Promise<ServerHooks> {
   const root = worktree || directory;
   const sessionAgents = new Map<string, string>();
+  // The provider inventory changes rarely, and the variant lookup happens on
+  // every model call of a climbed session, so it is asked for once.
+  let inventory: Promise<ProviderInventory> | undefined;
 
   return {
-    'chat.message': async (_input) => {},
     'chat.params': async (input, output) => {
       sessionAgents.set(input.sessionID, input.agent);
       const role = await roleKeyForAgent(root, input.agent);
       const target = await rungTarget(root, role);
       if (!target) return;
+      inventory ??= client.provider.list();
 
-      const options = await variantOptions(client, target.model, target.variant);
+      const options = await variantOptions(client, target.model, target.variant, inventory);
       if (options) Object.assign(output.options, options);
     },
 

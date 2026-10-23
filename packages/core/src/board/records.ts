@@ -36,7 +36,15 @@ function toRecord(row: RecordRow, read: boolean): BoardRecord {
   };
   if (row.toAgent !== null) record.to = row.toAgent;
   if (row.artifact !== null) record.artifact = row.artifact;
-  if (row.contract !== null) record.contract = JSON.parse(row.contract) as unknown;
+  if (row.contract !== null) {
+    // One hand edited row must not take every inbox down, so a contract
+    // that does not parse is kept as the text it was stored as.
+    try {
+      record.contract = JSON.parse(row.contract) as unknown;
+    } catch {
+      record.contract = row.contract;
+    }
+  }
   if (row.needs !== null) record.needs = row.needs;
   if (row.surprise !== null) record.surprise = row.surprise;
   return record;
