@@ -74,18 +74,34 @@ export async function appendAudit(root: string, entry: AuditInput): Promise<void
 }
 
 export type Rung = {
+  /** The role the session runs under, for the lock lookup. */
+  role: string;
   rungIndex: number;
   reason: string;
   updatedAt: string;
 };
 
+/**
+ * The rungs, one per session.
+ *
+ * The state is keyed by the session and not by the role: the board allows
+ * three writers at once, and two builders climbing would move each other's
+ * effort level and give it back when either of them ended.
+ */
 export type RungState = Record<string, Rung>;
 
 export async function readRungs(root: string): Promise<RungState> {
   try {
     const parsed: unknown = JSON.parse(await readFile(rungsPath(root), 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return {};
-    return parsed as RungState;
+    const state = parsed as Record<string, Partial<Rung> & { rungIndex?: number }>;
+    // A file in the old shape is keyed by role and has no role in it. The
+    // rungs are ephemeral, and a session rarely spans an upgrade, so the
+    // old file is read as empty rather than guessed at.
+    for (const rung of Object.values(state)) {
+      if (typeof rung.role !== 'string') return {};
+    }
+    return state as RungState;
   } catch (error) {
     // A file that cannot be read is not a failure: a project that never
     // climbed has no file. A file that cannot be parsed is a failure, and
@@ -241,7 +257,12 @@ export type ClimbPlan =
  * A climb moves one rung, needs a reason that names a trigger, and stays
  * inside the ladder the lock file recorded.
  */
-export async function planClimb(root: string, role: string, reason: string): Promise<ClimbPlan> {
+export async function planClimb(
+  root: string,
+  role: string,
+  sessionID: string,
+  reason: string,
+): Promise<ClimbPlan> {
   const lock = await loadLock(root);
   const entry = lock?.roles[role];
   if (!entry) {
@@ -274,7 +295,7 @@ export async function planClimb(root: string, role: string, reason: string): Pro
   }
 
   const rungs = await readRungs(root);
-  const current = rungs[role]?.rungIndex ?? 0;
+  const current = rungs[sessionID]?.rungIndex ?? 0;
   const next = current + 1;
   const target = entry.ladder[next];
   if (next >= entry.ladder.length || target === undefined) {
@@ -291,12 +312,13 @@ export async function planClimb(root: string, role: string, reason: string): Pro
 
 export async function recordClimb(
   root: string,
+  sessionID: string,
   role: string,
   rungIndex: number,
   reason: string,
 ): Promise<void> {
   const rungs = await readRungs(root);
-  rungs[role] = { rungIndex, reason, updatedAt: new Date().toISOString() };
+  rungs[sessionID] = { role, rungIndex, reason, updatedAt: new Date().toISOString() };
   await writeRungs(root, rungs);
   await appendAudit(root, {
     policyId: POLICIES.effortClimb.id,
@@ -350,9 +372,10 @@ async function loadLock(root: string): Promise<LockFile | undefined> {
 export async function rungTarget(
   root: string,
   role: string,
+  sessionID: string,
 ): Promise<{ model: string; variant?: string } | undefined> {
   const rungs = await readRungs(root);
-  const rung = rungs[role];
+  const rung = rungs[sessionID];
   if (!rung || rung.rungIndex === 0) return undefined;
 
   const lock = await loadLock(root);

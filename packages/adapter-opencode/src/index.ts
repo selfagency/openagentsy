@@ -59,14 +59,14 @@ const effortTool = (root: string, client: ClientLike) =>
     },
     async execute(args, context) {
       const role = await roleKeyForAgent(root, context.agent);
-      const plan = await planClimb(root, role, args.reason);
+      const plan = await planClimb(root, role, context.sessionID, args.reason);
 
       if (!plan.ok) {
         await refuseClimb(root, role, args.reason);
         return plan.message;
       }
 
-      await recordClimb(root, role, plan.rungIndex, args.reason);
+      await recordClimb(root, context.sessionID, role, plan.rungIndex, args.reason);
 
       const target = plan.target;
       const separator = target.model.indexOf('/');
@@ -140,8 +140,8 @@ async function onSessionIdle(
   const role = await roleKeyForAgent(root, agent);
 
   const rungs = await readRungs(root);
-  if (rungs[role]) {
-    delete rungs[role];
+  if (rungs[sessionID]) {
+    delete rungs[sessionID];
     await writeRungs(root, rungs);
   }
 
@@ -175,7 +175,7 @@ async function setupServer(
     'chat.params': async (input, output) => {
       sessionAgents.set(input.sessionID, input.agent);
       const role = await roleKeyForAgent(root, input.agent);
-      const target = await rungTarget(root, role);
+      const target = await rungTarget(root, role, input.sessionID);
       if (!target) return;
       inventory ??= client.provider.list();
 

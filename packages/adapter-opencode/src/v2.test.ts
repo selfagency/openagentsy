@@ -138,7 +138,7 @@ describe('the OpenCode 2 path', () => {
     const rungs = join(root, '.openagentsy', 'rungs.json');
     await writeFile(
       rungs,
-      JSON.stringify({ builder: { rungIndex: 1, reason: 'x', updatedAt: 'now' } }),
+      JSON.stringify({ ses_1: { role: 'builder', rungIndex: 1, reason: 'x', updatedAt: 'now' } }),
       'utf8',
     );
     await chmod(rungs, 0o444);

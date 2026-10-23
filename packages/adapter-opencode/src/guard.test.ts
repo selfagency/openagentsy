@@ -10,6 +10,7 @@ import {
   recordClimb,
   roleKeyForAgent,
   roleNameOf,
+  rungTarget,
 } from './guard.js';
 
 let root: string;
@@ -130,7 +131,7 @@ describe('an unreadable state file', () => {
     await writeFile(join(broken, 'openagentsy.models.lock.json'), '{ not json', 'utf8');
     await mkdir(join(broken, '.openagentsy'), { recursive: true });
 
-    await planClimb(broken, 'builder', 'the test failed twice');
+    await planClimb(broken, 'builder', 'ses_1', 'the test failed twice');
 
     const audit = await readFile(join(broken, '.openagentsy', 'audit.jsonl'), 'utf8');
     const entry = JSON.parse(audit.trim().split('\n')[0] ?? '{}') as { policyId?: string };
@@ -167,7 +168,7 @@ describe('roleKeyForAgent', () => {
 
   it('lets the Lead climb, which the agent id alone could not', async () => {
     const role = await roleKeyForAgent(root, 'agentsy');
-    const plan = await planClimb(root, role, 'planning');
+    const plan = await planClimb(root, role, 'ses_1', 'planning');
     expect(plan.ok).toBe(true);
   });
 });
@@ -223,25 +224,25 @@ describe('decideWrite', () => {
 
 describe('planClimb', () => {
   it('refuses a role that is not in the lock file', async () => {
-    const plan = await planClimb(root, 'scout', 'test failed twice');
+    const plan = await planClimb(root, 'scout', 'ses_1', 'test failed twice');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('no model lock');
   });
 
   it('refuses a role that runs on one rung', async () => {
-    const plan = await planClimb(root, 'reviewer', 'test failed twice');
+    const plan = await planClimb(root, 'reviewer', 'ses_1', 'test failed twice');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('one rung');
   });
 
   it('refuses a reason that names no trigger', async () => {
-    const plan = await planClimb(root, 'builder', 'this feels hard');
+    const plan = await planClimb(root, 'builder', 'ses_1', 'this feels hard');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('must name a trigger');
   });
 
   it('accepts a reason that names a trigger in words', async () => {
-    const plan = await planClimb(root, 'builder', 'the test failed twice already');
+    const plan = await planClimb(root, 'builder', 'ses_1', 'the test failed twice already');
     expect(plan.ok).toBe(true);
     if (!plan.ok) throw new Error('the plan should be ok');
     expect(plan.rungIndex).toBe(1);
@@ -249,15 +250,45 @@ describe('planClimb', () => {
   });
 
   it('refuses a second climb in a row', async () => {
-    await recordClimb(root, 'builder', 1, 'the test failed twice');
-    const plan = await planClimb(root, 'builder', 'the test failed twice');
+    await recordClimb(root, 'ses_1', 'builder', 1, 'the test failed twice');
+    const plan = await planClimb(root, 'builder', 'ses_1', 'the test failed twice');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('ceiling');
   });
 
   it('records the rung so the next climb starts from it', async () => {
-    await recordClimb(root, 'builder', 1, 'the test failed twice');
+    await recordClimb(root, 'ses_1', 'builder', 1, 'the test failed twice');
     const rungs = await readRungs(root);
-    expect(rungs.builder?.rungIndex).toBe(1);
+    expect(rungs.ses_1?.rungIndex).toBe(1);
+    expect(rungs.ses_1?.role).toBe('builder');
+  });
+
+  it('keeps two sessions of the same role apart', async () => {
+    // The board allows three writers at once, so two builders can be
+    // running at the same time. One climbing must not move the other's
+    // effort level, and one ending must not give it back.
+    await recordClimb(root, 'ses_1', 'builder', 1, 'the test failed twice');
+    await recordClimb(root, 'ses_2', 'builder', 0, 'a different session');
+
+    const rungs = await readRungs(root);
+    expect(rungs.ses_1?.rungIndex).toBe(1);
+    expect(rungs.ses_2?.rungIndex).toBe(0);
+
+    const first = await rungTarget(root, 'builder', 'ses_1');
+    const second = await rungTarget(root, 'builder', 'ses_2');
+    expect(first?.variant).toBe('high');
+    // The second session is at the start rung, so it has no target.
+    expect(second).toBeUndefined();
+  });
+
+  it('reads a file in the old shape as empty', async () => {
+    // The old state was keyed by role and had no role in it. The rungs are
+    // ephemeral, so the old file is empty rather than guessed at.
+    await writeFile(
+      join(root, '.openagentsy', 'rungs.json'),
+      JSON.stringify({ builder: { rungIndex: 1, reason: 'x', updatedAt: 'now' } }),
+      'utf8',
+    );
+    expect(await readRungs(root)).toEqual({});
   });
 });
