@@ -2,6 +2,7 @@ import type { RoleDefinition } from '@openagentsy/core';
 
 const BOARD_RECORD = `\`\`\`json
 {
+  "op": "post",
   "bean": "proj-42",
   "from": "builder-2",
   "kind": "status | contract | question | blocker | finding",
@@ -73,7 +74,10 @@ export function renderPrompt(role: RoleDefinition, variants: EffortVariants = {}
     '',
     '## Reporting',
     '',
-    'Post one board record per meaningful state change. Keep it under 150 tokens.',
+    'Report through a tool call, not through a file: call',
+    'openagentsy_board_record with op "post" and the fields below. One record per',
+    'meaningful state change, under 150 tokens. The record is the hand-off; a file',
+    'you write is not read by anyone.',
     '',
     BOARD_RECORD,
     '',

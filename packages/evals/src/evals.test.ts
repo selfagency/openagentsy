@@ -138,6 +138,7 @@ async function runTrial(
     const state = await prepare(root, scenarioCase, {
       repoRoot: REPO_ROOT,
       headless: true,
+      ...(MODEL !== undefined ? { model: MODEL } : {}),
       ...(scenarioCase.boardFault !== undefined ? { boardFault: scenarioCase.boardFault } : {}),
     });
     // Somebody has to answer the permission requests. A role that

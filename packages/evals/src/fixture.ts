@@ -154,6 +154,36 @@ export async function readRecords(
 }
 
 /**
+ * Wait for a record that matches.
+ *
+ * Some of the work happens after the turn that the case measures: the
+ * harvest runs when a session goes idle, and the archivist works after
+ * that. A check that reads the board once would see a board that is not
+ * finished yet, so the check waits.
+ */
+export async function waitForRecord(
+  state: CaseState,
+  match: (record: {
+    kind: string;
+    from: string;
+    bean: string;
+    action: string;
+    state: string;
+  }) => boolean,
+  timeoutMs = 240_000,
+): Promise<
+  { kind: string; from: string; bean: string; action: string; state: string } | undefined
+> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const found = (await readRecords(state)).find(match);
+    if (found !== undefined) return found;
+    if (Date.now() >= deadline) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+/**
  * Wire a directory the way a real project is wired: the agents, the plugin,
  * the board server and the leases.
  *
@@ -163,7 +193,7 @@ export async function readRecords(
 export async function prepare(
   root: string,
   fixture: Fixture,
-  options: { repoRoot: string; boardFault?: string; headless?: boolean },
+  options: { repoRoot: string; boardFault?: string; headless?: boolean; model?: string },
 ): Promise<CaseState> {
   const state = await seedCase(root, fixture, { repoRoot: options.repoRoot });
 
@@ -182,6 +212,14 @@ export async function prepare(
     join(options.repoRoot, 'openagentsy.models.lock.json'),
     join(root, 'openagentsy.models.lock.json'),
   );
+  // Every role runs on the model under test, the archivist included. The
+  // lock names a model per role, and the archivist is a role: with the
+  // lock's own model the harvest was measured on a different model than
+  // the one the case is about, and a free provider's failure showed up as
+  // a case that failed for the wrong reason.
+  if (options.model !== undefined) {
+    await rewriteLockModels(join(root, 'openagentsy.models.lock.json'), options.model);
+  }
 
   // Bun, not node: the CLI reaches the board's database, and that database
   // is a bun:sqlite builtin. Node cannot load it, and a case whose agents
@@ -367,4 +405,27 @@ async function headlessRoles(repoRoot: string): Promise<string> {
   }
 
   return stringify(roles);
+}
+
+/**
+ * Put every role on one model.
+ *
+ * The lock names a model per role, and a case measures the model under
+ * test. The archivist is a role, and with the lock's own model the
+ * harvest ran on a different model than the case was about.
+ */
+async function rewriteLockModels(path: string, model: string): Promise<void> {
+  let lock: unknown;
+  try {
+    lock = JSON.parse(await readFile(path, 'utf8'));
+  } catch {
+    return;
+  }
+  if (typeof lock !== 'object' || lock === null) return;
+  const roles = (lock as { roles?: Record<string, { model?: string; ladder?: unknown }> }).roles;
+  if (roles === undefined) return;
+  for (const [name, entry] of Object.entries(roles)) {
+    roles[name] = { ...entry, model, ladder: [{ model }] };
+  }
+  await writeFile(path, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
 }

@@ -797,6 +797,54 @@ export const LEAD_EFFORT_CLIMB: Scenario = {
   ],
 };
 
+/**
+ * The harvest lands on the board.
+ *
+ * The archivist is told to save five candidate memories, and there was
+ * nowhere to save them, so the harvest evaporated. A candidate is a board
+ * record under the memory bean, addressed to the Lead.
+ */
+export const HARVEST_MEMORY: Scenario = {
+  name: 'harvest memory',
+  description:
+    'A builder session learns something worth keeping and ends. The archivist distils it, and the candidates land on the board as records for the Lead.',
+  agent: 'oa-builder',
+  turns: [
+    'Create a file called notes.txt with one line: the board database lives in .openagentsy/board.sqlite, and it needs bun:sqlite so it only runs under Bun. Then stop.',
+  ],
+  files: {
+    'package.json': JSON.stringify(
+      { name: 'harvest-memory', private: true, type: 'module' },
+      null,
+      2,
+    ),
+  },
+  leases: [{ agent: 'oa-builder', glob: 'notes.txt' }],
+  expect: [
+    {
+      description: 'the file carries what the builder wrote',
+      check: async (_state, root) => {
+        const content = await readFile(join(root, 'notes.txt'), 'utf8');
+        if (!content.includes('board.sqlite')) {
+          return 'notes.txt does not carry what the builder wrote';
+        }
+        return undefined;
+      },
+    },
+    {
+      description: 'the candidates land on the board under the memory bean',
+      check: async (state) => {
+        const { waitForRecord } = await import('./fixture.js');
+        // The harvest runs when the session goes idle and the archivist
+        // works after that, so the check waits for the board to fill.
+        const memory = await waitForRecord(state, (record) => record.bean === 'memory');
+        if (!memory) return 'no memory record was posted';
+        return undefined;
+      },
+    },
+  ],
+};
+
 export const SCENARIOS: Scenario[] = [
   BUILDER_SCOPE_PUSH,
   SCOPE_PUSH,
@@ -811,4 +859,5 @@ export const SCENARIOS: Scenario[] = [
   LEASE_REVOKE,
   BUDGET_STOP,
   LEAD_EFFORT_CLIMB,
+  HARVEST_MEMORY,
 ];
