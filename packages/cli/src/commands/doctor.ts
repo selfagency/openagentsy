@@ -258,7 +258,7 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push('Plugin');
   lines.push(field('installed', report.plugin.installed ? report.plugin.path : 'not installed'));
   if (!report.plugin.bundleBuilt) {
-    lines.push(field('bundle', 'not built, run: pnpm build'));
+    lines.push(field('bundle', 'not built, run: bun run build'));
   }
 
   lines.push('');

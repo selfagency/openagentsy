@@ -28,7 +28,7 @@ const _execFileAsync = promisify(execFile);
  * The cases cost tokens and take minutes, so they only run when they are
  * asked for:
  *
- *   OPENAGENTSY_EVAL=1 pnpm vitest run packages/evals
+ *   OPENAGENTSY_EVAL=1 bunx --bun vitest run packages/evals
  *
  * OPENAGENTSY_EVAL_MODEL picks the model the agents under test run on.
  * OPENAGENTSY_EVAL_JUDGE_MODEL picks the judge model, which should be a

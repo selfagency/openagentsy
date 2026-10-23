@@ -108,7 +108,7 @@ async function setupCommand(root: string, values: Values): Promise<number> {
       `  ${result.dryRun ? 'would install' : 'installed'} ${result.pluginPath}\n`,
     );
   } else {
-    process.stdout.write('  no plugin bundle found, run: pnpm build\n');
+    process.stdout.write('  no plugin bundle found, run: bun run build\n');
   }
   if (result.dryRun) {
     process.stdout.write('\n');

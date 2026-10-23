@@ -1,5 +1,5 @@
 [install]
-# pnpm-like strict node_modules: undeclared imports fail, like pnpm's layout.
+# strict node_modules: an undeclared import fails, the layout has no hoisting to hide it.
 linker = "isolated"
 # `bun add` pins exact versions; ranges live in the workspace catalog.
 exact = true

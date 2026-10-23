@@ -245,8 +245,6 @@ roles:
           effect: ask
         - resource: "bun test*"
           effect: allow
-        - resource: "pnpm test*"
-          effect: allow
         - resource: "npm test*"
           effect: allow
         - resource: "vitest*"
@@ -308,8 +306,6 @@ roles:
         - resource: "*"
           effect: ask
         - resource: "bun test*"
-          effect: allow
-        - resource: "pnpm test*"
           effect: allow
         - resource: "npm test*"
           effect: allow

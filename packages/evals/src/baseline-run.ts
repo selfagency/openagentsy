@@ -13,7 +13,7 @@ import { answerPermissions, runTurn, startHarness } from './opencode.js';
  * directory wired with the agents, the plugin and the board, and the tokens
  * of every session that belongs to the run are counted.
  *
- *   pnpm --filter @openagentsy/evals baseline
+ *   bun run baseline
  */
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..');

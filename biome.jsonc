@@ -14,8 +14,7 @@
       "!**/.opencode",
       "!**/.tmp",
       "!**/plugin",
-      "!**/*.md",
-      "!pnpm-lock.yaml"
+      "!**/*.md"
     ]
   },
   "formatter": {

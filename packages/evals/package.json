@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "baseline": "node dist/baseline-run.js"
+    "baseline": "bun dist/baseline-run.js"
   },
   "dependencies": {
     "@langwatch/scenario": "^1.7.0",
