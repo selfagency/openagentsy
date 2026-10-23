@@ -1,4 +1,6 @@
 import {
+  appendAudit,
+  POLICIES,
   planClimb,
   readRungs,
   recordClimb,
@@ -243,14 +245,50 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
   // so the lease rule can be applied before the action runs.
   await ctx.permission.hook('evaluate', async (event) => {
     if (!WRITE_ACTIONS.has(event.action)) return;
-    const agent = event.agent;
-    if (agent === undefined) return;
+
+    // A write from a session whose agent is not known is a write nobody can
+    // be held to. The rule is a lease rule, and a lease needs a holder.
+    if (event.agent === undefined) {
+      event.effect = 'deny';
+      event.message =
+        'OpenAgentsy blocked this write. The session carries no agent, so the lease rule cannot be applied. Ask the Lead to run this session under a role.';
+      await appendAudit(root, {
+        policyId: POLICIES.leaseWrite.id,
+        policyVersion: POLICIES.leaseWrite.version,
+        actor: 'unknown',
+        action: event.action,
+        resource: '(unidentified session)',
+        effect: 'deny',
+        detail: 'the session carries no agent, so no lease can be attributed to it',
+        sessionID: event.sessionID,
+      });
+      return;
+    }
+
+    if (event.resources.length === 0) {
+      // A write action with no resource is a write whose path cannot be
+      // checked. It is refused for the same reason an unknown agent is.
+      event.effect = 'deny';
+      event.message =
+        'OpenAgentsy blocked this write. The action names no path, so the lease rule cannot be applied.';
+      await appendAudit(root, {
+        policyId: POLICIES.leaseWrite.id,
+        policyVersion: POLICIES.leaseWrite.version,
+        actor: event.agent,
+        action: event.action,
+        resource: '(no readable path)',
+        effect: 'deny',
+        detail: 'the action names no path, so no lease can be checked',
+        sessionID: event.sessionID,
+      });
+      return;
+    }
 
     for (const resource of event.resources) {
       const result = await checkWrite(root, {
         toolName: event.action,
         path: resource,
-        agent,
+        agent: event.agent,
         sessionID: event.sessionID,
       });
       if (result?.effect === 'deny') {
