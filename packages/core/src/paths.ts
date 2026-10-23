@@ -8,6 +8,9 @@ import { isAbsolute, relative, sep } from 'node:path';
  * so a lease glob and an edit permission glob mean the same thing.
  */
 export function globToRegExp(pattern: string): RegExp {
+  // Every metacharacter is escaped before assembly, so the pattern cannot
+  // contain a nested quantifier and the RegExp is not a ReDoS surface even
+  // when the glob comes from an agent through the board.
   const chars = [...pattern];
   let out = '';
 

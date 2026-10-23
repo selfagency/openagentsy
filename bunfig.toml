@@ -3,3 +3,6 @@
 linker = "isolated"
 # `bun add` pins exact versions; ranges live in the workspace catalog.
 exact = true
+# A package published in the last seven days cannot be resolved, so a
+# compromised release cannot be pulled before it is noticed.
+minimumReleaseAge = 604800

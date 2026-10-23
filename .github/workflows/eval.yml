@@ -57,9 +57,9 @@ jobs:
       # cases still run, and the conversations stay on the machine.
       LANGWATCH_API_KEY: ${{ secrets.LANGWATCH_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
@@ -96,11 +96,12 @@ jobs:
           OPENAGENTSY_EVAL: "1"
           OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
           OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/glm-5.3' }}
+          EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
         run: |
           set -o pipefail
           rc=0
-          for run in $(seq 1 ${{ github.event.inputs.runs || 1 }}); do
-            echo "run $run of ${{ github.event.inputs.runs || 1 }}"
+          for run in $(seq 1 "$EVAL_RUNS"); do
+            echo "run $run of $EVAL_RUNS"
             bunx --bun vitest run packages/evals || rc=1
           done
           if [ "$rc" != "0" ]; then
