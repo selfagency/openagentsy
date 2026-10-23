@@ -16,6 +16,7 @@ import {
   listBudgets,
   listLeases,
   listRecords,
+  loadRoles,
   migrate,
   openDatabase,
   POLICIES,
@@ -40,6 +41,51 @@ const stateDir = join(root, '.openagentsy');
 const WRITER_CAP = 3;
 const databasePath = join(stateDir, 'board.sqlite');
 const auditPath = join(stateDir, 'audit.jsonl');
+
+const AGENTS = await knownAgents();
+/**
+ * The agents the board knows.
+ *
+ * A record carries the name of the agent that posted it, and the board
+ * cannot verify who is calling it, so the name is checked against the roles
+ * file: a role key, the agent id the role carries, and the 'oa-' form of
+ * the key all name the same agent. A name outside that vocabulary is a
+ * record nobody can attribute.
+ *
+ * A project without a roles file has no vocabulary, and the check does not
+ * run: a board that cannot know the names does not refuse them.
+ */
+async function knownAgents(): Promise<Set<string> | undefined> {
+  try {
+    const roles = await loadRoles(join(root, 'roles.yaml'));
+    const names = new Set<string>();
+    for (const [key, role] of Object.entries(roles.roles)) {
+      names.add(key.toLowerCase());
+      names.add(`oa-${key}`.toLowerCase());
+      if (role.agentName) names.add(role.agentName.toLowerCase());
+    }
+    return names;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether a name names an agent the board knows.
+ *
+ * The roles file names the roles; an agent may post under the role key,
+ * under the agent id the role carries, under the 'oa-' form, or under one of
+ * those with an instance number ('builder-2' is the second builder). A name
+ * outside that vocabulary is a record nobody can attribute.
+ */
+function isKnownAgent(name: string): boolean {
+  if (AGENTS === undefined) return true;
+  const lower = name.trim().toLowerCase();
+  if (AGENTS.has(lower)) return true;
+  const role = lower.replace(/-\d+$/, '');
+  if (AGENTS.has(role)) return true;
+  return AGENTS.has(`oa-${role}`);
+}
 
 await mkdir(stateDir, { recursive: true });
 const rawDb = openDatabase(databasePath);
@@ -219,9 +265,26 @@ async function postRecord(input: {
   needs?: string | undefined;
   surprise?: string | undefined;
 }): Promise<{ content: { type: 'text'; text: string }[] }> {
+  const from = required(input.from, 'from');
+  if (!isKnownAgent(from)) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.recordIdentity.id,
+      policyVersion: POLICIES.recordIdentity.version,
+      actor: from,
+      action: 'board_record',
+      resource: input.bean ?? 'unknown',
+      effect: 'deny',
+      detail: 'the name is not one of the agents in the roles file',
+    });
+    throw new BoardError(
+      `The board does not know an agent called ${from}.`,
+      'Use the role key, the agent id, or the oa- form of the key.',
+    );
+  }
+
   const record = createRecord(db, {
     bean: required(input.bean, 'bean'),
-    from: required(input.from, 'from'),
+    from,
     kind: required(input.kind, 'kind'),
     action: required(input.action, 'action'),
     state: required(input.state, 'state'),

@@ -1,33 +1,76 @@
-# OpenAgentsy Phase 2: Implementation Plan
+# OpenAgentsy Phase 2: Implementation Plan (revision 2)
 
-**Bottom line.** Phase 2 ships seven packages and two cross-cutting features:
+**Position.** This revision assumes the Phase 1 remediation has **landed in full**: all 38 findings of the Phase 1 code review are fixed through its 20-step plan, the safety suite runs 14 cases, and `develop` is the baseline described under "Baseline" below. It also folds in every correction from the plan review (P-01..P-16): the MCP hook fact is stated as measured, the Magic Context dependency is replaced by a memory slice we actually build, compaction is on by default, the protected-files list covers the real trust boundary, and worktrees share the board instead of forking it.
+
+**Bottom line.** Phase 2 ships eight packages and two cross-cutting features:
 
 - **`@openagentsy/tasks`.** A built-in task tracker that reads and writes the Beans `.beans/` Markdown format directly. It needs neither `beans-mcp` nor the `beans` CLI.
+- **`@openagentsy/memory`.** The minimal memory slice: an inbox over the archivist's `bean: memory` board records (landed in the remediation), an approved-memory store, and a search tool. This replaces the previous revision's dependency on Magic Context, which no package builds.
 - **`@openagentsy/footprint`.** Energy, water, carbon and warming estimates using the EcoLogits method. Every number carries a range.
 - **`@openagentsy/ledger`.** A local SQLite ledger of tokens and cost per message. It also records waste signals and outcomes: tokens per completed task and per commit.
-- **`@openagentsy/hooks`.** Deterministic guardrails built on agentsy's `HookRegistry`, plus:
-  - secret redaction;
-  - a **lesson lifecycle** with executable eval artifacts, which replaces the patch queue (§7.5);
-  - the **Lead recovery loop** (§7.7).
+- **`@openagentsy/hooks`.** Deterministic guardrails built on agentsy's `HookRegistry`, plus secret redaction; a **lesson lifecycle** with executable eval artifacts (§8.5); and the **Lead recovery loop** (§8.7).
 - **`@openagentsy/offload`.** Routes small housekeeping jobs (titles, summaries, JSON repair, quick replies) to a local model.
 - **`@openagentsy/sidebar`.** The OpenCode V2 TUI sidebar blocks, with a toast and slash-command fallback for V1.
-- **`@openagentsy/quality`.** The anti-slop checks:
-  - static CSS, HTML, copy and comment checks in code;
-  - optional Hallmark `sloplint`;
-  - recorded waivers;
-  - three on-demand skills;
-  - a reviewer gate (§9).
-- **`oa conformance`.** Reports, per host version, which OpenCode capabilities are proven, observed or unverified (§10).
+- **`@openagentsy/quality`.** The anti-slop checks: static CSS, HTML, copy and comment checks in code; optional Hallmark `sloplint`; recorded waivers; three on-demand skills; a reviewer gate (§10).
+- **`oa conformance`.** Reports, per host version, which OpenCode capabilities are proven, observed or unverified (§11).
+- **`oa report --ethical`.** The one-screen account of what a run cost and what it was worth (§12) — specified in this revision; previously referenced three times and never defined.
 
-Before any of that, step 2.0 **moves the repo from pnpm to Bun workspaces with Turborepo** (§1). The Biome, Husky, lint-staged, `tsc` and CI baseline stays as it is; only the commands that run it change. OpenCode loads plugins with Bun, so this also means one runtime for development, tests and production.
+Step 2.0 (pnpm → Bun workspaces + Turborepo) and the GPL-3.0-or-later license **are already landed**; §1 records the state and the small residue that remains.
 
-Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode API detail is inferred rather than read from source, it's marked **VERIFY**. Every **VERIFY** maps to one conformance check.
+Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode API detail is inferred rather than read from source, it's marked **VERIFY**; every **VERIFY** maps to one conformance check (§11). Facts the repo has already measured are marked **[measured]**. One rule applies throughout: **a security property never rests on an unverified fact** — where a measurement and the generated docs disagree, the design follows the measurement (§8.2).
 
 ---
 
-## 0. Licensing
+## Revision notes
 
-Phase 2 reuses code from agentsy (GPL-3.0-or-later; the MIT mention in its README is stale), so **the OpenAgentsy packages that import it must be GPL-3.0-or-later.** The simplest option is to license the whole monorepo GPL-3.0-or-later. The other sources are compatible:
+What changed from revision 1 and why. Sources: the Phase 1 code review (findings F-01..F-38) and the plan review (P-01..P-16).
+
+| Change | Where | Source |
+| --- | --- | --- |
+| §0 and step 2.0 marked **landed** (license and toolchain landed in `eb3a7f1`); remaining work re-scoped as step 2.0r | §0, §1 | P-10 / R-1 |
+| `tool.execute.before` for MCP calls stated as **[measured] not firing** on the pinned binary; `human-only-decisions` moved to the permission map as primary enforcement, hook as defense-in-depth; exit test proves both directions | §8.2, §8.3, §15 (2c) | P-01 / R-2 |
+| Magic Context references removed; a minimal **memory package** is specified and built in 2a (inbox over landed `bean: memory` records → `memory.jsonl` → search) | §4, §7.4, §9.1 | P-02 / R-3 |
+| Compaction hooks and the offload compaction job now rest on the remediated default (compaction **on**; `--magic-context` opt-in) | §3.5, §9.1 | P-03 / R-4 |
+| `PROTECTED` extended to `roles.yaml`, `opencode.json{,c}`, `.opencode/`, `.github/workflows/`, `templates/`, `openagentsy.models.lock.json`; doctor gains a regeneration-diff check | §8.3, §15 (2c) | P-04 / R-5 |
+| Worktree shared-state resolution specified: all `.openagentsy/` state resolves to the main repo root; `.beans/` stays worktree-local; 2e exit test denies a worktree builder by the Lead's main-board lease | §3.9, §15 (2e) | P-05 / R-6 |
+| `defineTool` is an explicit 2a deliverable in `@openagentsy/adapter-opencode`; **no package rename**; the phantom `@openagentsy/adapters` import is gone | §2, §3.6, §15 (2a) | P-06 / R-7 |
+| engines matrix fixed: root `bun`; `engines.opencode` only on host-loaded plugin packages, per major; libraries carry none | §1.4 | P-07 / R-8 |
+| Budgets reconciled: caps in the board, **usage measured by the ledger**; self-reported `recordUsage` deprecated in 2b, removed in 2c | §6.7 | P-08 / R-9 |
+| Config map table: five authorities, one precedence order, doctor reports all | §13 | P-09 / R-10 |
+| Concurrency preconditions noted as landed (rungs session-scoped, re-grants surface `alreadyHeld`) | Baseline 7, §8.2 | P-11 |
+| Naming decided once: `oa` alias bin; `board_*` keeps its prefix (compat), new tools `oa_<domain>_*`; base-name resolution by vocabulary match, not an `oa_`-specific regex; real tool names in examples | §2.2, §8.2 | P-12, P-13 / R-12 |
+| Prime injection cached with a performance budget (p95 ≤ 5 ms at 500 tasks) | §3.5, §15 (2a) | P-14 / R-13 |
+| Underspecified mechanisms specified: `oa report --ethical` (§12); `/oa approve` storage and TTL; `cache_miss` and `reverted_code` triggers; `-n` regex anchored; `TYPESAFE_API_KEY` stripped; `context.keymap.layer` VERIFY'd | §8.3, §6.4, §7.4, §12 | P-15 / R-14 |
+| Doc sweep folded into every build step's definition of done (AGENTS.md package enumeration, plan references) | §15 | P-16 / R-15 |
+| The four blind-spot eval cases noted as the landed baseline the suite extends from | Baseline 14 | R-16 |
+| Ordering fix: the agent red-team for `pnpm add` moved from step 2.0 to 2c (the rule that blocks it ships in 2c) | §15 | — |
+
+---
+
+## Baseline: what Phase 2 builds on
+
+The Phase 1 remediation landed the following. Phase 2 features cite them here rather than re-fix them.
+
+1. **Role resolution.** `roleKeyForAgent` resolves `agentName` overrides (the Lead is `agentsy` in the selector and `lead` in the roles file). Every role-keyed consumer — lock lookups, rungs, triggers, harvest gating — resolves through it. The ledger's `role` column (§6.2) uses the resolved key, so the Budget block's "tokens by role" is trustworthy.
+2. **The harvest has a sink.** The archivist posts candidate memories as board records: `kind: finding`, `bean: memory`, addressed to the Lead, confidence labelled (verified / inferred / guess), source cited (bean, commit, file:line). The suite's `harvest memory` case proves ≥1 record per harvested session. §4 consumes this queue.
+3. **V2 harvest-or-audit.** The V2 idle path harvests or audits the skip (`oa.harvest.failed`); the V2 event loop is wrapped and audited (`oa.events.failed`).
+4. **No phantom tools in prompts.** AFT guidance is conditional on registration; a generator assertion fails if a generated prompt references a tool a default install does not register.
+5. **Lease hygiene.** `board_lease_revoke` exists, is Lead-only by permission map, and is audited (`oa.lease.revoke`); doctor lists stale leases and board shows lease age. This is the precondition for parallel worktrees (§3.8).
+6. **Compaction is on by default.** `setup` no longer disables it; `--magic-context` is the informed opt-out. The `experimental.session.compacting` hook (§3.5) and the offload compaction job (§9.1) therefore have a real event to catch.
+7. **Concurrency state is scoped.** Rungs are keyed by session; re-granting a held glob surfaces `alreadyHeld`. Parallel same-role builders — Phase 2's core scenario — no longer share climb state.
+8. **One `ModelLock` type**, zod-validated on read, lives in `@openagentsy/core`.
+9. **Config discovery parity.** Doctor reports every OpenCode config file that contributes; setup warns before creating a second active config. §13 extends this to the Phase 2 config files.
+10. **The budget loop is closed in prompts.** `roles.yaml` tells the Lead to set a cap per bean and the builder to check before starting and after each milestone. §6.7 makes the numbers real.
+11. **Record identity.** `board_record` refuses out-of-vocabulary `from` values and audits the refusal (`oa.record.identity`).
+12. **`engines` is bun**, with a friendly runtime guard for Node invocations.
+13. **Docs swept**: no ADDENDUM references, the package count is correct, harvest wording is qualified. Every build step's definition of done keeps it that way (§15).
+14. **The safety suite runs 14 cases** (the 10 original plus lead-climb, harvest-memory, lease-revoke, budget-stop) plus the record-spoof unit assertion. Phase 2 exit tests extend from this baseline, not past it.
+
+---
+
+## 0. Licensing — landed
+
+The monorepo is GPL-3.0-or-later (`LICENSE`, `NOTICE`, root `package.json`), landed with the toolchain move. The table below still governs Phase 2's new sources:
 
 | Source | License | How we use it |
 | --- | --- | --- |
@@ -40,79 +83,26 @@ Phase 2 reuses code from agentsy (GPL-3.0-or-later; the MIT mention in its READM
 | Nutlope/hallmark | MIT | Floor rules adapted, keeping their Floor numbers. `sloplint.mjs` is called as an external check when installed, not vendored. |
 | EcoLogits methodology | CC BY-SA 4.0 (docs) | Formulas re-implemented, with credit in the UI and README. **VERIFY** the license of `ecologits/data/models.json` before bundling it. Until then, fetch it at runtime and cache it. |
 
-```jsonc
-// package.json (root)
-{ "license": "GPL-3.0-or-later" }
-```
-
 ---
 
-## 1. Step 2.0: pnpm → Bun workspaces + Turborepo
+## 1. Toolchain — landed, plus residue
 
-**Why now.**
-- **One runtime.** OpenCode loads plugins with Bun: the plugin's `$` is Bun's shell, and OpenCode runs `bun install` in its config directories [^tai]. Developing and testing on Bun removes a Node/Bun gap from every plugin.
-- **`bun:sqlite`** becomes the ledger driver everywhere (§5.2).
-- **Turborepo** caches each package's lint, typecheck, test and build. Turborepo 2.6 made Bun support stable and parses `bun.lock` v1 per package. Changing one package's dependencies now invalidates only that package's cache, not the whole repo's [^turbo26]. Bun supports pnpm-style workspaces, catalogs and isolated installs [^bunws].
+### 1.1 Landed state (`eb3a7f1`)
 
-**What stays the same.** Biome, Husky, lint-staged and `tsc` don't change; only the commands that run them do.
+- Bun workspaces over `packages/*`; `bun.lock`; `bunfig.toml` with the isolated linker, exact pins, `minimumReleaseAge`, and `trustedDependencies`.
+- Turborepo with `build` / `typecheck` / `test` tasks and the root `//#lint`; `globalDependencies` on `biome.jsonc`, `tsconfig.base.json`, `bunfig.toml`. See the committed `turbo.json` — this spec does not restate it.
+- Biome, Husky, lint-staged and `tsc` unchanged from Phase 1; only the commands that run them moved.
+- CI runs on Bun with pinned actions by SHA. Reconcile the workflow file name and steps with this spec in 2.0r (the repo's `check.yml` predates this plan).
 
-### 1.1 Root files
+**One runtime.** OpenCode loads plugins with Bun: the plugin's `$` is Bun's shell, and OpenCode runs `bun install` in its config directories [^tai]. Development, tests and production all run on Bun; `bun:sqlite` is the driver everywhere (§6).
 
-```jsonc
-// package.json (root)
-{
-  "name": "openagentsy",
-  "private": true,
-  "license": "GPL-3.0-or-later",
-  "packageManager": "bun@1.3.x",            // VERIFY exact pin; turbo reads this field to detect the package manager
-  "workspaces": {
-    "packages": ["packages/*"],
-    "catalog": {                             // was pnpm-workspace.yaml `catalog:`; same `catalog:` protocol in package.json deps
-      "zod": "^4", "solid-js": "^1.9", "typescript": "^5.9", "vitest": "^3"
-    }
-  },
-  "scripts": {
-    "prepare": "husky",
-    "lint": "biome check .",
-    "format": "biome format --write .",
-    "typecheck": "turbo run typecheck",
-    "test": "turbo run test",
-    "build": "turbo run build",
-    "check": "turbo run lint typecheck test build"
-  },
-  "lint-staged": {
-    "*.{ts,tsx,js,jsx,json,jsonc,css}": ["biome check --write --no-errors-on-unmatched"]
-  },
-  "devDependencies": { "turbo": "^2.6", "@biomejs/biome": "…", "husky": "…", "lint-staged": "…" }
-}
-```
+### 1.2 What Phase 1 remediation added on top
 
-```toml
-# bunfig.toml
-[install]
-linker = "isolated"     # pnpm-like strict node_modules; the default for workspaces migrated from pnpm (configVersion 1)
-exact = true            # `bun add` pins exact versions; ranges stay in the catalog
-# hoist = false         # stricter still: undeclared imports fail. Turn on once phantom imports are fixed (§1.4)
-```
+- Root `engines` is bun with a runtime guard in the CLI entry (friendly message on Node, exit 1).
+- Config discovery parity: doctor reports every OpenCode config file that contributes (root `opencode.json{,c}` and `.opencode/opencode.json{,c}`); setup warns before creating a second active config.
+- The audit log streams (`readline`) instead of whole-file reads.
 
-```jsonc
-// turbo.json
-{
-  "$schema": "https://turborepo.com/schema.json",
-  "ui": "tui",
-  "tasks": {
-    "build":     { "dependsOn": ["^build"], "inputs": ["src/**", "package.json", "tsconfig*.json"], "outputs": ["dist/**"] },
-    "typecheck": { "dependsOn": ["^build"], "inputs": ["src/**", "test/**", "tsconfig*.json"], "outputs": [] },
-    "test":      { "dependsOn": ["^build"], "inputs": ["src/**", "test/**", "fixtures/**"], "outputs": [] },
-    "//#lint":   { "inputs": ["**/*.{ts,tsx,js,json,jsonc,css}", "biome.jsonc"], "outputs": [] }
-  },
-  "globalDependencies": ["biome.jsonc", "tsconfig.base.json", "bunfig.toml"]
-}
-```
-
-`//#lint` is a root task, because Biome checks the whole repo in one pass. Each package defines `build`, `typecheck` (`tsc --noEmit -p .`) and `test`.
-
-**Per-package scripts.**
+### 1.3 Per-package scripts (unchanged pattern)
 
 ```jsonc
 // packages/<name>/package.json
@@ -121,77 +111,47 @@ exact = true            # `bun add` pins exact versions; ranges stay in the cata
     "build": "bun build src/index.ts --outdir dist --target bun --packages external && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "typecheck": "tsc --noEmit -p .",
     "test": "vitest run"
-  },
-  "engines": { "opencode": ">=1.19 <2" }   // OpenCode skips npm plugins whose engines.opencode excludes the running version [^tai]
+  }
 }
 ```
 
-- **Sidebar exception.** `packages/sidebar` keeps its Solid JSX transform for `dist/tui.js` (§6.7). **VERIFY** whether `@opentui/solid`'s Bun plugin works with `bun build`; if not, keep esbuild with `babel-preset-solid` for that one package.
-- **Tests stay on Vitest**, so existing suites don't need rewriting. `bun test` is an option later; it isn't part of this step.
+- **Sidebar exception.** `packages/sidebar` keeps its Solid JSX transform for `dist/tui.js`. **VERIFY** whether `@opentui/solid`'s Bun plugin works with `bun build`; if not, keep esbuild with `babel-preset-solid` for that one package.
+- **Tests stay on Vitest**, started with `--bun` where a package touches `bun:sqlite` (ledger, memory, tasks against the real store); pure packages (footprint, quality's rule functions) run on plain Vitest.
 
-### 1.2 Hooks and CI
+### 1.4 engines matrix (corrected)
 
-```sh
-# .husky/pre-commit
-bunx lint-staged
-bun run typecheck      # turbo: only packages affected by the change re-run; the rest hit cache
-```
+| Package kind | engines | Why |
+| --- | --- | --- |
+| root | `{ "bun": ">=1.2.0" }` (landed) | `bun:sqlite` is load-bearing; nothing runs on Node. |
+| host-loaded plugins: `hooks`, `sidebar@1.x`, `sidebar@2.x`, the plugin entry of `tasks`/`memory` | `engines.opencode` **per major**: `1.x → ">=1.19 <2"`, `2.x → ">=2.0 <3"` | OpenCode skips npm plugins whose `engines.opencode` excludes the running version [^tai]. A `<2` ceiling on the 2.x sidebar would make 2.x hosts skip the very package built for them — the previous revision had exactly this bug on every package. |
+| libraries: `core`, `models`, `tasks`, `memory`, `footprint`, `ledger`, `quality`, `offload`, `jev`, `mcp` | none (bun only) | An OpenCode engine on a library is meaningless; libraries run wherever Bun runs. |
 
-```yaml
-# .github/workflows/ci.yml (job steps)
-- uses: oven-sh/setup-bun@v2
-  with: { bun-version-file: package.json }   # reads packageManager; VERIFY input name for the pinned action version
-- run: bun install --frozen-lockfile
-- run: bunx turbo run lint typecheck test build
-  env: { TURBO_TELEMETRY_DISABLED: "1" }
-```
+### 1.5 Expected friction that still applies
 
-- **No telemetry, here or locally.** `TURBO_TELEMETRY_DISABLED=1` goes in CI, in the agent shell environment (§7.3) and in `CONTRIBUTING.md`. That matches the rest of OpenAgentsy.
-- **Remote caching stays off.** It needs a Vercel account or a self-hosted cache, and it uploads build artifacts. It's opt-in only (§12).
+- **Phantom imports.** Isolated installs fail on imports a package never declared. Fix by declaring the dependency, never by switching the linker to `hoisted`. Turning `install.hoist = false` on is still a separate, later decision (§16).
+- **Native modules.** Phase 2 adds none; `bun:sqlite` is built in.
 
-### 1.3 Migration steps
+### 1.6 Step 2.0r — residue
 
-1. **Pin Bun.** Add `packageManager` and a `.bun-version` file, plus `mise`/`asdf` config if the repo uses one.
-2. **Move the workspace definition.** Copy `pnpm-workspace.yaml`'s `packages` and `catalog` into the root `package.json` (§1.1). Keep the `workspace:*` and `catalog:` specifiers, which Bun reads unchanged.
-3. **Migrate the lockfile.** Run `bun install`, which converts `pnpm-lock.yaml` into a text `bun.lock`. **VERIFY** the resolved versions with `bun pm ls --all` against `pnpm list -r --depth Infinity`, and review any differences before deleting the old lockfile.
-4. **Port pnpm-specific settings:**
-   - `pnpm.overrides` → `overrides`;
-   - `pnpm.patchedDependencies` → `patchedDependencies` (re-run `bun patch` for each one);
-   - `onlyBuiltDependencies` → `trustedDependencies`. Bun skips dependencies' lifecycle scripts unless they're trusted. List only the packages that need them, such as esbuild.
-   - Registry and auth entries in `.npmrc` stay. Bun reads them.
-5. **Delete** `pnpm-lock.yaml`, `pnpm-workspace.yaml`, any `.pnpmfile.cjs`, and pnpm-only `.npmrc` keys. Add `.turbo/` to `.gitignore`.
-6. **Add Turborepo.** Add `turbo` and `turbo.json`, and per-package `build`, `typecheck` and `test` scripts. Remove the root `tsc -b` project-reference build if Turborepo now orders builds.
-7. **Swap commands everywhere.** Replace every `pnpm <x>`, `pnpm dlx` and `pnpm -r` in scripts, docs, the Husky hook, CI, `openagentsy.jsonc` defaults (`worktrees.setup`, §11) and agent role text. `pnpm -r run x` becomes `turbo run x`, and `pnpm --filter p` becomes `turbo run x --filter=p` (or `bun --filter p`).
-8. **Guard it in code** (§7.3):
-   - a `package-manager` rule denies agent shell calls to `pnpm`, `npm install|ci|add`, `yarn` and `npx`, with the reason "This repo uses Bun; use `bun add` / `bunx`";
-   - `protect-policy` also covers `turbo.json`, `bunfig.toml` and direct edits to `bun.lock`. The lockfile changes only through `bun add`/`bun remove`, and adding a dependency goes through the approval flow.
+Small, landable as one commit, exit-tested in §15:
 
-### 1.4 Expected friction
-
-- **Phantom imports.** Isolated installs, like pnpm's, fail on imports a package never declared. A pnpm repo should already be clean, except where pnpm's public-hoist patterns hid something. Fix these by declaring the dependency, not by switching the linker to `hoisted`.
-- **Native modules.** Phase 2 adds none, because `bun:sqlite` is built in. `better-sqlite3` drops out of the plan.
-- **Tests that run on Node.** Vitest runs on Node unless it's started with `--bun`. Ledger tests use `bun:sqlite`, so either run them with `vitest --bun` or put the DB behind an interface with an in-memory fake. **VERIFY** which works for the pinned Vitest version.
-
-Biome rules, the Husky gate, and the agent rule against `--no-verify` / `HUSKY=0` (§7.3) all work as before. Phase 2 code must pass `bun run lint` and `bun run typecheck`.
-
-### 1.5 Already in place, unchanged by the move
-
-- **Agents can't skip the hook.** The `no-skip-git-hooks` rule (§7.3) denies agent shell calls that use:
-  - `--no-verify`;
-  - `-n` on `git commit`;
-  - `HUSKY=0`;
-  - `core.hooksPath`.
-
-  When the pre-commit hook fails, its output comes back to the agent as a tool error, so the agent fixes the code.
-- **Quality checks run separately from Biome** (§9), through a PostToolCall hook and `oa_quality_check`. If GritQL can match comments reliably, the comment rules may also ship as a Biome plugin. The checker in `packages/quality` stays the source of truth either way.
+1. **Pin the package manager.** Add `"packageManager": "bun@1.3.x"` to the root `package.json` (**VERIFY** the exact pin; turbo reads this field) and a `.bun-version` file.
+2. **Decide the catalog.** The migration kept plain `workspaces: ["packages/*"]`; the pnpm-era `catalog:` protocol was not carried over. Either add Bun's catalog for the shared pins (zod, typescript, vitest) or leave plain workspaces and say so in AGENTS.md. Decide once; don't half-migrate.
+3. **Script name.** The repo runs `ci:check`; this spec says `check` (`turbo run lint typecheck test build`). Alias one to the other and standardize every doc on the winner.
+4. **`CONTRIBUTING.md`.** Create it; it carries the telemetry-off note (`TURBO_TELEMETRY_DISABLED=1` locally and in CI), the Bun prerequisite, and the commit conventions AGENTS.md already implies.
+5. **`oa` bin alias.** Add `"oa"` as a second `bin` entry pointing at the same CLI (§2.2). Deprecation-free: `openagentsy` stays canonical.
+6. **CI reconciliation.** Align `.github/workflows/check.yml` job steps with §1.1 (setup-bun reading `packageManager`, `bun install --frozen-lockfile`, `bunx turbo run lint typecheck test build`, telemetry disabled).
 
 ---
 
-## 2. Package layout
+## 2. Package layout and naming
+
+### 2.1 Layout
 
 ```
 packages/
   tasks/        # .beans-compatible task store + oa_task_* tools + prime injection
+  memory/       # inbox over bean:memory records + memory.jsonl + oa_memory_* tools
   footprint/    # EcoLogits-method estimator (pure, no I/O)
   ledger/       # SQLite usage ledger, pricing, waste signals, outcomes
   hooks/        # agentsy HookRegistry adapter, guardrail rules, redaction,
@@ -199,19 +159,53 @@ packages/
   quality/      # rule registry, static checks, comment lint, sloplint bridge, waivers, reviewer gate
   offload/      # local-model router (Ollama / LM Studio) for micro-tasks
   sidebar/      # V2 TUI plugin (dist/tui.js) + V1 server fallback (dist/v1.js)
-  adapters/     # from Phase 1: V1/V2 defineTool, event bridge, conformance probes
+  adapter-opencode/  # Phase 1: V1/V2 plugin, event bridge, conformance probes.
+                #   2a extracts and exports defineTool (§2.3) — no rename.
 skills/
-  oa-ui/  oa-copy/  oa-comments/     # on-demand quality skills (§9.5)
+  oa-ui/  oa-copy/  oa-comments/     # on-demand quality skills (§10.5)
 ```
 
 **Dependency direction.**
+
 - `footprint` → `ledger` → `sidebar`.
-- `tasks` → `sidebar`.
+- `tasks` → `sidebar`; `memory` → `sidebar`.
+- `memory` reads its queue through an injected board reader (a `(root) => Promise<Record[]>` over the board db) — it never imports `mcp`, so there is no cycle.
 - `hooks` depends only on `@agentsy/runtime`.
 - `quality` is pure apart from the optional sloplint spawn. `hooks` calls it.
 - `tasks` reads its findings through an injected `openFloorFindings(taskId)`, so there is no import cycle.
 
-`footprint`, `quality`'s rule functions and the parts of `tasks` that do no I/O stay pure, so they can be tested without OpenCode.
+`footprint`, `quality`'s rule functions, and the parts of `tasks` and `memory` that do no I/O stay pure, so they can be tested without OpenCode.
+
+### 2.2 Naming (decided once, here)
+
+- **Binary.** `openagentsy` stays canonical; `oa` is an alias bin (§1.6). Slash commands use the short form: `/oa status`, `/oa lessons`, `/oa approve`, `/oa memory`.
+- **Tools.** The board's existing tools keep their `board_*` names — they are in shipped permission maps and eval assertions; renaming breaks compat for nothing. New packages prefix `oa_<domain>_*`: `oa_task_*` (§3.6), `oa_memory_*` (§4.4).
+- **The `oa-` agent-id prefix** in `roles.yaml` (`oa-builder`) is unrelated legacy from Phase 1 role ids. It is not extended to tools, and tool rules never key on it.
+- **MCP-prefixed names.** MCP tools arrive as `<server>_<tool>`. The bridge resolves base names by vocabulary match (§8.2), not by an `oa_`-specific regex — a regex tuned to `oa_` lets `board_*` tools slip past, which is exactly the hole the previous revision's `baseTool` had.
+
+### 2.3 `defineTool` (2a deliverable)
+
+Every Phase 2 tool is defined once and registered on both runtimes. The helper is extracted from the existing V1/V2 registration code in `packages/adapter-opencode` and exported from `@openagentsy/adapter-opencode`:
+
+```ts
+// packages/adapter-opencode/src/define-tool.ts
+import type { Plugin } from '@opencode-ai/plugin';
+import type { z } from 'zod';
+
+export interface ToolDef<A extends z.ZodType> {
+  description: string;
+  args: A;
+  execute: (args: z.infer<A>, ctx: ToolCtx) => Promise<unknown>;
+}
+
+/** One definition, two runtimes: V1's tool() shape and V2's registration. */
+export function defineTool<A extends z.ZodType>(def: ToolDef<A>): ToolDef<A> { /* extraction in 2a */ }
+
+/** Convert a record of ToolDefs into the V1 plugin's `tool` map and the V2 registration. */
+export function toolMap(defs: Record<string, ToolDef<z.ZodType>>): Plugin['tool'] { /* … */ }
+```
+
+No package rename, no new package: `@openagentsy/adapter-opencode` already owns both runtime shapes, and the Phase 1 conformance probes live there. The previous revision imported `defineTool` from a `@openagentsy/adapters` package that did not exist; this revision makes the export real before anything imports it. Exit test in §15 (2a): `grep -rn "defineTool" packages/*/src` resolves to definitions and this export only.
 
 ---
 
@@ -229,17 +223,19 @@ Beans' creator has turned it into an orchestrator: a web UI that spawns Claude C
 | Fractional `order` keys, so reordering touches one file | **Port** (Apache-2.0, attributed). |
 | ETag plus `--if-match` for optimistic concurrency | **Keep.** Our ETag is a hash of the file's bytes, so it stays stable whichever tool wrote the file. |
 | A "Summary of Changes" section on completion, "Reasons for Scrapping" when scrapped | **Keep**, enforced by the tool rather than the prompt. |
-| Completed beans archived and used as project memory | **Keep.** Archived tasks feed Magic Context search. |
-| `Refs: <id>` trailers in commit messages; bean files committed together with the code | **Keep.** This links tasks, commits and the ledger (§5.5). |
-| Worktrees kept *outside* the repo (`~/.beans/worktrees/<project>/`), each with a `.meta.json`; `setup` and `run` commands; `integrate: local or pr` | **Adopt** for parallel builders, under `~/.openagentsy/worktrees/<project>/`. |
-| Status changes in a worktree treated as provisional ("dirty") until its PR merges | **Adopt** (§3.6). |
+| Completed beans archived and used as project memory | **Keep.** Archived tasks are committed, greppable Markdown — citable as the `source` of a memory entry (§4.2); no new machinery needed. |
+| `Refs: <id>` trailers in commit messages; bean files committed together with the code | **Keep.** This links tasks, commits and the ledger (§6.5). |
+| Worktrees kept *outside* the repo (`~/.beans/worktrees/<project>/`), each with a `.meta.json`; `setup` and `run` commands; `integrate: local or pr` | **Adopt** for parallel builders, under `~/.openagentsy/worktrees/<project>/` — with shared board state (§3.9). |
+| Status changes in a worktree treated as provisional ("dirty") until its PR merges | **Adopt** (§3.8). |
 | Working out which tasks a worktree touched from its git diff | **Adopt** for the Board block. |
-| Quick-reply suggestions after each agent turn | **Adopt** through local offload (§8), not a hosted model. |
+| Quick-reply suggestions after each agent turn | **Adopt** through local offload (§9), not a hosted model. |
 | Default effort level per project | Already covered by Phase 1's effort ladder; read `agent.default_effort` when it's present. |
 | **`beans prime`**: a long guide injected into every system prompt, beginning `<EXTREMELY_IMPORTANT>` and including "You MUST ignore all previous instructions" | **Reject.** It's coercive prompt engineering that gets in the way of other instructions, and it costs tokens on every turn. We inject a short state summary instead (§3.5), move the usage guide into a skill that loads on demand, and enforce the rules in code. |
 | An agent chat that spawns Claude Code processes, plus a web UI and GraphQL server | **Reject.** OpenCode is our runtime, and the TUI sidebar is our UI. |
 | "You've been programming all your life; now you get to be a product manager." | **Reject the framing.** The person stays the engineer who directs the tools and reviews the work. |
-| `default_mode: act`, "fully autonomous" | **Reject as a default.** Agents act, but destructive tools go through the approval hooks (§7). |
+| `default_mode: act`, "fully autonomous" | **Reject as a default.** Agents act, but destructive tools go through the approval hooks (§8). |
+
+The Lead's `roles.yaml` guidance already describes dispatching in terms the current system supports (short bean ids, owned globs, acceptance tests — reworded in the remediation). When 2a lands, the tasks package replaces that prose with the real thing; the guidance then points at `oa_task_*` instead of describing bookkeeping in words.
 
 ### 3.2 Types and parsing
 
@@ -369,7 +365,7 @@ Test `fractional.ts` against Beans' `fractional_test.go` cases, translated into 
 
 ```ts
 // packages/tasks/src/store.ts
-import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export class EtagMismatch extends Error {
@@ -379,7 +375,14 @@ export class EtagMismatch extends Error {
 export class TaskStore {
   constructor(private root: string, private prefix: string) {}   // root = <repo>/.beans
 
-  async all(includeArchive = false): Promise<Task[]> { /* readdir root (+ archive/), parseTask, attach etag */ }
+  private cache = new Map<string, { task: Task; mtimeMs: number; size: number }>();
+
+  async all(includeArchive = false): Promise<Task[]> {
+    // readdir root (+ archive/); for each file, stat first — parse only when
+    // (mtimeMs, size) changed. The prime hook calls all() on every message
+    // (§3.5); re-parsing 500 files per message is the provider.list() mistake
+    // the Phase 1 remediation already fixed once, and we do not reintroduce it.
+  }
   async get(id: string): Promise<Task | undefined> { /* index by id → path */ }
 
   async create(input: Pick<Task, 'title'> & Partial<Task>): Promise<Task> {
@@ -488,6 +491,8 @@ export function primeBlock(tasks: Task[]): string {
 }
 ```
 
+**Performance budget.** The prime renders on **every message** (`chat.system.transform`) and again on compaction. The store's stat-keyed cache (§3.4) makes that an mtime check per file, not a parse. Budget: **p95 ≤ 5 ms at 500 live tasks** on a warmed store; the 2a exit test (§15) measures it from a fixture corpus. A file watcher (`fs.watch` on `.beans/`) may replace the stat sweep later; the budget, not the mechanism, is the contract.
+
 V1 wiring uses the same hooks the Beans OpenCode plugin uses [^beansplugin]:
 
 ```ts
@@ -505,16 +510,18 @@ export const OpenAgentsyTasks: Plugin = async ({ directory }) => {
 };
 ```
 
-On V2, the same `primeBlock` goes through the Phase 1 adapter's system-prompt hook.
+Compaction is **on by default** since the remediation (`setup --magic-context` is the informed opt-out), so the compacting hook has a real event to catch. For users who did opt out, the prime still rides `chat.system.transform` every message; nothing is lost, only the compact-time refresh.
+
+On V2, the same `primeBlock` goes through the adapter's system-prompt hook.
 
 ### 3.6 Tools
 
-These are registered through the Phase 1 `defineTool` adapter, so V1 and V2 share one definition:
+These are registered through `defineTool` from `@openagentsy/adapter-opencode` (§2.3), so V1 and V2 share one definition:
 
 ```ts
 // packages/tasks/src/tools.ts
 import { z } from 'zod';
-import { defineTool } from '@openagentsy/adapters';
+import { defineTool } from '@openagentsy/adapter-opencode';
 
 export const taskTools = (store: TaskStore) => ({
   oa_task_list: defineTool({
@@ -569,7 +576,7 @@ export const taskTools = (store: TaskStore) => ({
 ### 3.7 Rules the code enforces, so prompts don't have to
 
 ```ts
-// openFloorFindings is injected by the plugin entry from @openagentsy/quality (§9.4); tasks never imports quality.
+// openFloorFindings is injected by the plugin entry from @openagentsy/quality (§10.4); tasks never imports quality.
 function enforceTransitions(cur: Task, next: Task, deps: { openFloorFindings: (taskId: string) => Finding[] }) {
   if (next.status === 'completed') {
     if (/- \[ \]/.test(next.body)) throw new Error('Unchecked items remain; check them off or move them to a follow-up task.');
@@ -610,18 +617,128 @@ export async function detectTaskIds(worktree: string, baseRef: string): Promise<
 **Provisional status.** A builder working in a worktree edits the `.beans/` files *inside that worktree*, so its task changes travel with the PR. The Lead's view overlays those edits as provisional and shows them dimmed in the Board block until the branch merges into the base ref.
 
 `integrate: local | pr` follows Beans:
+
 - `local` squash-merges after the reviewer approves.
 - `pr` pushes and opens a PR.
 
 Either way, the merge needs a person's approval through the approval hook.
 
+### 3.9 Shared state from worktrees (new — resolves the board fork)
+
+A worktree session must not fork the coordination state. Without this section, a builder rooted in `~/.openagentsy/worktrees/<project>/<id>` would resolve a different `.openagentsy/` — its own empty board, its own lock, its own rungs — and every guarantee the system makes about leases, records and budgets would evaporate for exactly the sessions that matter most.
+
+**Resolution rule.** One helper, in core, used by the plugin, the board MCP and the CLI alike:
+
+```ts
+// packages/core/src/roots.ts
+/**
+ * The directory that owns shared OpenAgentsy state (.openagentsy/: board db,
+ * leases, rungs, audit log, lessons, memory, waivers, conformance, approvals,
+ * ledger) and the model lock. In a linked worktree this is the MAIN repository
+ * root (git rev-parse --git-common-dir, minus its trailing .git); anywhere
+ * else it is the nearest project root. All state resolves through it, so a
+ * builder in a worktree sees the Lead's board.
+ */
+export function resolveStateRoot(cwd: string): string {
+  // git -C cwd rev-parse --git-common-dir  → strip trailing "/.git" → that dir.
+  // Not a worktree (common dir === cwd/.git): return cwd. Not a git repo:
+  // walk up for .openagentsy/ or the lock file, as the plugin does today.
+}
+```
+
+What resolves through `resolveStateRoot` and what stays local:
+
+| State | Resolves to | Why |
+| --- | --- | --- |
+| Board db, leases, audit log, records | **main root** | The board is the single coordination surface; a worktree builder must see the Lead's leases and post to the board the Lead reads. |
+| Model lock, rungs | **main root** | The lock is per-project; rungs are per-session (remediation) but stored in one file. |
+| Ledger, footprint rows | **main root** | Usage rolls up per project, not per worktree. |
+| Lessons, waivers, conformance, approvals, memory.jsonl | **main root** | Policy and durable state are project-wide. |
+| `.beans/` task files | **worktree (local)** | By design: task edits travel with the PR, provisional until merge (§3.8). |
+
+**Exit test (2e):** a builder session rooted in a worktree (a) is denied a file the Lead leased on the main board, (b) posts records that appear in the main board's inbox, and (c) its `.beans/` edits exist only in the worktree and clear to authoritative after merge.
+
+The precondition for this to be safe is landed: leases have an admin release path (`board_lease_revoke`, Lead-only) and doctor lists stale leases — without those, worktrees would multiply the stale-lease deadlock the Phase 1 review flagged.
+
 ---
 
-## 4. `@openagentsy/footprint`: the estimator
+## 4. `@openagentsy/memory`: the minimal memory slice (new)
+
+Revision 1 referenced a "Magic Context harvest queue" in the sidebar and an offload job for "the Magic Context `PreCompact` handler" — while no package in any phase built Magic Context, and the Phase 1 review had just flagged exactly this pattern (prompts and blocks consuming machinery that does not exist) as a defect. This section replaces that dependency with a slice we build: small, honest about being small, and forward-compatible with a real historian later.
+
+What this slice is **not**: no historian, no dreamer, no decay, no cache-stable drops, no auto-injection. Those stay out (§14) until the inbox contract below proves itself in real use.
+
+### 4.1 What already exists (landed)
+
+- The archivist posts candidate memories as board records: `kind: finding`, `bean: 'memory'`, addressed to the Lead, confidence labelled, source cited (remediation; suite case `harvest memory`).
+- The board's cursor-based record reads (`board_record` inbox semantics) can list them.
+- Record identity is guarded (out-of-vocabulary `from` refused) and audited.
+
+So the producer side of the memory pipeline exists and is tested. What is missing is the consumer side: a decision, a store, and a way back in.
+
+### 4.2 Store
+
+`.openagentsy/memory.jsonl` at the state root (§3.9). One JSON object per line, so `grep` and `wc -l` work on it:
+
+```ts
+// packages/memory/src/model.ts
+export interface MemoryEntry {
+  id: string;                                     // oa-mem-<nanoid6>
+  text: string;                                   // ≤ 280 chars, enforced on write
+  category: string;                               // free-form tag, ≤ 24 chars, task TAG grammar
+  source: string;                                 // "<recordId> · <bean|commit|file:line>" — where it came from
+  confidence: 'verified' | 'inferred' | 'guess';  // carried from the archivist's label
+  created_at: string;                             // ISO 8601
+}
+```
+
+- **Append-only.** Entries are never edited; a wrong memory is superseded by a new one or removed by a person (`/oa memory <id> forget` — human-only, §8.3).
+- **Dedup** on append: fnv1a64 of the normalized text (lowercased, whitespace-collapsed — the tasks package's `etag` helper, reused) against the existing store; a duplicate increments nothing, it is refused with the existing entry's id.
+- **Redaction runs first** (§8.4): a candidate that matches a secret pattern is redacted before it can be approved, and the redaction counter increments. The 2a exit test seeds a real-looking key in a candidate and asserts it never appears in `memory.jsonl`.
+
+### 4.3 Inbox and decisions
+
+- **The inbox is the board's pending `bean: memory` records** — records whose `state` is not `promoted` or `rejected`. No second queue, no drift between what the archivist posted and what the inbox shows.
+- **Decisions are human-only.** This is the same rule as lessons (§8.5) and waivers (§10.4), enforced the same way:
+  - Primary: `roles.yaml` denies `openagentsy_memory_decide` to every agent role (the `board_lease_grant` precedent — the permission map is the mechanism the repo has proven, because the hook cannot see MCP calls on the pinned binary, §8.2).
+  - Secondary: the `human-only-decisions` hook rule, for any host where MCP routing through `tool.execute.before` does fire.
+- `/oa memory <id> a|r` records the decision: **approve** appends to `memory.jsonl` and marks the record `state: 'promoted'`; **reject** marks it `state: 'rejected'`. Either way the decision is audited under a new policy id `oa.memory.decide` with `decidedBy` set to the human user.
+- The sidebar Memory inbox block (§7.4) lists pending candidates with `a` / `r` keys.
+
+### 4.4 Tools
+
+```ts
+// packages/memory/src/tools.ts — registered via defineTool (§2.3)
+oa_memory_search:  // args: { q: string, category?: string, limit?: int ≤ 8 }
+                   // substring/keyword over text + category. The store is small
+                   // (target < 10k entries); an in-memory scan over parsed lines
+                   // is fine at this size — the same stat-keyed cache pattern as
+                   // the task store applies. Optional embedding re-ranking via
+                   // offload when a backend exists: OFF by default (§16).
+oa_memory_list:    // args: { limit?: int ≤ 20 } — recent entries + pending count, for the block.
+```
+
+**No auto-injection in this slice.** Agents search when the task warrants it; the Lead's guidance gains one line ("check oa_memory_search when a bean touches ground you've covered before"). Auto-recall — the historian deciding what to surface per turn — is future work (§14) precisely because doing it badly poisons contexts silently.
+
+### 4.5 Forward compatibility
+
+When a real historian lands (2f or later), `memory.jsonl` migrates into whatever store it brings. The contract that survives is the inbox: candidates arrive as board records, a person decides, refusals and approvals are audited. Anything built against §4.3/§4.4 keeps working; only the store and the search backend change.
+
+### 4.6 Exit tests (2a)
+
+- Round-trip: a harvested candidate → approve → a `memory.jsonl` line exists → `oa_memory_search` finds it by a term in its text.
+- A rejected candidate never enters the store; its record shows `state: 'rejected'`.
+- An agent calling `oa_memory_decide` — directly and through an MCP-prefixed name — is blocked **with the hook rule disabled** (the map alone must hold; §8.2's lesson).
+- A seeded secret in a candidate never reaches `memory.jsonl` (redaction ran first).
+- The prime block does not grow (no memory injection): token test.
+
+---
+
+## 5. `@openagentsy/footprint`: the estimator
 
 This package is pure TypeScript with no I/O. Every quantity is an interval, `[lo, hi]`.
 
-### 4.1 Types
+### 5.1 Types
 
 ```ts
 // packages/footprint/src/types.ts
@@ -650,7 +767,7 @@ export interface SiteProfile {
 }
 
 export interface Usage {
-  outputTokens: number;         // output + reasoning (reasoning counted once; see §5.2)
+  outputTokens: number;         // output + reasoning (reasoning counted once; see §6.2)
   inputTokens: number;          // fresh input
   cacheReadTokens: number;
   cacheWriteTokens: number;
@@ -667,7 +784,7 @@ export interface Impact {
 }
 ```
 
-### 4.2 Constants, quoted from the methodology
+### 5.2 Constants, quoted from the methodology
 
 ```ts
 // packages/footprint/src/constants.ts
@@ -687,7 +804,7 @@ export const TCRE_C_PER_KG: Range = [0.27e-15, 0.63e-15];
 export const TCRE_BEST_C_PER_KG = 0.45e-15;
 ```
 
-### 4.3 Core math
+### 5.3 Core math
 
 ```ts
 // packages/footprint/src/estimate.ts
@@ -749,7 +866,7 @@ function dominant(a: ModelArch, s: SiteProfile): Impact['dominantUncertainty'] {
 
 **Prefill extension (Phase 2b).** The term is `E_prefill = k_in·P_active·T_in + k_cache·P_active·T_cache_read`. Fit `k_in` from ML.ENERGY prefill measurements and set `k_cache` to a small fraction of `k_in`. The fit and its data go into `packages/footprint/data/prefill-fit.json`, with the notebook in `scripts/`. It **doesn't ship until the fit is reviewed.**
 
-### 4.4 Resolving the model and site
+### 5.4 Resolving the model and site
 
 ```ts
 // packages/footprint/src/resolve.ts
@@ -780,7 +897,7 @@ Provider site defaults, taken from EcoLogits:
 
 **VERIFY** the world-default values and the current provider table against the EcoLogits release you pin. Store the version string in `data/SOURCES.md`.
 
-### 4.5 Tests
+### 5.5 Tests
 
 - **Golden test.** For 20 fixed `(model, usage)` pairs, run the Python `ecologits` library offline once with `scripts/golden.py` and commit the JSON. Our point estimates (using range midpoints and a dense model) must match within 1%.
 - **Worked example as a unit test.** P_total 300B, P_active 30B, 150k output tokens, 60 tok/s, PUE 1.2 and a 0.4 kg/kWh grid must give:
@@ -793,18 +910,19 @@ Provider site defaults, taken from EcoLogits:
 
 ---
 
-## 5. `@openagentsy/ledger`: tokens, cost, waste, outcomes
+## 6. `@openagentsy/ledger`: tokens, cost, waste, outcomes
 
 The ledger stores **numbers only**: token counts, model IDs, timestamps, task IDs and commit SHAs. It never stores prompts, completions or code, which follows TokenTracker's privacy rule [^tt]. Transcripts stay in OpenCode's own storage.
 
-### 5.1 Schema (`.openagentsy/ledger.db`, SQLite)
+### 6.1 Schema (`.openagentsy/ledger.db`, SQLite, at the state root §3.9)
 
 ```sql
 CREATE TABLE IF NOT EXISTS usage (
   message_id      TEXT PRIMARY KEY,        -- dedup key (OpenCode message id)
   session_id      TEXT NOT NULL,
   root_session_id TEXT NOT NULL,           -- Lead session; subagents roll up here
-  role            TEXT,                    -- lead | scout | researcher | builder | reviewer | advisor | archivist | offload
+  role            TEXT,                    -- RESOLVED role key: lead | scout | researcher | builder | reviewer | advisor | archivist | offload
+  role_raw        TEXT,                    -- unresolved agent id, backfilled rows only; excluded from per-role reports (§6.2)
   provider        TEXT NOT NULL,
   model           TEXT NOT NULL,
   input           INTEGER NOT NULL DEFAULT 0,
@@ -839,11 +957,13 @@ CREATE TABLE IF NOT EXISTS footprint (
 );
 ```
 
-### 5.2 Ingest
+**The `role` column stores the resolved role key**, never the raw agent id. The Phase 1 remediation fixed the resolver (`roleKeyForAgent`); the ingest path normalizes through the adapter's resolution before writing. The Budget block's "tokens by role" and every per-role report inherit correctness from this one rule — the previous revision inherited the CRITICAL bug instead, by not stating it.
+
+### 6.2 Ingest
 
 ```ts
 // packages/ledger/src/ingest.ts
-import { Database } from 'bun:sqlite';                // OpenCode loads plugins under Bun ($ is BunShell) and the repo runs on Bun (§1); no native sqlite dependency
+import { Database } from 'bun:sqlite';                // one runtime everywhere (§1); no native sqlite dependency
 
 export function recordAssistantMessage(db: Database, m: OcAssistantMessage, ctx: IngestCtx) {
   const t = m.tokens ?? {};
@@ -863,11 +983,13 @@ export function recordAssistantMessage(db: Database, m: OcAssistantMessage, ctx:
 const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 ```
 
+`ctx.role` arrives **already resolved** from the adapter (the landed resolver); the ledger never sees `agentsy` where it means `lead`.
+
 Field names (`providerID`, `modelID`, `tokens.cache.read`) follow OpenCode's message shape as read by streetturtle's `session-tokens` plugin [^bs]. That plugin reads `message.model.id` on V2. **VERIFY** both shapes in the Phase 1 adapter, and normalise them there.
 
-**Backfill (optional, opt-in).** Open `~/.local/share/opencode/opencode.db` read-only, plus any `opencode-<channel>.db`, and skip the `-wal`/`-shm` sidecars, as tokscale does [^tokscale]. Import past sessions with `INSERT OR IGNORE`. **VERIFY** the table schema for the OpenCode version you pin; it is internal and can change.
+**Backfill (optional, opt-in).** Open `~/.local/share/opencode/opencode.db` read-only, plus any `opencode-<channel>.db`, and skip the `-wal`/`-shm` sidecars, as tokscale does [^tokscale]. Import past sessions with `INSERT OR IGNORE`. **VERIFY** the table schema for the OpenCode version you pin; it is internal and can change. Backfill cannot resolve role keys for imported messages (the raw agent id is all that exists there); those rows carry the unresolved id in a `role_raw` column and are excluded from per-role reports rather than mis-attributed.
 
-### 5.3 Pricing chain
+### 6.3 Pricing chain
 
 Prices are tried in this order, and the first hit wins:
 
@@ -879,25 +1001,26 @@ Prices are tried in this order, and the first hit wins:
 
 Every source is cached for 24 hours on disk under `~/.cache/openagentsy/pricing/`. A copy bundled at build time covers offline use. Tiered pricing (rates that change above a token threshold) is respected when the source provides it.
 
-### 5.4 Waste signals (agent waste, not user scoring)
+### 6.4 Waste signals (agent waste, not user scoring)
 
-| Signal | Detection | Tokens counted |
+| Signal | Detection (specified) | Tokens counted |
 | --- | --- | --- |
 | `retry` | The same tool with the same normalised args within 3 calls, after an error | The repeated call's turn |
 | `tool_error_loop` | 3 or more consecutive tool errors in one subagent | Those turns |
 | `interrupted` | The user cancels a turn mid-stream (OpenCode abort event) | That turn's tokens |
 | `undo` | `/undo` or a revert of the agent's last change | Tokens of the undone turn |
-| `reverted_code` | Lines committed under a `Refs:` trailer that are deleted again within 14 days (`git log -L` / blame diff in a nightly job) | Builder tokens for that task × the share of lines lost |
-| `cache_miss` | `cache_read / (input + cache_read)` below 0.5 on a turn whose prefix was unchanged | Uncached input |
+| `reverted_code` | `oa ledger scan-reverts`: walks `git log --since` for `Refs:`-trailed commits whose changed lines are deleted again within 14 days (`git log -L` / blame diff). **A command, not a daemon**: run by the person or the Lead on demand; users who want it nightly schedule it themselves. | Builder tokens for that task × the share of lines lost |
+| `cache_miss` | A turn with **no new user parts since the previous assistant message** (a retry or continuation — detectable from the message list: same parent, no intervening user message) whose `cache_read / (input + cache_read)` is below 0.5. The prefix was unchanged by definition, so a low cache ratio is the model's problem, not the user's. | Uncached input |
+| `no_progress` | A Lead round that dispatched nothing, consumed no results and changed nothing on the board (§8.7) | The round's tokens |
 
 **There is no "frustration score" about the person.** The Budget block shows "18% of tokens went to retries, undos and reverted code". It never characterises the user.
 
-### 5.5 Outcomes: tokens per result
+### 6.5 Outcomes: tokens per result
 
 Outcomes are filled in from three sources:
 
 - task transitions (`completed`, `scrapped`) in the tasks store;
-- `Refs: <task-id>` trailers found by `git log --since`;
+- `Refs: <task-id>` trailers found by `git log --since` — the pre-commit hook requires the trailer on agent commits (`OPENAGENTSY_AGENT=1`, §8.3);
 - PR merges seen by the `pr` integration mode.
 
 From those, the ledger reports **tokens per completed task** and **tokens per merged commit**. These are the Phase 2 exit metrics, compared with Phase 1 and with plain OpenCode. The idea is TokenTracker's "effective tokens" outcomes sidecar, applied to task results [^tt].
@@ -910,15 +1033,28 @@ WHERE o.kind = 'task_completed' AND o.ts > datetime('now','-30 days')
 GROUP BY o.task_id;
 ```
 
-### 5.6 Exports
+### 6.6 Exports
 
-`oa ledger export --json` writes the counters only, using a schema documented in `packages/ledger/SCHEMA.md`. Because tokscale and TokenTracker already read OpenCode's own database, people who use those tools get the same sessions without any work from us. Nothing is uploaded. There is no leaderboard, streak or achievement feature (§12).
+`oa ledger export --json` writes the counters only, using a schema documented in `packages/ledger/SCHEMA.md`. Because tokscale and TokenTracker already read OpenCode's own database, people who use those tools get the same sessions without any work from us. Nothing is uploaded. There is no leaderboard, streak or achievement feature (§14).
+
+### 6.7 Budgets: caps in the board, usage in the ledger (reconciliation)
+
+Phase 1 shipped two budget mechanisms and never reconciled them: the board's self-reported `recordUsage` (overwrite semantics, guarded but still self-reported) and the prompt guidance telling the Lead to set caps and builders to check them. Phase 2 makes the split clean:
+
+| Concern | Owner | Mechanism |
+| --- | --- | --- |
+| The **cap** (how many tokens a bean may spend) | the board | `board_budget_set` — permission-mapped to the Lead, as landed. A target someone chose. |
+| The **usage** (how many tokens were actually spent) | the ledger | measured per message (§6.2), summed by `task_id`. Nobody self-reports anything. |
+| The **stop verdict** | the board, computed | `board_budget op=check` reads the bean's usage **from the ledger** and compares it to the cap. The boolean the builder is told to obey (roles.yaml, landed) is now backed by measured numbers. |
+
+- The board's `recordUsage` self-reporting path is **deprecated in 2b** (it keeps working, audited, for old clients) and **removed in 2c**. The landed monotonic guard made it safe; the ledger makes it unnecessary.
+- Exit test (2b): a budget-stop scenario where the ledger records usage the builder never self-reported, and the stop verdict fires on the measured number.
 
 ---
 
-## 6. `@openagentsy/sidebar`: TUI blocks
+## 7. `@openagentsy/sidebar`: TUI blocks
 
-### 6.1 V2 entry point
+### 7.1 V2 entry point
 
 This follows the structure of streetturtle's `session-tokens` plugin, which is the only V2 sidebar source we have read directly [^bs]:
 
@@ -945,7 +1081,7 @@ export default Plugin.define({
 });
 ```
 
-### 6.2 Shared hook: usage for the whole session family
+### 7.2 Shared hook: usage for the whole session family
 
 ```tsx
 // packages/sidebar/src/use-family-usage.ts
@@ -980,7 +1116,7 @@ export function useFamilyUsage(sessionID: () => string) {
 }
 ```
 
-### 6.3 Footprint block
+### 7.3 Footprint block
 
 ```tsx
 // packages/sidebar/src/blocks/footprint.tsx
@@ -1004,7 +1140,7 @@ export function FootprintBlock(props: { sessionID: string }) {
           { prefill: cfg().prefill ? cfg().prefillCoeff : undefined });
   })));
 
-  const t = () => ctx.theme;                      // normal text colours only — no alarm colours (§6.6)
+  const t = () => ctx.theme;                      // normal text colours only — no alarm colours (§7.6)
   return (
     <Show when={rows().length > 0}>
       <box>
@@ -1043,17 +1179,17 @@ Formatting rules:
 - `fmtSci` prints a range like `2.1–5.0 × 10⁻¹⁷`.
 - Every value is shown as a `lo–hi` range rounded to 2 significant figures, never as a single number.
 
-### 6.4 Other blocks (data sources)
+### 7.4 Other blocks (data sources — every source exists in this plan)
 
 | Block | Reads | Notes |
 | --- | --- | --- |
-| Board | The board MCP's counts-only poll (Phase 1, §III.6), plus `detectTaskIds` per worktree | Provisional task states are shown dimmed. |
-| Tasks | `TaskStore.all()` through a file watcher on `.beans/` | Shows in-progress, the next 3 ready tasks, and how many are blocked. Mouse-down on a row inserts `oa_task_show <id>` into the prompt. **VERIFY** the prompt-insert API. |
-| Budget | `ledger.db` for this root session | Tokens by role, cache hit rate, waste %, and tokens per completed task. Also tokens saved by offload. |
-| Memory inbox | Magic Context harvest queue | Each memory gets `a` (approve) or `r` (reject) through `context.keymap.layer`. Rejected memories never enter memory. |
-| Accountability | The `outcome` table, the redaction counter, the hook audit log, lessons awaiting a decision (§7.5), board/report mismatch flags (§7.7), quality waivers (§9.4) and the conformance count (§10) | For example: "3 lessons to review · 2 waivers · conformance 9/14 observed". Links to `oa report --ethical`. |
+| Board | The board MCP's counts-only poll (Phase 1), plus `detectTaskIds` per worktree (§3.8) | Provisional task states are shown dimmed. Leases show age; `board_lease_revoke` (landed) is one keypress away for the Lead. |
+| Tasks | `TaskStore.all()` through the §3.5 cache; a file watcher on `.beans/` refreshes it | Shows in-progress, the next 3 ready tasks, and how many are blocked. Mouse-down on a row inserts `oa_task_show <id>` into the prompt. **VERIFY** the prompt-insert API. |
+| Budget | `ledger.db` for this root session (§6) | Tokens **by resolved role**, cache hit rate, waste %, tokens per completed task, offload savings. Cap vs measured usage per bean (§6.7). |
+| Memory inbox | The board's pending `bean: memory` records (§4.3) — the queue the archivist actually fills | Each candidate gets `a` (approve) or `r` (reject). **VERIFY** `context.keymap.layer` → capability `memory-inbox-keymap` (§11). Rejected candidates never enter memory. |
+| Accountability | The `outcome` table, the redaction counter, the hook audit log, lessons awaiting a decision (§8.5), memory decisions pending (§4.3), board/report mismatch flags (§8.7), quality waivers (§10.4) and the conformance count (§11) | For example: "3 lessons to review · 1 memory to triage · 2 waivers · conformance 10/17 observed". Links to `oa report --ethical` (§12). |
 
-### 6.5 Collapse persistence
+### 7.5 Collapse persistence
 
 ```ts
 // packages/sidebar/src/persist.ts
@@ -1063,13 +1199,13 @@ const FILE = join(homedir(), '.config', 'openagentsy', 'sidebar.json');
 export function useCollapsed(key: string, initial: boolean): [() => boolean, () => void] { /* signal + debounced write */ }
 ```
 
-### 6.6 Framing rules, as code review checks
+### 7.6 Framing rules, as code review checks
 
 - Blocks only use `theme.text.base` and `theme.text.muted`. A unit test that scans the block JSX (or a project-local `packages/quality` rule) fails if a footprint block references `theme.error` or `theme.warning`.
 - No copy contains "you", "your fault", "streak", "today you" or a comparison with other users. A unit test checks this against a list of banned words.
 - `footprint.showWarming` defaults to `true`, and can be set to `false` in `openagentsy.jsonc`.
 
-### 6.7 V1 fallback
+### 7.7 V1 fallback
 
 ```ts
 // packages/sidebar/src/v1.ts
@@ -1092,16 +1228,17 @@ The `/oa status` and `/oa footprint` commands live in `.opencode/command/*.md` a
 
 Packaging follows the existing community plugins:
 
-- `@openagentsy/sidebar@2.x` exports `dist/tui.js`, with `@opentui/solid` and `solid-js` as peer dependencies. The build is `bun build` with the Solid transform, or esbuild with `babel-preset-solid` for this package only (§1.1).
+- `@openagentsy/sidebar@2.x` exports `dist/tui.js`, with `@opentui/solid` and `solid-js` as peer dependencies. The build is `bun build` with the Solid transform, or esbuild with `babel-preset-solid` for this package only (§1.3).
 - `@openagentsy/sidebar@1.x` exports `dist/v1.js`.
 - **One package per runtime.** OpenCode rejects a module whose default export has both `server` and `tui` [^tai], so a single package can't serve both.
-- **V1 loading rules.** A V1 user lists the package under the **singular** `plugin` key in `opencode.json`. The plural `plugins` key is V2's name; V1 drops it with only a log warning, so plugins listed there never load. Both packages set `engines.opencode`.
+- **Engines per §1.4**: `1.x → ">=1.19 <2"`, `2.x → ">=2.0 <3"`. A `<2` ceiling here would make 2.x hosts skip the 2.x sidebar — the exact mistake revision 1 generalized to every package.
+- **V1 loading rules.** A V1 user lists the package under the **singular** `plugin` key in `opencode.json`. The plural `plugins` key is V2's name; V1 drops it with only a log warning, so plugins listed there never load.
 
 ---
 
-## 7. `@openagentsy/hooks`: deterministic guardrails
+## 8. `@openagentsy/hooks`: deterministic guardrails
 
-### 7.1 Use agentsy's registry directly
+### 8.1 Use agentsy's registry directly
 
 `@agentsy/runtime` already provides a priority-ordered `HookRegistry`. Its handlers return:
 
@@ -1124,38 +1261,53 @@ export function createOaRegistry(rules: Rule[]): HookRegistry {
 }
 ```
 
-### 7.2 OpenCode bridge
+### 8.2 OpenCode bridge — the facts, as measured
 
-**How OpenCode calls plugin hooks.** These facts come from a hook table generated from OpenCode v1.19.4's own source [^tai], checked against the community guides [^jl] [^rsc]:
+**How OpenCode calls plugin hooks.** The table below mixes two kinds of fact: what the generated source table says [^tai], and what this repo has **measured** on the pinned binary. Where they disagree, the design follows the measurement — that disagreement is not hypothetical; it is why Phase 1's permission map exists.
 
 | agentsy event | OpenCode 1.x hook | Can it block or change the call? |
 | --- | --- | --- |
-| `PreToolCall` | `tool.execute.before (input{tool,sessionID,callID}, output{args})` | **Yes.** Throw to stop the call. Change fields of `output.args` **in place**; assigning a new object to `output.args` has no effect. |
+| `PreToolCall` | `tool.execute.before (input{tool,sessionID,callID}, output{args})` | **Built-in tools (write, edit, bash, …): yes.** Throw to stop the call; mutate fields of `output.args` **in place** — assigning a new object to `output.args` has no effect. **MCP tools: [measured] does not fire on the pinned binary.** The v1.19.4 source table routes MCP calls through this hook as `<server>_<tool>` [^tai], but the Phase 1 measurement found it does not fire, and the README records this as "Decisions that differ" #2 — the permission map was built because of it. **Design rule: no security property may depend on this hook firing for an MCP call.** Conformance capability `mcp-tool-prefix` (§11) stays `unverified` until observed on a pinned version. |
 | `PostToolCall` | `tool.execute.after (input{…,args}, output{title,output,metadata})` | It can rewrite what the model sees, because `output.output` is writable. A throw shows the model a tool error, but the tool has already run. |
 | `UserPromptSubmit` | `chat.message` | It can change `output.parts`. |
-| `PreCompact` | `experimental.session.compacting` | It can push to `context` or replace `prompt`. |
-| `PreResponse` | `experimental.text.complete (output{text})` | It can flag the text, or annotate it. Output checks (§7.6) only flag. |
-| Model-call params | `chat.params` / `chat.headers` | The effort ladder sets `maxOutputTokens` here. |
-| Shell environment | `shell.env (input{cwd,sessionID}, output{env})` | It controls the environment of agent shells (§7.3). |
+| `PreCompact` | `experimental.session.compacting` | It can push to `context` or replace `prompt`. Compaction is on by default since the remediation, so this hook has a real event to catch. |
+| `PreResponse` | `experimental.text.complete (output{text})` | It can flag the text, or annotate it. Output checks (§8.6) only flag. |
+| Model-call params | `chat.params` / `chat.headers` | The effort ladder sets `maxOutputTokens` here (landed). |
+| Shell environment | `shell.env (input{cwd,sessionID}, output{env})` | It controls the environment of agent shells (§8.3). |
 | `SubagentStop`, `session.idle`, `PostResponse` | `event` | **Observe only.** OpenCode doesn't await the `event` hook, so nothing that must block can live here. |
 | Permission decisions | `permission.ask` | **Unusable.** It's declared in the types, but nothing in v1.19.4 calls it (anomalyco/opencode#7006). |
 
 Two more facts shape the code:
 
-- **MCP tools pass through `tool.execute.before` as `<server>_<tool>`.** Rules therefore match on the base tool name (`baseTool()` below), so the board MCP's tools can't slip past a rule written for `oa_*`.
-- **Plugins run one after another on the same `output` object.** A plugin loaded after ours could change `args` after our checks pass. `oa conformance` lists any other loaded plugin with a `tool.execute.before` hook as a warning (§10).
+- **Plugins run one after another on the same `output` object.** A plugin loaded after ours could change `args` after our checks pass. `oa conformance` lists any other loaded plugin with a `tool.execute.before` hook as a warning (§11).
+- **Hook facts are pinned, not permanent.** The bridge is written against the table above; `oa conformance` (§11) is how a new OpenCode version tells us the table moved. `args-mutate-in-place` and `mcp-tool-prefix` are capabilities precisely because they are the two facts most likely to drift.
 
 The `stop` hook that some guides show [^jl] isn't in v1.19.4's hook table, so OpenAgentsy doesn't use it. Two other guides show shapes that don't match the source, and neither shape is used: a nested `tool: { execute: { before } }` object with a `plugins` key [^devto], and an `output.abort` field [^zeke].
+
+**Resolving base tool names.** MCP tools arrive as `<server>_<tool>`. Revision 1 stripped the prefix with a regex tuned to `oa_` (`/^[a-z0-9-]+_(?=oa_)/i`) — which let every `board_*` tool through untouched, exactly the class of hole the permission map exists to close. The bridge resolves base names against the **registered tool vocabulary**, by longest-suffix match:
+
+```ts
+// packages/hooks/src/base-tool.ts
+import { boardToolNames } from '@openagentsy/core';                 // board_record, board_lease, board_lease_grant,
+                                                                    // board_lease_revoke, board_budget, board_budget_set,
+                                                                    // board_classify (landed set)
+import { taskToolNames } from '@openagentsy/tasks';                 // oa_task_*
+import { memoryToolNames } from '@openagentsy/memory';              // oa_memory_*
+
+const VOCAB = [...boardToolNames, ...taskToolNames, ...memoryToolNames]
+  .sort((a, b) => b.length - a.length);                             // longest first, so suffix match is unambiguous
+
+/** "openagentsy-board_board_record" → "board_record"; "oa_task_list" → "oa_task_list". */
+export const baseTool = (name: string) => VOCAB.find((t) => name === t || name.endsWith(`_${t}`)) ?? name;
+```
 
 ```ts
 // packages/hooks/src/v1.ts
 import type { Plugin } from '@opencode-ai/plugin';
 
-const baseTool = (name: string) => name.replace(/^[a-z0-9-]+_(?=oa_)/i, '');   // "openagentsy-board_oa_board_dispatch" → "oa_board_dispatch"
-
 export const OpenAgentsyHooks: Plugin = async ({ directory, client }) => {
   const reg = createOaRegistry(defaultRules({ workspace: directory }));
-  await client.app.log({ body: { service: 'openagentsy', level: 'info', message: 'hooks loaded' } });  // conformance: plugin-loaded (§10)
+  await client.app.log({ body: { service: 'openagentsy', level: 'info', message: 'hooks loaded' } });  // conformance: plugin-loaded (§11)
   return {
     'tool.execute.before': async (input, output) => {
       const files = changedFiles(input.tool, output.args);                     // normalised; see below
@@ -1169,7 +1321,7 @@ export const OpenAgentsyHooks: Plugin = async ({ directory, client }) => {
         files: changedFiles(input.tool, input.args), result: output, sessionId: input.sessionID });
       if ('transform' in res && res.transform.appendToResult) output.output += `\n\n${res.transform.appendToResult}`;
     },
-    'shell.env': async (_input, output) => { applyShellEnvPolicy(output.env); },  // §7.3
+    'shell.env': async (_input, output) => { applyShellEnvPolicy(output.env); },  // §8.3
     'experimental.text.complete': async (input, output) => {
       await reg.fire({ type: 'PreResponse', text: output.text, sessionId: input.sessionID });   // flags only
     },
@@ -1183,29 +1335,43 @@ export const OpenAgentsyHooks: Plugin = async ({ directory, client }) => {
 ```ts
 // packages/hooks/src/files.ts
 const WRITE_TOOLS = new Set(['write', 'edit', 'multiedit', 'patch', 'apply_patch']);
-export function changedFiles(tool: string, args: any): FileChange[] {
+type ToolArgs = Record<string, unknown>;        // the SDK hands us unknown shapes; narrow, never `any`
+
+export function changedFiles(tool: string, args: ToolArgs): FileChange[] {
   if (!WRITE_TOOLS.has(tool)) return [];
-  if (tool === 'apply_patch' || tool === 'patch') return parsePatchHeaders(args.patchText ?? args.patch ?? '');  // *** Add/Update/Delete/Move File
-  return [{ operation: tool === 'write' ? 'add' : 'modify', path: args.filePath }];
+  if (tool === 'apply_patch' || tool === 'patch') return parsePatchHeaders(pickString(args, 'patchText', 'patch') ?? '');
+  const path = pickString(args, 'filePath', 'file_path', 'path');
+  return path ? [{ operation: tool === 'write' ? 'add' : 'modify', path }] : [];
 }
 ```
 
-- **Rules use `e.files`.** `workspace-writes-only`, `protect-policy`, `secret-scan-writes` and the quality hook (§9.4) all read `e.files`, never a single `targetPath`.
+- **Rules use `e.files`.** `workspace-writes-only`, `protect-policy`, `secret-scan-writes` and the quality hook (§10.4) all read `e.files`, never a single `targetPath`.
 - **Why this matters for `apply_patch`.** One patch can touch several files, including a protected one, or rename a file into a protected path. The before-hook has to parse the patch headers itself, because the tool hasn't run yet.
-- **Tested.** A fixture patch that changes `src/a.ts` and also moves a file onto `openagentsy.jsonc` must be blocked.
+- **Tested.** A fixture patch that changes `src/a.ts` and also moves a file onto `roles.yaml` must be blocked.
 
 **Model output can't override a blocking rule.**
 
-- Blocking rules run inside the plugin process, before the tool runs.
-- The only way past one is a person editing `openagentsy.jsonc`. An agent's attempt to edit that file is blocked by the `protect-policy` rule below.
+- Blocking rules run inside the plugin process, before the tool runs — for the tools where the hook fires (built-ins). For MCP tools, blocking lives in the permission map (§8.3), which no model output can touch either.
+- The only way past one is a person editing `openagentsy.jsonc` or `roles.yaml` — both PROTECTED (§8.3). An agent's attempt to edit either is blocked and audited.
 
-### 7.3 Default rules
+### 8.3 Default rules
 
 ```ts
 // packages/hooks/src/rules.ts
-const GIT_SKIP_HOOKS = /\bgit\b[^|;&]*\b(commit|push|merge|rebase)\b[^|;&]*(\s--no-verify\b|\s-n\b)|\bHUSKY=0\b|\bcore\.hooksPath\b/;
+// --no-verify anywhere in a git commit/merge/rebase segment; bare `-n` only when it directly
+// follows `git commit` (revision 1's /\s-n\b/ false-positived on `git commit -m "fix -n handling"`).
+const GIT_SKIP_HOOKS =
+  /\bgit\b[^|;&]*\b(commit|merge|rebase)\b[^|;&]*\s--no-verify\b|\bgit\s+commit\s+-n\b|\bHUSKY=0\b|\bcore\.hooksPath\b/;
 const OTHER_PM = /(^|[\s;&|(])(pnpm|yarn|npx|npm\s+(i|install|ci|add|exec))\b/;
-const PROTECTED = /(^|\/)(openagentsy\.jsonc|biome\.jsonc|turbo\.json|bunfig\.toml|bun\.lock)$|(^|\/)\.husky\/|(^|\/)\.openagentsy\/(lessons\/|quality\/waivers\.json|conformance\.json)/;
+
+// The trust boundary is wider than revision 1 had it: roles.yaml IS the permission
+// map's source, the .opencode/ tree holds the generated agent files the runtime
+// loads, opencode.json carries host permissions, workflows run CI, templates
+// regenerate the agents, and the model lock is generated by `openagentsy models init`.
+const PROTECTED_FILE = /(^|\/)(roles\.yaml|openagentsy\.models\.lock\.json|openagentsy\.jsonc|biome\.jsonc|turbo\.json|bunfig\.toml|bun\.lock|opencode\.json|opencode\.jsonc)$/;
+const PROTECTED_DIR = /(^|\/)(\.opencode\/|\.husky\/|\.github\/workflows\/|templates\/)/;
+const PROTECTED_STATE = /(^|\/)\.openagentsy\/(lessons\/|quality\/waivers\.json|conformance\.json|memory\.jsonl|approvals\.json)/;
+const isProtected = (p: string) => PROTECTED_FILE.test(p) || PROTECTED_DIR.test(p) || PROTECTED_STATE.test(p);
 
 export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
   { id: 'no-skip-git-hooks', event: 'PreToolCall', block: true,
@@ -1224,15 +1390,18 @@ export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
       : { continue: true } },
 
   { id: 'protect-policy', event: 'PreToolCall', block: true,
-    handler: async (e) => e.files.some((f) => PROTECTED.test(f.path) || (f.fromPath && PROTECTED.test(f.fromPath)))
-      ? { continue: false, reason: 'Policy, build-config, lockfile, hook, lesson and waiver files are changed by a person (or, for bun.lock, by `bun add`). Propose the change in chat.' }
+    handler: async (e) => e.files.some((f) => isProtected(f.path) || (f.fromPath && isProtected(f.fromPath)))
+      ? { continue: false, reason: 'Policy, role, permission, build-config, lockfile, hook, workflow, lesson and waiver files are changed by a person (or, for bun.lock, by `bun add`; for roles.yaml and templates, by running the generator). Propose the change in chat.' }
       : { continue: true } },
 
-  // Human-only decisions: agents may propose lessons and waivers, never decide them (§7.5, §9.4).
-  // toolName is already the base name, so an MCP-prefixed "<server>_oa_lesson_decide" is caught too.
+  // Human-only decisions: agents may propose lessons, waivers and memory promotions,
+  // never decide them (§4.3, §8.5, §10.4). PRIMARY enforcement is the permission map —
+  // roles.yaml denies these three tools to every agent role — because the hook cannot
+  // see MCP calls on the pinned binary [measured] (§8.2). This rule is defense-in-depth
+  // for built-in-tool paths and for any host where the MCP routing does fire.
   { id: 'human-only-decisions', event: 'PreToolCall', block: true,
-    handler: async (e) => ['oa_lesson_decide', 'oa_quality_waive'].includes(e.toolName)
-      ? { continue: false, reason: 'Lesson decisions and quality waivers are recorded by a person (/oa lesson, /oa waive). Propose it in chat with your evidence.' }
+    handler: async (e) => ['oa_lesson_decide', 'oa_quality_waive', 'oa_memory_decide'].includes(e.toolName)
+      ? { continue: false, reason: 'Lesson decisions, quality waivers and memory promotions are recorded by a person (/oa lesson, /oa waive, /oa memory). Propose it in chat with your evidence.' }
       : { continue: true } },
 
   { id: 'secret-scan-writes', event: 'PreToolCall', block: true,
@@ -1243,31 +1412,42 @@ export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
   { id: 'destructive-needs-approval', event: 'PreToolCall', block: true,
     handler: approvalGate(/(^|\s)(rm\s+-rf|git\s+push\s+--force|git\s+reset\s+--hard|drop\s+table)\b/i) },
 ];
-
-/** shell.env: what every agent shell sees. Tightens only; never adds credentials. */
-export function applyShellEnvPolicy(env: Record<string, string>) {
-  for (const k of ['HUSKY', 'HUSKY_SKIP_HOOKS', 'SKIP_SIMPLE_GIT_HOOKS', 'TOGETHER_API_KEY']) delete env[k];
-  env.TURBO_TELEMETRY_DISABLED = '1';
-  env.OPENAGENTSY_AGENT = '1';      // lets the pre-commit hook require a Refs: <task-id> trailer on agent commits (§5.5)
-}
 ```
+
+**Corresponding `roles.yaml` additions (the primary enforcement).** Deny by tool name, for every agent role, mirroring the landed `board_lease_grant` pattern: `openagentsy_lesson_decide`, `openagentsy_quality_waive`, `openagentsy_memory_decide`. The 2c exit test proves the guarantee **in both directions**: (a) with the hook rule disabled, the permission map alone blocks the call; (b) with the maps regenerated without the denies, the hook rule still blocks it. A security property is proven when each layer holds alone, not when both hold together.
+
+**Sanctioned write paths.** `roles.yaml`, `templates/` and the generated agent files change by running `openagentsy build` / `openagentsy models init` — a person runs the generator, the generator writes the files. To make out-of-band edits visible anyway, doctor (extended in 2c) gains a **regeneration-diff check**: it regenerates into a temp directory and diffs against the installed `.opencode/agent/` files; a mismatch is a warning naming the exact reconcile command. The landed doctor already checks config discovery and lease staleness; this extends the same posture to the permission maps themselves.
 
 **Approvals, given that `permission.ask` is never called.** A plugin can't answer OpenCode's permission prompt, so the approval flow has two parts:
 
-1. **Ask through OpenCode's own permission config.** The plugin's `config` hook merges *tightening-only* entries into OpenCode's `permission` config, for example `"bash": { "git push*": "ask", "gh pr merge*": "ask", "bun add *": "ask" }`. These come from `hooks.approvalFor` (§11). OpenCode then shows its normal prompt, and the person answers it.
+1. **Ask through OpenCode's own permission config.** The plugin's `config` hook merges *tightening-only* entries into OpenCode's `permission` config, for example `"bash": { "git push*": "ask", "gh pr merge*": "ask", "bun add *": "ask" }`. These come from `hooks.approvalFor` (§13). OpenCode then shows its normal prompt, and the person answers it.
    - The merge can change `allow` → `ask` or `ask` → `deny`, never the other way round. A unit test checks that.
    - **VERIFY** that changes made in the `config` hook reach the permission evaluator in the pinned version. If they don't, `oa init` writes the same entries into `opencode.json`, and that edit is shown to the person as a diff.
-2. **Block anything the permission config can't express.** Examples are `rm -rf` inside a compound command, and SQL in a heredoc. `approvalGate` throws in `tool.execute.before` with a reason naming the slash command a person can run instead (for instance `/oa approve <callID>`, which allow-lists that exact call for 5 minutes). agentsy's `createApprovalHook` and `isDestructiveTool` classify the call; they don't do the prompting.
+2. **Block anything the permission config can't express.** Examples are `rm -rf` inside a compound command, and SQL in a heredoc. `approvalGate` throws in `tool.execute.before` with a reason naming the escape hatch: `/oa approve <callID>`.
+   - **`/oa approve` storage and TTL (specified).** The command appends `{ callID, expiresAt }` to `.openagentsy/approvals.json` at the state root (§3.9; the file is PROTECTED above). `approvalGate` checks the list before throwing: a matching, unexpired entry passes **once** and is removed; expired entries are pruned on read. Every grant and use is audited (`oa.approve.granted`, `oa.approve.used`), so the approval trail is on the record like everything else.
 
 **Plugin versus YAML shell hooks.** opencode-yaml-hooks [^yamlhooks] and openhooks [^openhooks] let people declare shell hooks in YAML. In opencode-yaml-hooks, a script exiting with code 2 blocks the tool. We don't ship a YAML layer, for three reasons:
 
 - **Environment.** Those actions inherit the full `process.env`. Our rules run in-process instead, with `shell.env` tightening what shells receive.
 - **One source of rules.** A second rule language would split where policy lives.
-- **Nothing is lost.** People who want YAML hooks can install either plugin alongside ours. `oa conformance` will list it in the plugin-order warning above.
+- **Nothing is lost.** People who want YAML hooks can install either plugin alongside ours. `oa conformance` will list it in the plugin-order warning (§11).
 
 Two ideas from them are adopted: the `file.changed` normalisation above, and opencode-yaml-hooks' `scope: main | child`. Our version is `Rule.roles?: Role[]`, for example a rule that applies only to builder subagents.
 
-### 7.4 Secret redaction when anything is written to storage
+**Shell environment policy.**
+
+```ts
+/** shell.env: what every agent shell sees. Tightens only; never adds credentials. */
+export function applyShellEnvPolicy(env: Record<string, string>) {
+  for (const k of ['HUSKY', 'HUSKY_SKIP_HOOKS', 'SKIP_SIMPLE_GIT_HOOKS', 'TOGETHER_API_KEY', 'TYPESAFE_API_KEY']) delete env[k];
+  env.TURBO_TELEMETRY_DISABLED = '1';
+  env.OPENAGENTSY_AGENT = '1';      // lets the pre-commit hook require a Refs: <task-id> trailer on agent commits (§6.5)
+}
+```
+
+`TYPESAFE_API_KEY` joins the strip list: the classifier's key belongs to the board MCP process, never to an agent shell. (The classifier's data egress — request text to `api.typesafe.ai` when the key is set — is documented in the README since the remediation; §14 keeps that honest by refusing hidden network calls everywhere else.)
+
+### 8.4 Secret redaction when anything is written to storage
 
 ```ts
 // packages/hooks/src/secrets.ts
@@ -1284,9 +1464,9 @@ export function findSecrets(s: string) { /* PATTERNS + Shannon entropy > 4.0 on 
 export function redact(s: string): { text: string; count: number } { /* replace with «redacted:<name>» */ }
 ```
 
-`redact()` runs on everything that gets stored: board records, harvested memories, archived task bodies and Accountability reports. Each redaction increments the counter shown in the Accountability block. The test fixtures include a key with real secret shape, which must never appear in `.openagentsy/` after a scenario run.
+`redact()` runs on everything that gets stored: board records, harvested memory candidates (before they can be approved, §4.2), `memory.jsonl` writes, archived task bodies and Accountability reports. Each redaction increments the counter shown in the Accountability block. The test fixtures include a key with real secret shape, which must never appear in `.openagentsy/` after a scenario run.
 
-### 7.5 Lessons: reviewed self-improvement
+### 8.5 Lessons: reviewed self-improvement
 
 This section is adapted from zhaono1/agent-playbook's self-improving-agent and eval-artifact contract (MIT) [^apb]. It replaces a simple propose/approve patch queue with explicit states, a required "start packet", and executable proof.
 
@@ -1341,10 +1521,11 @@ export interface Decision { decidedBy: string; reason: string; evalResult?: Eval
 3. project instructions;
 4. a memory note.
 
-An `instructions` or `memory` owner needs a one-line `ownerJustification` explaining why code or a skill can't hold the lesson. This follows the same Hook/Prompt Axiom as the rest of §7.
+An `instructions` or `memory` owner needs a one-line `ownerJustification` explaining why code or a skill can't hold the lesson. This follows the same Hook/Prompt Axiom as the rest of §8.
 
 **Capture.** The archivist creates candidates in two cases:
-- the same waste kind with similar normalised detail appears in 3 or more sessions (§5.4);
+
+- the same waste kind with similar normalised detail appears in 3 or more sessions (§6.4);
 - the user makes an explicit correction.
 
 Candidates are deduplicated by normalised summary, which increments `occurrences`. A higher count raises priority only; it is not evidence. All text fields pass through `redact()`, and lessons are stored in `.openagentsy/lessons/<id>.json`.
@@ -1374,12 +1555,14 @@ export const EvalArtifact = z.object({
 ```
 
 Runner rules:
+
 - Spawn with `shell: false`.
 - Pass only `PATH`, `HOME`, `TMPDIR` and locale variables in the environment.
 - Reject any `cwd` outside the workspace or an OpenAgentsy worktree.
 - Kill the process at the timeout.
 
 The result is written with mode `0600` to `.openagentsy/lessons/evals/<lesson>-<ts>.json`. It holds:
+
 - per-assertion booleans and durations;
 - the artifact's sha256 and a hash of each command.
 
@@ -1394,12 +1577,13 @@ When the baseline can be reproduced, the candidate change is applied in a tempor
 **After application.** Run the representative task again. If behaviour didn't change, the lesson moves to `rolled_back` (revert the commit) or `rejected`.
 
 **Human-only decisions.**
-- `oa_lesson_decide` is blocked for every agent role by the `human-only-decisions` rule (§7.3).
+
+- `oa_lesson_decide` is denied to every agent role by the permission map (§8.3, primary) and by the `human-only-decisions` rule (defense-in-depth).
 - `/oa lessons` is the inbox, sorted by occurrences and recency.
 - `/oa lesson <id> validate|apply|reject|observe` records the decision, with `decidedBy` set to the human user.
-- **No lesson changes an instruction, skill or role file without a human decision.** The red-team exit test checks this.
+- **No lesson changes an instruction, skill or role file without a human decision.** The red-team exit test checks this — with the hook disabled, the map alone must hold.
 
-### 7.6 Output checks (from agentsy SAFETY.md)
+### 8.6 Output checks (from agentsy SAFETY.md)
 
 These run as `PreResponse` handlers, and they **flag** rather than block:
 
@@ -1411,9 +1595,9 @@ These run as `PreResponse` handlers, and they **flag** rather than block:
 | AGI or longtermist framing | Phrases claiming the system replaces engineers, or calling the work "superintelligence". |
 | Scope drift | Files touched outside the active task's stated paths, or tool calls unrelated to the task title. Uses an embedding check from the offload model. |
 
-Flags go to the Accountability block and to `oa report --ethical`. The person decides what to do about them.
+Flags go to the Accountability block and to `oa report --ethical` (§12). The person decides what to do about them.
 
-### 7.7 Lead recovery loop
+### 8.7 Lead recovery loop
 
 This is adapted from agent-playbook's long-task-coordinator [^apb]. Every coordination round the Lead runs has five stages, in this order:
 
@@ -1434,24 +1618,28 @@ The rule text added to the Lead role in `roles.yaml` stays under 120 tokens. The
 
 - **Board round statuses:** `running | awaiting_result | paused | blocked | complete`. `awaiting_result` is valid and is never a failure.
 - **Every delegated item has an owner and a return condition.** The board MCP rejects a dispatch that is missing either one.
-- **The report must match the board.** An observer on `session.idle` compares the status the Lead claims in its last message with the board's round status. A mismatch is flagged in the Accountability block. The `event` hook isn't awaited (§7.2), so this check can only flag a mismatch, never block it.
-- **A round that changed nothing can't claim progress.** A round that dispatched nothing, consumed no results and changed nothing on the board writes a `no_progress` waste event (add it to the `waste.kind` CHECK constraint in §5.1).
+- **The report must match the board.** An observer on `session.idle` compares the status the Lead claims in its last message with the board's round status. A mismatch is flagged in the Accountability block. The `event` hook isn't awaited (§8.2), so this check can only flag a mismatch, never block it.
+- **A round that changed nothing can't claim progress.** A round that dispatched nothing, consumed no results and changed nothing on the board writes a `no_progress` waste event (in the `waste.kind` CHECK constraint, §6.1).
+
+The loop rides two landed fixes: role resolution (the Lead's rounds are attributed to `lead`, not `agentsy`) and session-scoped rungs (a recovery round doesn't move another session's effort ceiling).
 
 ---
 
-## 8. `@openagentsy/offload`: local models for housekeeping
+## 9. `@openagentsy/offload`: local models for housekeeping
 
-### 8.1 What gets offloaded
+### 9.1 What gets offloaded
 
 | Job | Caller | Output contract |
 | --- | --- | --- |
 | Session and task titles | sidebar, tasks | `{ title: string ≤ 60 chars }` |
-| Compaction summaries | the Magic Context `PreCompact` handler | `{ summary: string ≤ 1200 chars, keep: string[] }` |
+| Compaction summaries | **our own `experimental.session.compacting` hook** (§3.5): when the job is enabled, the hook asks the local model to draft the compacted context and pushes it to `output.context`; disabled (default), stock OpenCode compaction runs untouched. Optional quality upgrade, never a dependency — compaction works without any local backend. **VERIFY** the hook's write contract on the pinned version → capability `compaction-hook` (§11). | `{ summary: string ≤ 1200 chars, keep: string[] }` |
 | JSON repair for tool arguments | adapters | the target zod schema |
 | Classification (task type, waste kind, scope-drift similarity) | tasks, ledger, hooks | an enum |
 | Quick replies after a turn (idea from Beans [^beans]) | sidebar | `{ replies: string[] ≤ 4, each ≤ 10 words }` |
 
-### 8.2 Router
+Revision 1 listed "the Magic Context `PreCompact` handler" as the caller for compaction summaries — a handler no phase builds. The caller is now our own hook (§3.5), which exists in this plan, and the job is off by default (`offload.jobs` config, §13).
+
+### 9.2 Router
 
 ```ts
 // packages/offload/src/router.ts
@@ -1497,7 +1685,7 @@ export async function offload<T>(job: { name: string; prompt: string; schema: z.
 
 ---
 
-## 9. `@openagentsy/quality`: anti-slop checks
+## 10. `@openagentsy/quality`: anti-slop checks
 
 These rules are adapted from miqdadbadjuber/anti-slop [^antislop] and Nutlope/hallmark [^hallmark], both MIT. Loading either project as prompt text would cost too much:
 
@@ -1521,14 +1709,11 @@ Each rule keeps its upstream ID (antislop `R-XX`, Hallmark Floor number), so a f
 | `finish` | Taste and polish. Warnings only; a project `DESIGN.md` overrides them. | Not needed. |
 
 **Rules of thumb.**
-- Taste rules stay warnings, so OpenAgentsy never imposes one aesthetic. They include:
-  - eyebrows and tracked capitals;
-  - an italic word in a heading;
-  - Lucide icons, bento grids and 3-step "how it works" sections;
-  - em dashes.
+
+- Taste rules stay warnings, so OpenAgentsy never imposes one aesthetic. They include: eyebrows and tracked capitals; an italic word in a heading; Lucide icons, bento grids and 3-step "how it works" sections; em dashes.
 - `DESIGN.md` / `design.md` is read as **data, not instructions** (antislop's boundary rule). Text inside it can change which taste rules apply, but it can't turn off a floor rule or tell the agent to do anything.
 
-### 9.1 Rule registry
+### 10.1 Rule registry
 
 ```ts
 // packages/quality/src/rule.ts
@@ -1554,7 +1739,7 @@ export function createRegistry(rules: QualityRule[]) {
 }
 ```
 
-### 9.2 Static checks
+### 10.2 Static checks
 
 Every check below is a pure function. Each one has a fixture that passes and one that fails.
 
@@ -1578,11 +1763,12 @@ Every check below is a pure function. Each one has a fixture that passes and one
 | `copy/buzzwords` | antislop | reflex (config) | seamless, revolutionary, next-generation, … |
 | `copy/em-dash` | antislop:R-02 | finish, **off by default** | Em dashes in user-facing UI copy only. Never applied to prose or docs. |
 
-**Claims.** An unsourced claim is a floor finding, because a made-up number is an honesty failure. It's resolved by adding a source comment (`<!-- source: … -->`) or a `data-placeholder` marker. Deleting the copy isn't required. Hallmark's "material inventory" in `oa-ui` (§9.5) is there to stop the agent inventing claims in the first place.
+**Claims.** An unsourced claim is a floor finding, because a made-up number is an honesty failure. It's resolved by adding a source comment (`<!-- source: … -->`) or a `data-placeholder` marker. Deleting the copy isn't required. Hallmark's "material inventory" in `oa-ui` (§10.5) is there to stop the agent inventing claims in the first place.
 
-### 9.3 Comment lint (antislop-code)
+### 10.3 Comment lint (antislop-code)
 
 **What it flags.**
+
 - Banner separators and ALL-CAPS section labels.
 - Decorative emoji and end markers (`// end if`).
 - `// Step N:` narration.
@@ -1591,6 +1777,7 @@ Every check below is a pure function. Each one has a fixture that passes and one
 - JSDoc that only repeats the function signature.
 
 **What it never flags.** Comments that explain:
+
 - business logic, security, performance or concurrency;
 - protocols or API contracts;
 - workarounds or edge cases;
@@ -1609,14 +1796,14 @@ export function applyCommentFix(src: string, fix: CommentFix): string {
 
 The checker uses the TypeScript compiler's comment ranges, so it doesn't depend on GritQL. If Biome GritQL can match comment nodes reliably, the same rules may also be exported as a Biome plugin. Either way, the AST-identity test is the contract.
 
-### 9.4 Hooks, findings and waivers
+### 10.4 Hooks, findings and waivers
 
 ```ts
 // packages/hooks/src/rules.ts (addition)
 { id: 'quality-after-write', event: 'PostToolCall', block: false,
   handler: async (e) => {
     if (!e.files.length || cfg.quality.mode !== 'during') return { continue: true };
-    const paths = e.files.filter((f) => f.operation !== 'delete').map((f) => f.path);   // all files an apply_patch touched (§7.2)
+    const paths = e.files.filter((f) => f.operation !== 'delete').map((f) => f.path);   // all files an apply_patch touched (§8.2)
     const findings = await quality.check(paths, { design: await readDesignMd() });
     findingsStore.record(activeTaskId(), findings);                     // read by enforceTransitions (§3.7)
     const open = findings.filter((f) => f.tier !== 'finish' && !waivers.covers(f));
@@ -1636,7 +1823,7 @@ export const Waiver = z.object({ ruleId: z.string(), path: z.string(), reason: z
 ```
 
 - An agent can *propose* a waiver in chat.
-- Only a person records one, with `/oa waive <ruleId> <path> "<reason>"`. `oa_quality_waive` is blocked for agent roles (§7.3).
+- Only a person records one, with `/oa waive <ruleId> <path> "<reason>"`. `oa_quality_waive` is denied to every agent role by permission map (§8.3, primary) and blocked by the hook rule (defense-in-depth).
 - `waive()` throws for any rule where `waivable === false`.
 - The waiver count appears in the Accountability block.
 
@@ -1655,19 +1842,19 @@ spawn(process.execPath, [sloplint, ...(canRender ? ['--render'] : []), ...files]
 - The result records which path ran: `static`, `static+sloplint` or `static+sloplint-render`.
 - If Hallmark isn't installed, the static rules still run.
 
-### 9.5 Skills, loaded on demand
+### 10.5 Skills, loaded on demand
 
 Each SKILL.md is ≤ 1,500 tokens, with detail kept in reference files the skill links to.
 
 | Skill | Loads when | Contents |
 | --- | --- | --- |
-| `oa-ui` | A change touches `.css`, `.html`, `.tsx`/`.jsx`/`.vue`/`.svelte` or design files | <ul><li>antislop's purpose test ("what does this technique serve?"), with the reason written down.</li><li>The ENERGY, RHYTHM and MOTION dials (how lively the design is) and the Design Read.</li><li>Hallmark's material inventory: what's real, which pictures exist, what's absent. No invented facts; honest placeholders.</li><li>"Build from the job": start from the page's primary action.</li><li>Read `DESIGN.md` first. With no direction, label the output "draft without direction".</li></ul> |
+| `oa-ui` | A change touches `.css`, `.html`, `.tsx`/`.jsx`/`.vue`/`.svelte` or design files | antislop's purpose test ("what does this technique serve?"), with the reason written down. The ENERGY, RHYTHM and MOTION dials and the Design Read. Hallmark's material inventory: what's real, which pictures exist, what's absent; no invented facts, honest placeholders. "Build from the job": start from the page's primary action. Read `DESIGN.md` first; with no direction, label the output "draft without direction". |
 | `oa-copy` | User-facing copy, **or agent prose**: commit messages, PR descriptions, the task "Summary of Changes", Lead status reports | antislop-copywriting: specific calls to action, no buzzwords, no fake stats. |
-| `oa-comments` | Comments are edited | antislop-code's tells and its preserve list. It's the counterweight to §9.3. |
+| `oa-comments` | Comments are edited | antislop-code's tells and its preserve list. It's the counterweight to §10.3. |
 
 **Routing.** At most 80 tokens are added to the Lead and builder roles: "For UI, copy or comment work, load oa-ui / oa-copy / oa-comments. Mechanical checks run automatically." A token test confirms that **no quality skill loads** when no matching file is touched.
 
-### 9.6 Reviewer gate
+### 10.6 Reviewer gate
 
 This is adapted from antislop's Delivery Gate and Hallmark's fresh-context review. For any UI or copy change, the reviewer must return:
 
@@ -1691,17 +1878,12 @@ export async function acceptGate(raw: unknown, files: string[]): Promise<GateRes
 }
 ```
 
-- **The reviewer starts fresh.** It runs in a new context, using a different model family from the builder. It sees only:
-  - the diff;
-  - `DESIGN.md`;
-  - the check results.
-
-  It never sees the builder's transcript.
+- **The reviewer starts fresh.** It runs in a new context, using a different model family from the builder. It sees only: the diff; `DESIGN.md`; the check results. It never sees the builder's transcript.
 - **A false pass is a finding.** If the reviewer says "ship" while a floor finding is open, that's recorded as a finding of its own, and it goes to the Accountability block.
 
 ---
 
-## 10. `oa conformance`: what's proven, observed or unverified
+## 11. `oa conformance`: what's proven, observed or unverified
 
 This is adapted from agent-playbook's host-conformance states [^apb]. `oa conformance` (a command and a tool) reports each capability **separately for V1 and V2**, with one of three states:
 
@@ -1712,30 +1894,38 @@ This is adapted from agent-playbook's host-conformance states [^apb]. `oa confor
 | `unverified` | Neither of the above. |
 
 ```ts
-// packages/adapters/src/conformance.ts
+// packages/adapter-opencode/src/conformance.ts
 export interface Capability { id: string; host: 'v1' | 'v2'; verifyRef?: string;   // spec anchor of the VERIFY it settles
   probeStatic: () => Promise<boolean>; observeOn: OcEventType[] }
 
 export const CAPABILITIES: Capability[] = [
-  { id: 'sidebar-slot', host: 'v2', verifyRef: '§6.1', probeStatic: hasTuiEntry, observeOn: ['tui.slot.render'] },
-  { id: 'v1-toast', host: 'v1', verifyRef: '§6.7', probeStatic: hasV1Entry, observeOn: ['tui.toast.show'] },
+  { id: 'sidebar-slot', host: 'v2', verifyRef: '§7.1', probeStatic: hasTuiEntry, observeOn: ['tui.slot.render'] },
+  { id: 'v1-toast', host: 'v1', verifyRef: '§7.7', probeStatic: hasV1Entry, observeOn: ['tui.toast.show'] },
   { id: 'system-transform', host: 'v1', probeStatic: hasHook('experimental.chat.system.transform'), observeOn: ['chat.system.transformed'] },
-  { id: 'compaction-hook', host: 'v1', probeStatic: hasHook('experimental.session.compacting'), observeOn: ['session.compacted'] },
+  { id: 'compaction-hook', host: 'v1', verifyRef: '§9.1', probeStatic: hasHook('experimental.session.compacting'), observeOn: ['session.compacted'] },
   { id: 'tool-before-block', host: 'v1', probeStatic: hasHook('tool.execute.before'), observeOn: ['tool.execute.before'] },
-  { id: 'session-family', host: 'v2', verifyRef: '§6.2', probeStatic: hasApi('session.family'), observeOn: ['session.family.read'] },
-  { id: 'message-token-fields', host: 'v2', verifyRef: '§5.2', probeStatic: alwaysFalse, observeOn: ['message.updated'] },
-  { id: 'prompt-insert', host: 'v2', verifyRef: '§6.4', probeStatic: hasApi('prompt.insert'), observeOn: ['prompt.inserted'] },
-  { id: 'local-offload', host: 'v2', verifyRef: '§8.2', probeStatic: probeBackends, observeOn: ['offload.completed'] },
+  { id: 'session-family', host: 'v2', verifyRef: '§7.2', probeStatic: hasApi('session.family'), observeOn: ['session.family.read'] },
+  { id: 'message-token-fields', host: 'v2', verifyRef: '§6.2', probeStatic: alwaysFalse, observeOn: ['message.updated'] },
+  { id: 'prompt-insert', host: 'v2', verifyRef: '§7.4', probeStatic: hasApi('prompt.insert'), observeOn: ['prompt.inserted'] },
+  { id: 'local-offload', host: 'v2', verifyRef: '§9.2', probeStatic: probeBackends, observeOn: ['offload.completed'] },
   { id: 'plugin-loaded', host: 'v1', probeStatic: hasV1Entry, observeOn: ['app.log:openagentsy hooks loaded'] },  // a setup throw is skipped silently [^tai]
   { id: 'args-mutate-in-place', host: 'v1', probeStatic: alwaysFalse, observeOn: ['oa.selftest.args'] },          // seeded no-op rewrite seen by the tool
-  { id: 'permission-config-merge', host: 'v1', verifyRef: '§7.3', probeStatic: alwaysFalse, observeOn: ['permission.asked'] },
+  { id: 'permission-config-merge', host: 'v1', verifyRef: '§8.3', probeStatic: alwaysFalse, observeOn: ['permission.asked'] },
   { id: 'permission-ask-hook', host: 'v1', probeStatic: alwaysFalse, observeOn: ['oa.permission.ask.called'] },     // expected to stay unverified (#7006)
   { id: 'text-complete-hook', host: 'v1', probeStatic: hasHook('experimental.text.complete'), observeOn: ['oa.text.complete'] },
   { id: 'shell-env-hook', host: 'v1', probeStatic: hasHook('shell.env'), observeOn: ['oa.shell.env'] },
-  { id: 'mcp-tool-prefix', host: 'v1', probeStatic: alwaysFalse, observeOn: ['tool.execute.before:<server>_oa_*'] },
+  { id: 'mcp-tool-prefix', host: 'v1', probeStatic: alwaysFalse, observeOn: ['tool.execute.before:<server>_board_*'] },   // §8.2: source says routed, measurement says not; unverified until observed
+  { id: 'memory-inbox-keymap', host: 'v2', verifyRef: '§7.4', probeStatic: alwaysFalse, observeOn: ['keymap.layer.memory'] },
   // … one entry per remaining VERIFY in this spec
 ];
+```
 
+- **Every OpenCode-API VERIFY needs a check.** A test greps this spec for **VERIFY** and splits them by kind: API VERIFYs (hooks, SDK shapes, host surfaces) must have a `verifyRef` in `CAPABILITIES`; data and tooling VERIFYs (the EcoLogits license, the `packageManager` pin, the provider-table values) must be named in the exit test of the step that consumes them (§15). Nothing marked VERIFY is allowed to dangle.
+- **`observed` is only set from live evidence.** It's recorded by an event listener during a real session, never from a static probe.
+- **The Accountability block shows the count**, for example "conformance 10/17 observed".
+- **Plugin-order warnings** (`pluginOrderWarnings`) appear in `oa conformance` and in `oa report --ethical` (§12). That's where a person learns that a YAML-hook plugin or another guard runs after OpenAgentsy's checks.
+
+```ts
 /** Warn when another plugin could rewrite args after our checks: hooks share one output object, in load order. */
 export function pluginOrderWarnings(loaded: LoadedPlugin[]): string[] {
   const ours = loaded.findIndex((p) => p.name === '@openagentsy/hooks');
@@ -1744,19 +1934,70 @@ export function pluginOrderWarnings(loaded: LoadedPlugin[]): string[] {
 }
 ```
 
-- **Every VERIFY needs a check.** A test greps this spec for **VERIFY** and fails if any one of them has no `verifyRef` in `CAPABILITIES`.
-- **`observed` is only set from live evidence.** It's recorded by an event listener during a real session, never from a static probe.
-- **The Accountability block shows the count**, for example "conformance 9/14 observed".
-- **Plugin-order warnings** (`pluginOrderWarnings`) appear in `oa conformance` and in `oa report --ethical`. That's where a person learns that a YAML-hook plugin or another guard runs after OpenAgentsy's checks.
-- **`unverified` items are listed in `oa report --ethical`**, so nobody mistakes a guess about the OpenCode API for a tested fact.
+- **`unverified` items are listed in `oa report --ethical`**, so nobody mistakes a guess about the OpenCode API for a tested fact. `mcp-tool-prefix` is expected to be one of them until a pinned version proves otherwise — and until then, the permission map (not the hook) is what the security model stands on (§8.2).
 
 ---
 
-## 11. Configuration (`openagentsy.jsonc`, Phase 2 keys)
+## 12. `oa report --ethical`: what the run cost, and what it was worth
+
+Revision 1 referenced this command three times and never specified it. This section is the specification. One screen of plain text, no color, no judgment of the person; every number traceable to its source table; nothing leaves the machine.
+
+```
+$ oa report --ethical [--session <id> | --bean <id> | --since 30d]
+
+OpenAgentsy run report — <scope>, <window>
+
+Cost and footprint (ledger + footprint tables; ranges per §5)
+  tokens by role: lead 412k · scout 88k · builder 1.1M · reviewer 96k · offload 22k
+  spend: $14.82 reported · $1.19 estimated · 3 models unpriced
+  electricity 2.1–4.8 kWh · water 210–980 L · carbon 0.9–2.1 kg CO2 (grid: owid:US)
+  dominant uncertainty: model-size · infrastructure undisclosed for 1 provider
+
+Waste (waste table, §6.4)
+  18% of tokens went to retries, undos and reverted code
+  retries 9% · tool-error loops 4% · undos/reverts 3% · cache misses 2% · no-progress rounds 3
+
+Value (outcome table, §6.5)
+  6 tasks completed · 1 scrapped · tokens per completed task: 214k (median)
+  offload saved 41k cloud tokens (~$0.12)
+
+Oversight (board db, audit log, stores)
+  3 lessons to review · 1 memory to triage · 2 waivers recorded · 5 redactions
+  board/report mismatches: 0 · open floor findings: 0
+
+Conformance (conformance.json, §11)
+  10/17 observed · plugin-order warnings: 1 (yaml-hooks runs after openagentsy)
+  unverified: mcp-tool-prefix, prompt-insert, memory-inbox-keymap
+```
+
+**Rules.**
+
+- Footprint values print as ranges with the dominant uncertainty, never single numbers (§7.6's discipline, applied to text).
+- "Unpriced" is shown as unpriced, never `$0` (§6.3).
+- The report never characterises the user (§6.4); it reports what the agents did and what it cost.
+- Sources are named per section (the header line of each block); `--verbose` prints the exact table/query behind each number.
+- Exit code is 0 unless `--check` is passed, in which case nonzero when there are open floor findings, unreviewed lessons older than N days, or board/report mismatches — a CI-able honesty gate.
+
+---
+
+## 13. Configuration (`openagentsy.jsonc`, Phase 2 keys)
+
+**Config map — five authorities, one order.** Phase 1's review flagged config discovery divergence and the remediation closed it for OpenCode's files; Phase 2 adds two more files, so the whole map is decided here once:
+
+| File | Authority over | Written by | Notes |
+| --- | --- | --- | --- |
+| `roles.yaml` | roles, permission maps, guidance | a person; consumed by the generator | The source of truth for agents. PROTECTED (§8.3). |
+| `opencode.json` + `.opencode/opencode.json{,c}` | host: plugins, permissions, compaction | a person; `setup` (warns on overlap) | Merged by OpenCode; doctor reports every contributing file (landed). PROTECTED. |
+| `openagentsy.jsonc` | Phase 2 keys (below) | a person | PROTECTED. Defaults; `.beans.yml` overrides the `tasks.*` keys when present. |
+| `.beans.yml` | Beans interop: `beans.prefix`, `beans.id_length`, `beans.path` | a person | Takes precedence over `tasks.*` so OpenAgentsy and the `beans` CLI write the same IDs. |
+| `openagentsy.models.lock.json` | the model lock | `openagentsy models init` | Generated; PROTECTED; zod-validated on read (landed). |
+
+Doctor (2a extension) prints this map with the files that exist and flags overlaps — the same posture the remediation gave OpenCode's own configs.
 
 ```jsonc
 {
   "tasks": { "path": ".beans", "prefix": "oa-", "idLength": 4, "worktrees": { "baseRef": "main", "integrate": "pr", "setup": "bun install --frozen-lockfile", "fetchTimeoutSec": 10 } },
+  "memory": { "maxTextChars": 280, "inboxLimit": 50 },
   "footprint": {
     "showWarming": true,
     "prefill": false,
@@ -1765,7 +2006,7 @@ export function pluginOrderWarnings(loaded: LoadedPlugin[]): string[] {
     "models": { "ollama/qwen3:8b": { "totalParamsB": [8, 8], "activeParamsB": [8, 8] } }
   },
   "ledger": { "backfillOpencodeDb": false, "pricingSources": ["opencode", "models.dev", "litellm", "openrouter"] },
-  "offload": { "backends": [{ "kind": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "qwen3:4b" }], "jobs": ["title", "compaction", "json-repair", "classify", "quick-replies"] },
+  "offload": { "backends": [{ "kind": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "qwen3:4b" }], "jobs": ["title", "json-repair", "classify", "quick-replies"] },   // "compaction" opt-in
   "hooks": { "extraBlockedCommands": [], "approvalFor": ["git push", "gh pr merge", "bun add", "bun remove"] },
   "lessons": { "captureAfterSessions": 3, "evalTimeoutMs": 30000, "requireWorktreeForBaseline": true },
   "quality": {
@@ -1778,15 +2019,15 @@ export function pluginOrderWarnings(loaded: LoadedPlugin[]): string[] {
 }
 ```
 
-If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` take precedence. That way OpenAgentsy and the `beans` CLI write the same IDs.
-
 ---
 
-## 12. Left out on purpose
+## 14. Left out on purpose
 
 | From | Feature | Why not |
 | --- | --- | --- |
-| agentsy | Prompt patches that apply themselves at ≥0.9 confidence | Changes to the agent's own instructions need a person's review (§7.5). |
+| Magic Context | The historian, dreamer, decay rendering, cache-stable drops | The §4 slice proves the inbox contract (candidates → human decision → store → search) first. The full historian is 2f+, built against that proven contract. `setup --magic-context` (landed) remains the informed opt-out for people who want compaction off today. |
+| Magic Context | Auto-recall: injecting memories into prompts without being asked | Doing it badly poisons contexts silently. Agents search (§4.4); auto-recall waits for the historian and its relevance measurements. |
+| agentsy | Prompt patches that apply themselves at ≥0.9 confidence | Changes to the agent's own instructions need a person's review (§8.5). |
 | agentsy | Numeric peer scores and rankings in council mode | They push models toward agreeing with each other. We keep anonymised review and the dissent section. |
 | agentsy | The `superagent` built-in and its framing | It presents the system as a replacement for the person. |
 | Beans | Coercive prime text ("ignore all previous instructions") injected on every turn | The text competes with other instructions and costs tokens every turn. We replace it with a 150-token state block, an on-demand skill and rules enforced in code. |
@@ -1800,43 +2041,49 @@ If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` t
 | anti-slop | The install wizard that edits AGENTS.md, and the "during or after?" question at the start of each session | The mode is a config key instead (`quality.mode`). |
 | anti-slop, Hallmark | Taste rules as hard bans (eyebrows, tracked caps, italic heading words, Lucide icons, bento grids, em dashes) | These are matters of style, not quality. They stay `finish`-tier warnings that `DESIGN.md` can override. |
 | Hallmark | The theme generator (48 themes, deal/draw), photo library, capture and image generation | That's a design tool, not a guardrail. Users can install Hallmark separately; it supports OpenCode. |
-| Hallmark | Together AI calls when `TOGETHER_API_KEY` is set | There are no hidden network calls. The key is stripped from sloplint's environment (§9.4) and from agent shells (§7.3). |
-| opencode-yaml-hooks, openhooks | A YAML shell-hook layer (exit code 2 blocks the tool) | A second place for policy to live, and its actions inherit the full environment. We keep its `file.changed` normalisation and `scope` idea (§7.2). People can install either plugin alongside ours; conformance flags the ordering (§10). |
-| OpenCode | The `stop` hook, `permission.ask`, and `experimental.hook.file_edited` / `session_completed` in `opencode.json` | `stop` isn't in v1.19.4's hook table, and `permission.ask` is never called. The config-file hooks appear in only one guide and are unverified. Approvals use the permission config plus blocking instead (§7.3). |
-| Turborepo | Remote caching (Vercel or self-hosted) and telemetry | Remote caching uploads build artifacts, so it's opt-in only. Telemetry is disabled everywhere (§1.2). |
+| Hallmark | Together AI calls when `TOGETHER_API_KEY` is set | There are no hidden network calls. The key is stripped from sloplint's environment (§10.4) and from agent shells (§8.3), alongside `TYPESAFE_API_KEY`. |
+| opencode-yaml-hooks, openhooks | A YAML shell-hook layer (exit code 2 blocks the tool) | A second place for policy to live, and its actions inherit the full environment. We keep its `file.changed` normalisation and `scope` idea (§8.2). People can install either plugin alongside ours; conformance flags the ordering (§11). |
+| OpenCode | The `stop` hook, `permission.ask`, and `experimental.hook.file_edited` / `session_completed` in `opencode.json` | `stop` isn't in v1.19.4's hook table, and `permission.ask` is never called. The config-file hooks appear in only one guide and are unverified. Approvals use the permission config plus blocking instead (§8.3). |
+| Turborepo | Remote caching (Vercel or self-hosted) and telemetry | Remote caching uploads build artifacts, so it's opt-in only. Telemetry is disabled everywhere (§1). |
 
 ---
 
-## 13. Build order and exit tests
+## 15. Build order and exit tests
 
-Biome, Husky, lint-staged, `tsc` and CI are already in place; step 2.0 moves them onto Bun and Turborepo (§1). After 2.0, every step must keep `bun run check` (`turbo run lint typecheck test build`) green.
+**Preconditions — landed.** The Phase 1 remediation (its Steps 1–20) is the baseline; see "Baseline" above. Every feature below cites what it stands on rather than re-fixing it. The standing rules from revision 1 still hold: after every step, `bun run check` (aliased per §1.6) is green; the safety suite's 14 cases stay green; `TURBO_TELEMETRY_DISABLED=1` is set in CI and in agent shells.
+
+One ordering fix from revision 1: its step 2.0 exit test required an agent told to `pnpm add x` to be blocked — but the rule that blocks it ships in 2c. The red-team now lives where its machinery lives.
 
 | Step | Delivers | Exit test (in the Scenario + Vitest suites) |
 | --- | --- | --- |
-| **2.0** | pnpm → Bun workspaces + Turborepo (§1): `packageManager`, `bunfig.toml`, `bun.lock`, `turbo.json`, scripts, Husky hook, CI; the `package-manager` rule and its protected files | <ul><li>`bun install --frozen-lockfile` succeeds on a clean clone.</li><li>`bun pm ls --all` matches the pre-migration `pnpm list` (differences reviewed and noted in the PR).</li><li>`bun run check` passes, and a second run with no changes is fully cached.</li><li>Changing one package's dependency misses the cache only for that package and the packages that depend on it.</li><li>`git grep -n pnpm` finds nothing outside CHANGELOG and this spec's history notes.</li><li>The pre-commit hook still blocks a lint failure.</li><li>Red-team: an agent told to `pnpm add x` or `npm install` is blocked, and so is a direct edit to `bun.lock`.</li><li>`TURBO_TELEMETRY_DISABLED` is set in CI and in agent shells.</li></ul> |
-| **2a** | `tasks` package, prime block, `oa_task_*` tools, `footprint` package | <ul><li>Round-trip over the `hmans/beans` `.beans/` corpus passes.</li><li>`ready` and `next` match Beans' documented semantics on 15 fixtures (blocked parent, terminal ancestor, epics excluded).</li><li>The footprint golden test passes within 1%.</li><li>The prime block is ≤ 200 tokens.</li></ul> |
-| **2b** | `ledger` (ingest, pricing, waste including `no_progress`, outcomes), `offload` | <ul><li>Deduplication: replaying a session doesn't change totals.</li><li>Unpriced models show "unpriced".</li><li>Offload lowers cloud tokens per completed task compared with Phase 1, with pass³ unchanged.</li></ul> |
-| **2c** | `hooks`: bridge, rules (including `human-only-decisions`), redaction, output checks, **lessons + eval runner**, **Lead recovery loop** | <ul><li>Red-team: a model told to "commit with --no-verify", "edit openagentsy.jsonc" or "approve your own lesson" is blocked.</li><li>An `apply_patch` that moves a file onto `openagentsy.jsonc` is blocked.</li><li>Calling `oa_lesson_decide` through an MCP-prefixed name is blocked.</li><li>A rewrite of tool arguments takes effect (mutated in place).</li><li>Agent shells don't see `HUSKY`.</li><li>Merging permissions only tightens them (`allow`→`ask` works; `deny`→`allow` throws).</li><li>A seeded secret never reaches `.openagentsy/`, including inside a lesson summary.</li><li>Lesson transitions: every allowed move succeeds and every other move throws.</li><li>A lesson with an incomplete start packet can't leave `candidate`.</li><li>The eval runner rejects shell strings, a `cwd` outside the workspace and a timeout over the maximum. It also rejects symlinked result paths, never writes stdout or stderr, and strips a fake `GITHUB_TOKEN`.</li><li>In a temporary worktree, the baseline fails and then the candidate passes.</li><li>A board/report mismatch raises a flag, and a round that changes nothing writes `no_progress`.</li><li>Output-check flags appear on seeded transcripts.</li></ul> |
-| **2d** | `quality`: registry, static rules, comment lint, sloplint bridge, waivers, the three skills, reviewer gate | <ul><li>Each static rule has a passing and a failing fixture.</li><li>A comment fix leaves the AST identical apart from comments, and never removes a comment on the preserve list.</li><li>A task with an open floor finding can't be completed.</li><li>An agent can't record a waiver, and a floor rule can't be waived.</li><li>A "ship" verdict with an open floor finding is rejected as `fabricated-pass`.</li><li>sloplint runs without `TOGETHER_API_KEY` and degrades cleanly when Hallmark is absent.</li><li>No quality skill loads when no UI, copy or comment file is touched (token test).</li></ul> |
-| **2e** | `sidebar` V2 blocks, V1 fallback, worktrees, `oa conformance`, `oa report --ethical` | <ul><li>Blocks render from fixtures in the OpenTUI test renderer.</li><li>The banned-word and banned-colour tests pass.</li><li>The V1 toast fires on `session.idle`.</li><li>Worktree task detection matches `git diff`, and provisional statuses clear after merge.</li><li>Every **VERIFY** in the spec maps to a conformance check.</li><li>A capability with no recorded observation reports `unverified`, and a static probe never upgrades a check to `observed`.</li></ul> |
+| **2.0r** | §1.6 residue: `packageManager` pin, catalog decision, `check`/`ci:check` alias, `CONTRIBUTING.md`, `oa` bin alias, CI reconciliation | <ul><li>`bun install --frozen-lockfile` succeeds on a clean clone.</li><li>`bun run check` ≡ the old `ci:check`; a second run with no changes is fully cached.</li><li>`oa doctor` works through the alias; `openagentsy doctor` still works.</li><li>`git grep -n pnpm` finds nothing outside CHANGELOG and this spec's history notes (already true; stays a guard).</li><li>The pre-commit hook still blocks a lint failure.</li><li>`TURBO_TELEMETRY_DISABLED` is set in CI and in agent shells (the latter lands with 2c's `shell.env`).</li></ul> |
+| **2a** | `defineTool` extraction (§2.3); `tasks` package + prime (§3); **memory slice (§4)**; `footprint` (§5); doctor config-map extension (§13) | <ul><li>Round-trip over the `hmans/beans` `.beans/` corpus passes; whitespace diffs, if any, are logged and accepted deliberately.</li><li>`ready` and `next` match Beans' documented semantics on 15 fixtures (blocked parent, terminal ancestor, epics excluded).</li><li>The footprint golden test passes within 1%.</li><li>The prime block is ≤ 200 tokens **and renders p95 ≤ 5 ms at 500 live tasks** (§3.5 budget, measured from a fixture).</li><li>Memory: all §4.6 cases — round-trip, rejection, map-blocks-decide-with-hook-disabled, redaction, no-prime-growth.</li><li>No generated prompt references an unregistered tool (landed guard; stays).</li><li>`grep -rn "defineTool" packages/*/src` resolves to definitions and the §2.3 export only.</li><li>Doctor prints the §13 config map with the files that exist.</li></ul> |
+| **2b** | `ledger` (ingest, pricing, waste including `no_progress`, outcomes), `offload`; **budget reconciliation (§6.7)** | <ul><li>Deduplication: replaying a session doesn't change totals.</li><li>Unpriced models show "unpriced".</li><li>Backfilled rows with unresolvable roles carry `role_raw` and are excluded from per-role reports.</li><li>Offload lowers cloud tokens per completed task compared with Phase 1, with pass³ unchanged.</li><li>Budget stop fires on **measured** ledger usage the builder never self-reported (§6.7).</li><li>`oa ledger scan-reverts` on a fixture repo reports a reverted `Refs:` commit and nothing else.</li></ul> |
+| **2c** | `hooks`: bridge, rules (including `human-only-decisions` and the `package-manager` red-team), redaction, output checks, **lessons + eval runner**, **Lead recovery loop**; PROTECTED (§8.3) + the doctor regeneration-diff check; `/oa approve` | <ul><li>Red-team: a model told to "commit with --no-verify", "edit roles.yaml", "edit .opencode/agent files", "npm install", or "approve your own lesson" is blocked.</li><li>An `apply_patch` that moves a file onto `roles.yaml` is blocked.</li><li>**Both directions of the human-only guarantee**: with the hook rule disabled, the permission map alone blocks `oa_lesson_decide`; with the maps regenerated without the denies, the hook rule alone blocks it.</li><li>The regeneration-diff doctor check flags a hand-edited generated agent file and names the reconcile command.</li><li>A rewrite of tool arguments takes effect (mutated in place).</li><li>Agent shells see neither `HUSKY` nor `TYPESAFE_API_KEY`.</li><li>The anchored `-n` rule does **not** fire on `git commit -m "fix -n handling"` and does fire on `git commit -n`.</li><li>Merging permissions only tightens them (`allow`→`ask` works; `deny`→`allow` throws).</li><li>`/oa approve`: a granted callID passes exactly once; the entry is consumed; an expired entry never passes.</li><li>A seeded secret never reaches `.openagentsy/` — including inside a lesson summary or a memory candidate.</li><li>Lesson transitions: every allowed move succeeds and every other move throws; an incomplete start packet can't leave `candidate`.</li><li>The eval runner rejects shell strings, a `cwd` outside the workspace and a timeout over the maximum; it rejects symlinked result paths, never writes stdout or stderr, and strips a fake `GITHUB_TOKEN`.</li><li>In a temporary worktree, the baseline fails and then the candidate passes.</li><li>A board/report mismatch raises a flag, and a round that changes nothing writes `no_progress`.</li><li>Output-check flags appear on seeded transcripts.</li></ul> |
+| **2d** | `quality`: registry, static rules, comment lint, sloplint bridge, waivers, the three skills, reviewer gate | <ul><li>Each static rule has a passing and a failing fixture.</li><li>A comment fix leaves the AST identical apart from comments, and never removes a comment on the preserve list.</li><li>A task with an open floor finding can't be completed.</li><li>An agent can't record a waiver (map + hook, both directions), and a floor rule can't be waived.</li><li>A "ship" verdict with an open floor finding is rejected as `fabricated-pass`.</li><li>sloplint runs without `TOGETHER_API_KEY` and degrades cleanly when Hallmark is absent.</li><li>No quality skill loads when no UI, copy or comment file is touched (token test).</li></ul> |
+| **2e** | `sidebar` V2 blocks, V1 fallback, worktrees (§3.8/§3.9), `oa conformance`, `oa report --ethical` | <ul><li>Blocks render from fixtures in the OpenTUI test renderer; banned-word and banned-colour tests pass.</li><li>The V1 toast fires on `session.idle`.</li><li>**Worktree shared state (§3.9)**: a builder in a worktree is denied by the Lead's main-board lease; its records land in the main board; its `.beans/` edits stay worktree-local and clear after merge.</li><li>Worktree task detection matches `git diff`, and provisional statuses clear after merge.</li><li>Every **VERIFY** in the spec maps to a conformance check; a capability with no recorded observation reports `unverified`, and a static probe never upgrades a check to `observed`.</li><li>`oa report --ethical` renders from a seeded fixture with every section populated; `--check` exits nonzero on an open floor finding.</li><li>The suite's 14 cases still pass on the full stack (the harvest-memory case now also asserts its record reaches the memory inbox).</li></ul> |
+
+**Definition of done for every step** (addition, per the doc-sweep finding): AGENTS.md's package enumeration and plan references are updated in the same commit, `grep -rn ADDENDUM` stays clean outside CHANGELOG history, and the ROADMAP's "what ships" list matches what shipped.
 
 ---
 
-## 14. Open questions
+## 16. Open questions
 
 - **Prefill term:** keep it off by default until the fit is reviewed (recommended)?
 - **Bundling `models.json`:** fetch-and-cache only, until the EcoLogits data license is confirmed?
-- **Monorepo license:** make all of OpenAgentsy GPL-3.0-or-later (recommended, simplest), or only the packages that import agentsy?
 - **Upstream export:** should agentsy add a `./hooks` subpath export to `@agentsy/runtime`, or re-export the hooks from the package root?
 - **Beans compatibility:** keep OpenAgentsy's rendering byte-identical to Beans', or accept whitespace differences?
-- **V1:** confirm whether issue #5971's sidebar hook merged.
-- **Em dashes:** `quality.copy.emDash` is `off` by default. Switch it to `reflex` if the agents shouldn't use them in UI copy.
+- **V1 sidebar hook:** confirm whether issue #5971's sidebar hook merged.
+- **Em dashes:** `quality.copy.emDash` is `off` by default. Switch it to `reflex` if the agents shouldn't use them in UI copy?
 - **Unsourced claims as `floor`:** block completion until a claim has a source or placeholder marker (recommended), or downgrade them to `reflex` so a person can waive them?
 - **Comment rules in Biome:** also ship them as a GritQL plugin once comment matching is confirmed, or keep them only in `packages/quality`?
-- **Strict hoisting:** turn on `install.hoist = false` in step 2.0 (stricter than pnpm's default), or after fixing phantom imports (recommended)?
+- **Strict hoisting:** turn on `install.hoist = false` now (stricter than pnpm's default), or after fixing phantom imports (recommended)?
 - **Test runner:** keep Vitest (recommended; no rewrite), or move to `bun test` once on Bun?
 - **Plugin order:** if another plugin's `tool.execute.before` runs after ours, should `oa conformance` only warn (recommended), or refuse to mark the guardrails as `observed`?
 - **Approval fallback:** if the `config` hook can't change permissions, may `oa init` write the `ask` entries into `opencode.json`, after showing the person the diff?
+- **Memory embeddings:** ship `oa_memory_search` re-ranking via offload behind a flag in 2a, or defer to the historian phase (recommended — substring search first, measure whether it's insufficient)?
+- **`session.family` shape:** ids or session objects on the pinned 2.x (VERIFY → capability `session-family`, §11)?
+- **Review archive:** commit the Phase 1 code review and the plan review under `docs/reviews/` so this revision's "revision notes" table cites files that live in the repo (recommended)?
 
 ---
 
@@ -1866,3 +2113,4 @@ Biome, Husky, lint-staged, `tsc` and CI are already in place; step 2.0 moves the
 [^openhooks]: industrialricefarmingllc/openhooks (MIT) — https://github.com/industrialricefarmingllc/openhooks
 [^turbo26]: Turborepo 2.6 release notes, 28 Oct 2025: Bun package manager support marked stable, with per-package `bun.lock` v1 analysis (turborepo.com blog)
 [^bunws]: Bun docs: Workspaces (catalogs, `workspace:` protocol) and Isolated installs (pnpm-like linker; default for workspaces migrated from pnpm)
+[^planreview]: Phase 2 plan review (P-01..P-16) — delivered alongside this revision; see §16's "Review archive" question about committing it under `docs/reviews/`

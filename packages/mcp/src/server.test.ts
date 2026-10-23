@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,6 +62,50 @@ async function call(name: string, args: Record<string, unknown> = {}): Promise<a
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'openagentsy-board-'));
+  // The roles file is what the board knows the agents by.
+  await writeFile(
+    join(root, 'roles.yaml'),
+    `version: 1
+protectedPaths: []
+defaults:
+  permissions: {}
+roles:
+  lead:
+    agentName: agentsy
+    description: Plans the work
+    mode: primary
+    writes: false
+    scope: the plan
+    guidance: delegate
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: agentic
+      hardRequirements: [tool_calls]
+      costStance: quality_first
+    effort:
+      startVariant: medium
+      ceilingVariant: high
+      climbTriggers: [planning]
+  builder:
+    description: Implements a bean
+    mode: subagent
+    writes: true
+    scope: leased files
+    guidance: test it
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+    effort:
+      startVariant: low
+      ceilingVariant: high
+      climbTriggers: [test_failed_twice]
+`,
+    'utf8',
+  );
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
@@ -247,7 +291,7 @@ describe('the board server over stdio', () => {
       arguments: {
         op: 'post',
         bean: 'proj-42',
-        from: 'x',
+        from: 'builder',
         kind: 'status',
         action: 'a',
         state: 'b',
@@ -324,5 +368,36 @@ describe('the board with a System One key', () => {
     expect(decision.profile).toBe('solo');
     expect(decision.confidence).toBe(0.97);
     expect(decision.probabilities['fanout-read']).toBe(0.03);
+  });
+  it('refuses a record from a name the board does not know', async () => {
+    // The board cannot verify who is calling it, so the name is checked
+    // against the roles file. A name outside it is a record nobody can
+    // attribute.
+    await expect(
+      call('board_record', {
+        op: 'post',
+        bean: 'proj-42',
+        from: 'definitely-not-an-agent',
+        kind: 'status',
+        action: 'did a thing',
+        state: 'it is done',
+        confidence: 'verified',
+      }),
+    ).rejects.toThrow(/does not know an agent/);
+  });
+
+  it('accepts every spelling of an agent the board knows', async () => {
+    for (const from of ['builder', 'oa-builder', 'agentsy', 'lead']) {
+      const posted = await call('board_record', {
+        op: 'post',
+        bean: 'proj-42',
+        from,
+        kind: 'status',
+        action: 'did a thing',
+        state: 'it is done',
+        confidence: 'verified',
+      });
+      expect(posted.id).toBeGreaterThan(0);
+    }
   });
 });
