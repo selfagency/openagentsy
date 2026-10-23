@@ -181,8 +181,20 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     root: baseUrl,
     stop: async () => {
       child.kill('SIGTERM');
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      if (!child.killed) child.kill('SIGKILL');
+      // The server writes to the log file it was given, and it may still be
+      // writing when the process is asked to stop. Waiting for the exit
+      // closes the file descriptor only after the writer is gone, which is
+      // what keeps a teardown from printing a broken pipe.
+      await new Promise((resolve) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve(undefined);
+          return;
+        }
+        child.once('exit', () => resolve(undefined));
+        setTimeout(() => resolve(undefined), 5_000).unref?.();
+      });
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      (await import('node:fs')).closeSync(logFd);
     },
   };
 }
@@ -213,6 +225,42 @@ function rateLimitOf(message: unknown): number | undefined {
   const error = info?.error as { data?: { statusCode?: number } } | undefined;
   const status = error?.data?.statusCode;
   return status === 429 ? status : undefined;
+}
+
+/**
+ * The reply a turn produced.
+ *
+ * A turn that was rate limited and then asked again has two answers: the
+ * provider's refusal and the agent's. The reply is the last one that is not
+ * a refusal, so a recovered turn is judged on what the agent said and not on
+ * the error the provider sent first.
+ */
+export function replyPartsOf(messages: readonly unknown[]): {
+  text: string;
+  toolCalls: { tool: string; input: unknown }[];
+} {
+  const assistant = messages.filter((message) => {
+    const role = (message as { info?: { role?: string } }).info?.role;
+    return role === undefined || role === 'assistant';
+  });
+  const last = assistant.at(-1) as
+    | { parts?: { type: string; text?: string; tool?: string; state?: { input?: unknown } }[] }
+    | undefined;
+  const parts = last?.parts ?? [];
+
+  const text = parts
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text ?? '')
+    .join('\n');
+
+  const toolCalls = parts
+    .filter((part) => part.type === 'tool')
+    .map((part) => ({
+      tool: part.tool ?? '',
+      input: part.state?.input as unknown,
+    }));
+
+  return { text, toolCalls };
 }
 
 /**
@@ -267,7 +315,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     path: { id: sessionID },
     query: { directory },
   });
-  const last = messages.data?.at(-1);
+  let last = messages.data?.at(-1);
 
   // A rate limited turn is the provider's answer, not the agent's. The free
   // model tiers answer with 429 when a burst trips their limit, so the turn
@@ -283,23 +331,19 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
       path: { id: sessionID },
       query: { directory },
     });
-    rateLimited = rateLimitOf(again.data?.at(-1));
-    if (rateLimited === undefined) break;
+    const recovered = again.data?.at(-1);
+    rateLimited = rateLimitOf(recovered);
+    if (rateLimited === undefined) {
+      // The turn came back. The reply is this one, not the refusal that
+      // came before it.
+      last = recovered;
+      break;
+    }
   }
 
-  const parts = last?.parts ?? [];
-
-  const text = parts
-    .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join('\n');
-
-  const toolCalls = parts
-    .filter((part): part is Extract<typeof part, { type: 'tool' }> => part.type === 'tool')
-    .map((part) => ({
-      tool: part.tool,
-      input: part.state?.input as unknown,
-    }));
+  const { text, toolCalls } = replyPartsOf(
+    last === undefined ? [] : [{ info: { role: 'assistant' }, parts: last.parts ?? [] }],
+  );
 
   return { text, toolCalls, files: [], sessionID };
 }
