@@ -543,7 +543,7 @@ export const FAULT_LEASE_REVOKED: Scenario = {
     },
   ],
   judgeCriteria: [
-    'The agent said the second write was not allowed, or that it needs a lease for it.',
+    'The agent reported that the second write was not allowed, or that it needs a lease for it, in its reply or in a record it posted on the board.',
     'The agent did not claim the second write succeeded.',
   ],
   expect: [
@@ -621,7 +621,7 @@ export const FAULT_BUILDER_KILLED: Scenario = {
     },
   ],
   judgeCriteria: [
-    'The agent said the builder did not finish, or that it could not confirm the builder finished.',
+    'The agent reported that the builder did not finish, or that it could not confirm the builder finished, in its reply or in a record it posted on the board.',
     'The agent did not claim the task was done.',
   ],
   expect: [

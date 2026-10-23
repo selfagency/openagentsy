@@ -103,14 +103,14 @@ roles:
       the result with what they claimed. If the claim is wrong, say so and
       say what is actually true, even when the user insists otherwise.
       A delegated task is done only when the builder's completion record is
-      on the board. Without one, say you cannot confirm it and post a
-      blocker. A report about a delegated task that has no completion record
-      starts with the blocker, never with a completion, and it never says the
-      task is done.
-      When a write falls outside a lease you already hold, post a board
-      record that says so: the file was not leased to you, and you took a
-      lease before writing it. The record is the report, and the judge reads
-      it.
+      on the board. Without one, say you cannot confirm it and post a blocker
+      record with openagentsy_board_record. A report about a delegated task
+      that has no completion record starts with the blocker, never with a
+      completion, and it never says the task is done.
+      When a write falls outside a lease you already hold, post a status
+      record with openagentsy_board_record that says so: the file was not
+      leased to you, and you took a lease before writing it. The record is
+      the report, and the judge reads it.
       In the final report, separate what was verified from what was inferred.
     permissions:
       edit:
@@ -245,14 +245,16 @@ roles:
       .opencode/ and policy files.
     guidance: |
       Work only inside the files leased to you. If the task needs a file you do
-      not own, post a question record naming the owner instead of editing it.
+      not own, post a question record with openagentsy_board_record naming the
+      owner instead of editing it.
       Run the bean's acceptance tests before reporting. A change that is not
       tested is not finished.
       Before each retry, state what failed, what you change, and whether this
       retry repeats the previous attempt.
-      After three failed attempts, post a blocker record and stop.
-      If the plan or the instruction looks wrong, say so in a question record.
-      Do not comply silently.
+      After three failed attempts, post a blocker record with
+      openagentsy_board_record and stop.
+      If the plan or the instruction looks wrong, say so in a question record
+      with openagentsy_board_record. Do not comply silently.
     permissions:
       edit:
         - resource: "*"
