@@ -19,5 +19,13 @@ export default defineConfig({
         : ['packages/evals/src/evals.test.ts', 'packages/evals/src/baseline-run.test.ts'],
     environment: 'node',
     testTimeout: 15_000,
+    server: {
+      deps: {
+        // zod is loaded through Vite rather than as an external dependency.
+        // As an external one it resolves to its CommonJS build, where the
+        // named export `z` is missing, and every schema call is undefined.
+        inline: ['zod'],
+      },
+    },
   },
 });
