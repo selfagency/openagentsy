@@ -1,0 +1,47 @@
+{
+  "name": "@openagentsy/jev",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  },
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/selfagency/openagentsy.git"
+  },
+  "homepage": "https://github.com/selfagency/openagentsy#readme",
+  "bugs": {
+    "url": "https://github.com/selfagency/openagentsy/issues"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "The OpenAgentsy client for TypeSafe Jev, a System One model that answers typed questions with calibrated probabilities.",
+  "keywords": [
+    "agents",
+    "jev",
+    "typesafe",
+    "system-one"
+  ],
+  "files": [
+    "dist"
+  ]
+}
