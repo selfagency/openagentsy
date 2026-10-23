@@ -18,9 +18,16 @@ afterEach(async () => {
 /** A client that records what it was asked to do. */
 function fakeClient(messages: { parts?: { type: string; text?: string }[] }[] = []) {
   const prompts: { sessionID: string; agent: string; text: string }[] = [];
+  const created: { parentID?: string; title: string }[] = [];
   const client: HarvestClient = {
     session: {
-      create: async () => ({ data: { id: 'ses_archivist' } }),
+      create: async (options) => {
+        created.push({
+          ...(options.body.parentID !== undefined ? { parentID: options.body.parentID } : {}),
+          title: options.body.title,
+        });
+        return { data: { id: 'ses_archivist' } };
+      },
       messages: async () => ({ data: messages }),
       promptAsync: async (options) => {
         prompts.push({
@@ -32,7 +39,7 @@ function fakeClient(messages: { parts?: { type: string; text?: string }[] }[] = 
       },
     },
   };
-  return { client, prompts };
+  return { client, prompts, created };
 }
 
 async function writeAudit(lines: object[]): Promise<void> {
@@ -115,5 +122,19 @@ describe('harvest', () => {
     // The decisions of another session are not in the packet.
     expect(packet).not.toContain('src/b.ts');
     expect(packet).toContain('the lease check said no');
+  });
+
+  it('creates the archivist session as a child of the session it harvests', async () => {
+    const { client, created } = fakeClient([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
+    await harvest({
+      client,
+      root,
+      directory: root,
+      sessionID: 'ses_scout',
+      role: 'scout',
+      agent: 'oa-scout',
+    });
+    expect(created).toHaveLength(1);
+    expect(created[0]?.parentID).toBe('ses_scout');
   });
 });

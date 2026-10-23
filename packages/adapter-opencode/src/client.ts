@@ -13,7 +13,7 @@ export type ProviderModelInfo = {
 /** The session part of the client. */
 export type SessionClient = {
   create: (options: {
-    body: { title: string };
+    body: { title: string; parentID?: string };
     query?: { directory?: string };
   }) => Promise<{ data?: { id?: string } }>;
   messages: (options: {

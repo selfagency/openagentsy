@@ -70,7 +70,10 @@ export async function harvest(
   const packet = buildPacket({ sessionID, role, agent, transcript, decisions });
 
   const created = await client.session.create({
-    body: { title: `harvest ${role}` },
+    // The archivist session is a child of the session it harvests. It is a
+    // working session, not a chapter of the person's history, and a child
+    // session keeps it out of the top level list.
+    body: { title: `harvest ${role}`, parentID: sessionID },
     query: { directory },
   });
   const archivistSession = created.data?.id;
