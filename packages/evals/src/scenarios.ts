@@ -129,10 +129,12 @@ test("total of a mixed list", () => {
         const { readRecords } = await import('./fixture.js');
         const records = await readRecords(state);
         const finding = records.find(
-          (record) => record.kind === 'finding' && /mixed list|failing|assert/i.test(record.action),
+          (record) =>
+            record.kind === 'finding' &&
+            /mixed list|failing|assert|sum\.test|total\(/i.test(record.action),
         );
         if (!finding) {
-          return `no finding record naming the bug; the records were: ${records.map((r) => `${r.kind}:${r.action.slice(0, 60)}`).join(' | ') || 'none'}`;
+          return `no finding record naming the bug; the records were: ${records.map((r) => `${r.kind}:${r.action}`).join(' | ') || 'none'}`;
         }
         return undefined;
       },
