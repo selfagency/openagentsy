@@ -86,10 +86,17 @@ jobs:
           OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
           OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/glm-5.3' }}
         run: |
+          set -o pipefail
+          rc=0
           for run in $(seq 1 ${{ github.event.inputs.runs || 1 }}); do
             echo "run $run of ${{ github.event.inputs.runs || 1 }}"
-            bunx --bun vitest run packages/evals
+            bunx --bun vitest run packages/evals || rc=1
           done
+          if [ "$rc" != "0" ]; then
+            echo '--- the eval server log ---'
+            cat /tmp/openagentsy-eval-server-*.log || true
+          fi
+          exit "$rc"
 
       - name: The run in LangWatch
         if: always() && env.LANGWATCH_API_KEY != ''
