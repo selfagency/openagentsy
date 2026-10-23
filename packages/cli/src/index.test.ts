@@ -53,4 +53,19 @@ describe('the CLI', () => {
     expect(code).toBe(0);
     expect(written.join('')).toContain('would write');
   });
+
+  it('leaves the compaction alone by default', async () => {
+    // Compaction is off for a memory integration that shrinks the context
+    // itself. There is no such integration yet, so a default install that
+    // turns compaction off grows a long session without a bound.
+    const code = await main(['setup', '--root', root, '--dry-run']);
+    expect(code).toBe(0);
+    expect(written.join('')).not.toContain('compaction');
+  });
+
+  it('turns the compaction off for a memory integration', async () => {
+    const code = await main(['setup', '--root', root, '--dry-run', '--magic-context']);
+    expect(code).toBe(0);
+    expect(written.join('')).toContain('compaction.auto');
+  });
 });

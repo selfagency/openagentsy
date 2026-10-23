@@ -10,6 +10,14 @@ export type SetupOptions = {
   target: Target;
   configPath?: string;
   dryRun?: boolean;
+  /**
+   * Turn compaction off.
+   *
+   * Compaction is off for a memory integration that shrinks the context
+   * itself. There is no such integration yet, so the default is OpenCode's
+   * own compaction, and this flag is how a project that has one says so.
+   */
+  magicContext?: boolean;
 };
 
 export type SetupResult = {
@@ -89,10 +97,12 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
       enabled: true,
     });
     changed.push('mcp.openagentsy');
-    content = setPath(content, ['compaction', 'auto'], false);
-    changed.push('compaction.auto');
-    content = setPath(content, ['compaction', 'prune'], false);
-    changed.push('compaction.prune');
+    if (options.magicContext === true) {
+      content = setPath(content, ['compaction', 'auto'], false);
+      changed.push('compaction.auto');
+      content = setPath(content, ['compaction', 'prune'], false);
+      changed.push('compaction.prune');
+    }
   } else {
     content = setPath(content, ['mcp', 'servers', 'openagentsy'], {
       type: 'local',
@@ -101,8 +111,10 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
       codemode: false,
     });
     changed.push('mcp.servers.openagentsy');
-    content = setPath(content, ['compaction', 'auto'], false);
-    changed.push('compaction.auto');
+    if (options.magicContext === true) {
+      content = setPath(content, ['compaction', 'auto'], false);
+      changed.push('compaction.auto');
+    }
   }
 
   if (!options.dryRun) {

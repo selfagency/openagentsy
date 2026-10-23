@@ -32,6 +32,8 @@ Options:
   --key <key>         BenchLM key, for the keyed REST API
   --yes               Write the lock file without asking
   --dry-run           Print what setup would write without writing it
+  --magic-context     Turn OpenCode's compaction off, for a project with a
+                      memory integration that shrinks the context itself
   -h, --help          Show this help
 `;
 
@@ -46,6 +48,7 @@ export type Values = {
   providers?: string | undefined;
   key?: string | undefined;
   'dry-run'?: boolean | undefined;
+  'magic-context'?: boolean | undefined;
   'allow-training'?: boolean | undefined;
   'allow-retention'?: boolean | undefined;
   yes?: boolean | undefined;
@@ -96,6 +99,7 @@ async function setupCommand(root: string, values: Values): Promise<number> {
     target,
     ...(values.config ? { configPath: values.config } : {}),
     ...(values['dry-run'] ? { dryRun: true } : {}),
+    ...(values['magic-context'] ? { magicContext: true } : {}),
   });
   process.stdout.write(
     `${result.dryRun ? 'would write' : 'wrote'} ${result.configPath} for ${target}\n`,
@@ -191,6 +195,7 @@ export async function main(argv: string[]): Promise<number> {
       lock: { type: 'string' },
       config: { type: 'string' },
       'dry-run': { type: 'boolean' },
+      'magic-context': { type: 'boolean' },
       providers: { type: 'string' },
       'allow-training': { type: 'boolean' },
       'allow-retention': { type: 'boolean' },

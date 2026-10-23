@@ -1,6 +1,13 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { closeDatabase, listLeases, loadRoles, openDatabase, type Target } from '@openagentsy/core';
+import {
+  agentIdOf,
+  closeDatabase,
+  listLeases,
+  loadRoles,
+  openDatabase,
+  type Target,
+} from '@openagentsy/core';
 import { parse as parseJsonc } from 'jsonc-parser';
 import { lockEntryFor, readModelLock } from '../generate/lock.js';
 import {
@@ -130,6 +137,14 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   if (config.compactionPrune === true) {
     warnings.push('compaction.prune is true, it removes tool output the Lead still needs.');
   }
+  if (config.compactionAuto === false) {
+    // Compaction off is right for a memory integration that shrinks the
+    // context itself. There is no such integration yet, so a long Lead
+    // session grows without a bound.
+    warnings.push(
+      'compaction is off and no memory integration is installed, so a long Lead session grows without a bound. Run: openagentsy setup (without --magic-context), or accept the tradeoff.',
+    );
+  }
   if (!config.exists) {
     warnings.push('no project config found, run: openagentsy setup');
   }
@@ -144,7 +159,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     const entry = lockEntryFor(lock, role.name);
     return {
       role: role.name,
-      agent: `oa-${role.name}`,
+      agent: agentIdOf(role),
       model: entry?.model ?? 'default (no lock file)',
       evidence: entry?.evidence
         ? `${entry.evidence.source}${entry.evidence.label ? ` [${entry.evidence.label}]` : ''}`
