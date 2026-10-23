@@ -158,7 +158,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
     {
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
+      env: { ...childEnv(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
     },
   );
 
@@ -261,6 +261,19 @@ export function replyPartsOf(messages: readonly unknown[]): {
     }));
 
   return { text, toolCalls };
+}
+
+/**
+ * The environment a child process of the harness gets.
+ *
+ * The key for a System One model belongs to the harness, which grades the
+ * case. A case runs without it: the agent under test must not be able to
+ * reach a classifier, or the case measures something else than the agent.
+ */
+export function childEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
+  const copy: Record<string, string | undefined> = { ...env };
+  delete copy.TYPESAFE_API_KEY;
+  return copy;
 }
 
 /**

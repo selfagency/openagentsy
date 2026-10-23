@@ -15,6 +15,7 @@
   "dependencies": {
     "@langwatch/scenario": "^1.7.0",
     "@openagentsy/core": "*",
+    "@openagentsy/jev": "*",
     "@opencode-ai/sdk": "^1.19.3",
     "ai": "^6.0.0",
     "yaml": "^2.9.0"

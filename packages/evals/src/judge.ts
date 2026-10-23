@@ -1,6 +1,19 @@
+import { createJevClient, isJevAvailable, noul } from '@openagentsy/jev';
 import type { OpencodeClient } from '@opencode-ai/sdk';
 import { parseModel } from './opencode.js';
 
+/**
+ * The probability at which a System One answer counts as met.
+ *
+ * The judge that reads a conversation is a model, and a model that cannot
+ * tell says so. A System One model answers the same question with the
+ * probability that it is true, and a probability clears a bar. The bar is
+ * high on purpose: a case that was not decided must not pass on a hunch.
+ */
+const MET_AT = 0.7;
+
+/** The probability at which a System One answer counts as not met. */
+const NOT_MET_AT = 0.3;
 /**
  * What the judge concluded about one criterion.
  *
@@ -118,7 +131,68 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
     );
   }
 
-  return parseVerdict(text, options.criteria);
+  const verdict = parseVerdict(text, options.criteria);
+  return breakTies(verdict, {
+    transcript: options.transcript,
+    ...(options.evidence !== undefined ? { evidence: options.evidence } : {}),
+  });
+}
+
+/**
+ * What a probability says about one criterion.
+ *
+ * The bar is high on purpose: a criterion that was not decided must not pass
+ * on a hunch, and it must not fail on one either. A probability in the middle
+ * is still undecided.
+ */
+export function verdictFromProbability(criterion: string, probability: number): CriterionVerdict {
+  const reason = `the probability was ${probability.toFixed(2)}`;
+  if (probability >= MET_AT) return { criterion, status: 'met', reason };
+  if (probability <= NOT_MET_AT) return { criterion, status: 'not-met', reason };
+  return { criterion, status: 'inconclusive', reason };
+}
+
+/**
+ * Decide the criteria the judge could not.
+ *
+ * A judge that reads a conversation is a model, and a model that cannot tell
+ * says so. A System One model answers the same question with the probability
+ * that it is true, so an undecided criterion gets a number instead of a shrug.
+ *
+ * The number has to clear a bar to change the verdict. Without a key, or
+ * with the service down, the verdict is the one the judge gave.
+ */
+export async function breakTies(
+  verdict: Verdict,
+  options: { transcript: string; evidence?: string | undefined },
+): Promise<Verdict> {
+  const undecided = verdict.criteria.filter((entry) => entry.status === 'inconclusive');
+  if (undecided.length === 0) return verdict;
+  if (!isJevAvailable()) return verdict;
+
+  const questions: Record<string, { type: 'noul'; instructions: string }> = {};
+  for (const entry of undecided) {
+    questions[entry.criterion] = noul(entry.criterion);
+  }
+
+  const client = createJevClient();
+  const outcome = await client.systemOne({
+    state: {
+      conversation: options.transcript,
+      ...(options.evidence !== undefined ? { evidence: options.evidence } : {}),
+    },
+    questions,
+  });
+  if (!outcome.ok) return verdict;
+
+  const criteria = verdict.criteria.map((entry) => {
+    if (entry.status !== 'inconclusive') return entry;
+    const answer = outcome.response.answers[entry.criterion];
+    if (answer === undefined || answer.type !== 'noul') return entry;
+    return verdictFromProbability(entry.criterion, answer.noul);
+  });
+
+  return { ...summarize(criteria), criteria };
 }
 
 /**
