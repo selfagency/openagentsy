@@ -15,5 +15,9 @@ export default defineConfig({
   noExternal: ['zod', '@openagentsy/core'],
   outputOptions: {
     minify: false,
+    // The bundle is copied out as one file, so a dynamic import has to be
+    // inlined too. A chunk would be a second file the copy does not take,
+    // and the plugin would fail to load at the worst possible moment.
+    inlineDynamicImports: true,
   },
 });

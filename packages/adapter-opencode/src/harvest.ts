@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { appendAudit, POLICIES } from './guard.js';
 
 /**
  * The subagent harvest.
@@ -106,7 +107,6 @@ export async function recordHarvestFailure(
   root: string,
   input: { agent: string; sessionID: string; error: unknown },
 ): Promise<void> {
-  const { appendAudit, POLICIES } = await import('./guard.js');
   await appendAudit(root, {
     policyId: POLICIES.harvestFailed.id,
     policyVersion: POLICIES.harvestFailed.version,
