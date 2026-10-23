@@ -37,8 +37,7 @@ const _execFileAsync = promisify(execFile);
 const ENABLED = process.env.OPENAGENTSY_EVAL === '1';
 const REPO_ROOT = process.env.OPENAGENTSY_REPO_ROOT ?? join(import.meta.dirname, '..', '..', '..');
 const MODEL = process.env.OPENAGENTSY_EVAL_MODEL;
-const JUDGE_MODEL =
-  process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'openrouter/thinkingmachines/inkling:free';
+const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'opencode-go/glm-5.3-flash';
 
 const suite = ENABLED ? describe : describe.skip;
 
@@ -166,6 +165,9 @@ async function runScenario(
         ...(MODEL !== undefined ? { model: MODEL } : {}),
         text,
         timeoutMs: 600_000,
+        ...(scenarioCase.rateLimitRetries !== undefined
+          ? { rateLimitRetries: scenarioCase.rateLimitRetries }
+          : {}),
       });
       replies.push(turn.text);
       toolCalls.push(...turn.toolCalls);

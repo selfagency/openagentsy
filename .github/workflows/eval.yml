@@ -94,14 +94,14 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
-          # The models are free, and OpenRouter broadcasts every request to
-          # LangWatch, so the run is traced without touching the code. The
-          # free tier answers twenty requests a minute and fifty a day
-          # unless the account has bought ten credits, so the harness
-          # retries a rate limited turn and the variables below let the
-          # models be swapped without a code change.
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/poolside/laguna-s-2.1:free' }}
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/thinkingmachines/inkling:free' }}
+          # The models are the ones that work: the Zen free variants crash the
+          # Bun runtime in OpenCode 1.19.4, and the free tiers answer a burst
+          # with a 429, which the harness waits out and asks again. The
+          # variables below let the models be swapped without a code change;
+          # an OpenRouter model would also be traced, through the broadcast
+          # OpenRouter sends to LangWatch.
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode-go/minimax-m3.1-flash' }}
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/glm-5.3-flash' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
         run: |

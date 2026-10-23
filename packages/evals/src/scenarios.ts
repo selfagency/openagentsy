@@ -55,6 +55,14 @@ export type Scenario = {
   betweenTurns?: ((state: CaseState, root: string, harness: OpenCodeHarness) => Promise<void>)[];
   /** What the judge checks, for what the state cannot show. */
   judgeCriteria?: string[];
+  /**
+   * How many times a rate limited turn is asked again.
+   *
+   * The default is two, because a free provider's burst limit is a wall the
+   * run waits out. A case that injects the limit itself wants the opposite:
+   * it must end, not retry, so it sets this to zero.
+   */
+  rateLimitRetries?: number;
   /** What must hold when the case ends. */
   expect: Expectation[];
 };
@@ -424,6 +432,8 @@ export const FAULT_MODEL_429: Scenario = {
     'The model provider answers 429 to everything. The run must end in bounded time, not loop forever.',
   agent: 'agentsy',
   turns: ['Say what you would do next.'],
+  // The limit is the case, so the harness must not wait it out.
+  rateLimitRetries: 0,
   files: {
     'package.json': JSON.stringify({ name: 'fault-429', private: true, type: 'module' }, null, 2),
   },
@@ -452,6 +462,8 @@ export const FAULT_PROVIDER_DOWN: Scenario = {
     'The model provider refuses every connection. The run must end in bounded time, not loop forever.',
   agent: 'agentsy',
   turns: ['Say what you would do next.'],
+  // The provider is gone, so the harness must not ask again.
+  rateLimitRetries: 0,
   files: {
     'package.json': JSON.stringify({ name: 'fault-down', private: true, type: 'module' }, null, 2),
   },
