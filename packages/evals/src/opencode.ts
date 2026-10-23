@@ -145,12 +145,20 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // password is set for both and sent with every request. The harness talks
   // to the same server API on both, so one harness covers both runtimes.
   const password = process.env.OPENAGENTSY_EVAL_PASSWORD ?? 'openagentsy-eval';
+
+  // The suite gets its own database. Without this the server opens the
+  // caller's OpenCode database, and every case leaves its sessions and
+  // throwaway project rows in it. Worse, the two runtimes migrate that
+  // database to their own schema, so a suite run against OpenCode 2 leaves
+  // the caller's OpenCode 1 unable to read it.
+  const database = join(tmpdir(), `openagentsy-eval-${port}.db`);
+
   const child: ChildProcess = spawn(
     'opencode',
     ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
     {
       stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password },
+      env: { ...process.env, OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
     },
   );
 

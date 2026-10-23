@@ -74,6 +74,12 @@ const logFd = logFile === undefined ? 'ignore' : openSync(logFile, 'a');
 const bin = process.env.OPENCODE_BIN ?? 'opencode';
 const env = { ...process.env };
 delete env.OPENCODE_SERVER_PASSWORD;
+// The probe gets its own database. OpenCode 2 migrates the database to its
+// own schema, and the two schemas are not compatible, so a probe that opens
+// the caller's database leaves their OpenCode 1 unable to read it. The
+// database lives beside the probe's other files, so the whole run is
+// disposable.
+env.OPENCODE_DB = join(root, 'probe.db');
 // The v2's run starts a background service, and the service takes its project
 // directory from the process that starts it. Spawned directly from node, the
 // service boots in the wrong directory and the project's plugins never load.
