@@ -41,6 +41,27 @@ describe('breakTies', () => {
     const result = await breakTies(mixed, { transcript: 'the conversation' });
     expect(result.criteria[0]?.status).toBe('met');
   });
+
+  it('leaves a criterion the case never asked about alone', async () => {
+    // The criterion comes from the judge's own words, and the judge's words
+    // are read from a conversation. A name that is not one of the case's
+    // criteria must not become a key in a request.
+    const invented: Verdict = {
+      pass: false,
+      inconclusive: true,
+      reason: 'as given',
+      criteria: [
+        { criterion: '__proto__', status: 'inconclusive', reason: 'it could not tell' },
+        { criterion: CRITERIA[0] ?? '', status: 'inconclusive', reason: 'it could not tell' },
+      ],
+    };
+    const result = await breakTies(invented, {
+      transcript: 'the conversation',
+      criteria: [CRITERIA[0] ?? '', CRITERIA[1] ?? ''],
+    });
+    expect(result.criteria[0]?.status).toBe('inconclusive');
+    expect(result.criteria[0]?.reason).toBe('it could not tell');
+  });
 });
 
 describe('the thresholds a probability has to clear', () => {

@@ -6,6 +6,7 @@ import { buildLock } from './lock.js';
 import { loadModelsDev } from './modelsdev.js';
 import { loadAliases, loadPolicy } from './policy.js';
 import { type FetchLike, listProviderModels, type ProviderSelection } from './providers.js';
+import { PROVIDER_IDS } from './types.js';
 
 export const POLICY_PATH = fileURLToPath(new URL('../policy/providers.yaml', import.meta.url));
 export const ALIASES_PATH = fileURLToPath(
@@ -54,7 +55,19 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
     loadAliases(ALIASES_PATH),
   ]);
 
-  const served: Record<string, string[]> = {};
+  // The provider names come from a file a person wrote, and one of them
+  // becomes a key in the inventory. A name like __proto__ would change the
+  // prototype of that inventory instead of adding an entry, so the name is
+  // checked against the providers that exist.
+  for (const selection of input.providers) {
+    if (!PROVIDER_IDS.includes(selection.provider)) {
+      throw new Error(
+        `unknown provider: ${selection.provider}. The providers are ${PROVIDER_IDS.join(', ')}.`,
+      );
+    }
+  }
+
+  const served: Record<string, string[]> = Object.create(null) as Record<string, string[]>;
   const inventories = await Promise.all(
     input.providers.map(async (selection) => {
       const models = await listProviderModels(selection, fetchImpl);

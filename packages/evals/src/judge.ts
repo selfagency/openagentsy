@@ -134,6 +134,7 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
   const verdict = parseVerdict(text, options.criteria);
   return breakTies(verdict, {
     transcript: options.transcript,
+    criteria: options.criteria,
     ...(options.evidence !== undefined ? { evidence: options.evidence } : {}),
   });
 }
@@ -164,15 +165,37 @@ export function verdictFromProbability(criterion: string, probability: number): 
  */
 export async function breakTies(
   verdict: Verdict,
-  options: { transcript: string; evidence?: string | undefined },
+  options: {
+    transcript: string;
+    evidence?: string | undefined;
+    criteria?: readonly string[] | undefined;
+  },
 ): Promise<Verdict> {
-  const undecided = verdict.criteria.filter((entry) => entry.status === 'inconclusive');
+  // Only a criterion the case asked about can be tied. A criterion that came
+  // from the judge's own words is not one of them, and a name that is not a
+  // criterion at all must never become a key in a request.
+  const known = options.criteria;
+  const isKnown = (criterion: string): boolean => known === undefined || known.includes(criterion);
+
+  const undecided = verdict.criteria.filter(
+    (entry) => entry.status === 'inconclusive' && isKnown(entry.criterion),
+  );
   if (undecided.length === 0) return verdict;
   if (!isJevAvailable()) return verdict;
 
-  const questions: Record<string, { type: 'noul'; instructions: string }> = {};
+  // The questions are keyed by criterion, and a criterion is untrusted text.
+  // A null-prototype object keeps a name like __proto__ from reaching the
+  // prototype of the request.
+  const questions: Record<string, { type: 'noul'; instructions: string }> = Object.create(
+    null,
+  ) as Record<string, { type: 'noul'; instructions: string }>;
   for (const entry of undecided) {
-    questions[entry.criterion] = noul(entry.criterion);
+    Object.defineProperty(questions, entry.criterion, {
+      value: noul(entry.criterion),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
 
   const client = createJevClient();
@@ -187,6 +210,7 @@ export async function breakTies(
 
   const criteria = verdict.criteria.map((entry) => {
     if (entry.status !== 'inconclusive') return entry;
+    if (!Object.hasOwn(outcome.response.answers, entry.criterion)) return entry;
     const answer = outcome.response.answers[entry.criterion];
     if (answer === undefined || answer.type !== 'noul') return entry;
     return verdictFromProbability(entry.criterion, answer.noul);
