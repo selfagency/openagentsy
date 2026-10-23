@@ -105,7 +105,11 @@ jobs:
           # line of instrumentation. The free variants of the same models
           # cost nothing and the account allows a thousand of them a day;
           # the variables below swap them without a code change.
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/deepseek/deepseek-v4-flash' }}
+          # The model the agents under test run on. Haiku is the cheapest
+          # model that follows a multi part instruction on the first try, and
+          # the suite measures instruction following.
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/anthropic/claude-haiku-5.5' }}
+          # The judge runs on a different family from the model under test.
           OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/qwen/qwen3.8-flash' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # The key for a System One model. The harness uses it to break a tie
