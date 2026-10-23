@@ -208,6 +208,14 @@ export type PromptOptions = {
   timeoutMs?: number;
   /** How many times a rate limited turn is asked again. */
   rateLimitRetries?: number;
+  /**
+   * Wait for the board server before the first turn.
+   *
+   * The board is an MCP server, and the server starts it when a session in
+   * that directory begins. A tool call that arrives before the server is
+   * up finds no tool.
+   */
+  waitForBoard?: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -215,16 +223,23 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * The rate limit in a message, when the provider refused the turn.
+ * The provider error in a message, when the provider refused the turn.
  *
  * OpenCode records the provider's answer on the assistant message: an
  * APIError with a status code. Anything else is the agent's own output.
+ *
+ * Every refusal the provider can make is worth asking again: a rate limit
+ * (429), an overloaded gateway (502, 503), a provider that dropped the
+ * request (500), and a key that is not accepted (401, 403). A case that
+ * fails because the provider was busy is a case that measured the provider
+ * and not the agent.
  */
-function rateLimitOf(message: unknown): number | undefined {
+function providerErrorOf(message: unknown): number | undefined {
   const info = (message as { info?: { error?: unknown } } | undefined)?.info;
   const error = info?.error as { data?: { statusCode?: number } } | undefined;
   const status = error?.data?.statusCode;
-  return status === 429 ? status : undefined;
+  if (status === undefined) return undefined;
+  return status === 401 || status === 403 || status === 429 || status >= 500 ? status : undefined;
 }
 
 /**
@@ -287,6 +302,36 @@ export function childEnv(env: NodeJS.ProcessEnv = process.env): Record<string, s
 }
 
 /**
+ * Wait for the board server to be connected.
+ *
+ * The board is an MCP server, and the server starts it when a session in
+ * that directory begins. A tool call that arrives before the server is up
+ * finds no tool, and the case fails for a reason that has nothing to do
+ * with the agent: a warm server reaches the first tool call sooner than a
+ * cold one, so a case that passed alone failed in a full run.
+ */
+export async function waitForBoard(
+  harness: OpenCodeHarness,
+  directory: string,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const status = await harness.client.mcp.status({ query: { directory } });
+    const servers = status.data ?? {};
+    const board = servers.openagentsy;
+    if (board !== undefined && 'status' in board && board.status === 'connected') return;
+    if (board !== undefined && 'status' in board && board.status === 'failed') {
+      throw new Error(`the board server failed to start: ${JSON.stringify(board)}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`the board server was not connected within ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+/**
  * Run one turn against a real OpenCode session.
  *
  * The session is created in the case directory, so the agents, the plugin and
@@ -312,6 +357,15 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const sessionID = created.data?.id;
   if (sessionID === undefined) {
     throw new Error('the server created a session without an id');
+  }
+
+  // The board is an MCP server, and the server starts it when a session in
+  // that directory begins. A tool call that arrives before the server is up
+  // finds no tool, and the case fails for a reason that has nothing to do
+  // with the agent: a warm server reaches the first tool call sooner than
+  // a cold one, so a case that passed alone failed in a full run.
+  if (options.waitForBoard !== false) {
+    await waitForBoard(harness, directory);
   }
 
   const ask = async () => {
@@ -349,8 +403,8 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   // is asked again after a wait. The number of tries is bounded, so a
   // provider that is down for good ends the turn instead of looping.
   const attempts = options.rateLimitRetries ?? 2;
-  let rateLimited = rateLimitOf(last);
-  for (let attempt = 0; attempt < attempts && rateLimited !== undefined; attempt += 1) {
+  let providerError = providerErrorOf(last);
+  for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
     await sleep((attempt + 1) * 30_000);
     await ask();
     await waitForIdle(client, sessionID, directory, timeoutMs);
@@ -359,8 +413,8 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
       query: { directory },
     });
     const recovered = again.data?.at(-1);
-    rateLimited = rateLimitOf(recovered);
-    if (rateLimited === undefined) {
+    providerError = providerErrorOf(recovered);
+    if (providerError === undefined) {
       // The turn came back. The reply is this one, not the refusal that
       // came before it.
       last = recovered;

@@ -267,6 +267,10 @@ roles:
       Work only inside the files leased to you. If the task needs a file you do
       not own, post a question record with openagentsy_board_record naming the
       owner instead of editing it.
+      When a write is refused, the refusal is the answer: post a question
+      record with openagentsy_board_record naming the file and the lease you
+      need, and do not try the same write again. A refused write that is
+      not reported is a silent stall.
       Run the bean's acceptance tests before reporting. A change that is not
       tested is not finished.
       Check the bean's budget with openagentsy_board_budget before the
