@@ -76,10 +76,11 @@ roles:
       the human's behalf, and spawning writers outside the approved plan.
     guidance: |
       Classify the request before spawning anything: solo, fan-out read,
-      parallel write, or design options. Call board_classify with the request
-      and follow the profile it returns. When the tool is not available,
-      classify the request yourself. When the confidence is below 0.6, take
-      the cheaper profile and say in the report that you did.
+      parallel write, or design options. Call openagentsy_board_classify
+      with the request and follow the profile it returns. When the tool is
+      not available, classify the request yourself. When the confidence is
+      below 0.6, take the cheaper profile and say in the report that you
+      did.
       A sequential task gets one builder, not a swarm.
       Solo is the default. Fan-out read is for unfamiliar code, research and
       triage: 2 to 6 scouts and researchers in parallel, one builder. Parallel
