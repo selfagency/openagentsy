@@ -6,6 +6,8 @@
  * shows up in one place.
  */
 
+import type { HarvestSession } from './harvest.js';
+
 export type ProviderModelInfo = {
   variants?: Record<string, Record<string, unknown>>;
 };
@@ -40,3 +42,38 @@ export type ClientLike = {
   };
   session: SessionClient;
 };
+
+/**
+ * The V1 client, as the three things a harvest needs.
+ *
+ * The V2 path speaks to the plugin context instead, so the harvest asks for
+ * what it needs rather than for a client.
+ */
+export function sessionAdapter(
+  client: { session: SessionClient },
+  directory: string,
+): HarvestSession {
+  return {
+    messages: async (sessionID) => {
+      const messages = await client.session.messages({
+        path: { id: sessionID },
+        query: { directory },
+      });
+      return messages.data ?? [];
+    },
+    create: async ({ title, parentID }) => {
+      const created = await client.session.create({
+        body: { title, parentID },
+        query: { directory },
+      });
+      return created.data?.id;
+    },
+    prompt: async ({ sessionID, agent, text }) => {
+      await client.session.promptAsync({
+        path: { id: sessionID },
+        body: { agent, parts: [{ type: 'text', text }] },
+        query: { directory },
+      });
+    },
+  };
+}

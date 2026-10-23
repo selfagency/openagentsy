@@ -1,6 +1,5 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { SessionClient } from './client.js';
 
 /**
  * The subagent harvest.
@@ -25,14 +24,31 @@ const ARCHIVIST = 'oa-archivist';
 /** How much of the transcript the packet carries. */
 const MAX_TRANSCRIPT_CHARS = 12_000;
 
-export type HarvestClient = {
-  session: SessionClient;
+/**
+ * The three things a harvest needs from a session runtime.
+ *
+ * The two runtimes speak differently: the V1 path talks to the server client
+ * and the V2 path talks to the plugin context. The harvest only needs to
+ * read a transcript, open a session and hand it a packet, so that is what it
+ * asks for.
+ */
+export type HarvestSession = {
+  /** The messages of a session, in the order they were said. */
+  messages: (sessionID: string) => Promise<{ parts?: { type: string; text?: string }[] }[]>;
+  /**
+   * Open a session for the archivist, as a child of the session it harvests.
+   *
+   * It is a working session, not a chapter of the person's history, and a
+   * child session keeps it out of the top level list.
+   */
+  create: (input: { title: string; parentID: string }) => Promise<string | undefined>;
+  /** Hand the archivist its packet. */
+  prompt: (input: { sessionID: string; agent: string; text: string }) => Promise<void>;
 };
 
 export type HarvestInput = {
-  client: HarvestClient;
+  session: HarvestSession;
   root: string;
-  directory: string;
   sessionID: string;
   /** The role that ran the session. */
   role: string;
@@ -50,16 +66,13 @@ export type HarvestInput = {
 export async function harvest(
   input: HarvestInput,
 ): Promise<{ harvested: boolean; reason: string }> {
-  const { client, root, directory, sessionID, role, agent } = input;
+  const { session, root, sessionID, role, agent } = input;
   if (NOT_HARVESTED.has(role)) {
     return { harvested: false, reason: `${role} sessions are not harvested` };
   }
 
-  const messages = await client.session.messages({
-    path: { id: sessionID },
-    query: { directory },
-  });
-  const transcript = transcriptOf(messages.data ?? []);
+  const messages = await session.messages(sessionID);
+  const transcript = transcriptOf(messages);
   const decisions = await decisionsOf(root, sessionID);
 
   // Nothing new means nothing to keep: no writes, no refusals, no words.
@@ -69,23 +82,15 @@ export async function harvest(
 
   const packet = buildPacket({ sessionID, role, agent, transcript, decisions });
 
-  const created = await client.session.create({
-    // The archivist session is a child of the session it harvests. It is a
-    // working session, not a chapter of the person's history, and a child
-    // session keeps it out of the top level list.
-    body: { title: `harvest ${role}`, parentID: sessionID },
-    query: { directory },
+  const archivistSession = await session.create({
+    title: `harvest ${role}`,
+    parentID: sessionID,
   });
-  const archivistSession = created.data?.id;
   if (archivistSession === undefined) {
     return { harvested: false, reason: 'the server created no session for the archivist' };
   }
 
-  await client.session.promptAsync({
-    path: { id: archivistSession },
-    body: { agent: ARCHIVIST, parts: [{ type: 'text', text: packet }] },
-    query: { directory },
-  });
+  await session.prompt({ sessionID: archivistSession, agent: ARCHIVIST, text: packet });
 
   return { harvested: true, reason: `the archivist was given the packet of ${sessionID}` };
 }

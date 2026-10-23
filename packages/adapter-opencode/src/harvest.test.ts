@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type HarvestClient, harvest } from './harvest.js';
+import { type HarvestSession, harvest } from './harvest.js';
 
 let root: string;
 
@@ -15,31 +15,21 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** A client that records what it was asked to do. */
-function fakeClient(messages: { parts?: { type: string; text?: string }[] }[] = []) {
+/** A session that records what it was asked to do. */
+function fakeSession(messages: { parts?: { type: string; text?: string }[] }[] = []) {
   const prompts: { sessionID: string; agent: string; text: string }[] = [];
   const created: { parentID?: string; title: string }[] = [];
-  const client: HarvestClient = {
-    session: {
-      create: async (options) => {
-        created.push({
-          ...(options.body.parentID !== undefined ? { parentID: options.body.parentID } : {}),
-          title: options.body.title,
-        });
-        return { data: { id: 'ses_archivist' } };
-      },
-      messages: async () => ({ data: messages }),
-      promptAsync: async (options) => {
-        prompts.push({
-          sessionID: options.path.id,
-          agent: options.body.agent ?? 'unknown',
-          text: options.body.parts[0]?.text ?? '',
-        });
-        return {};
-      },
+  const session: HarvestSession = {
+    create: async ({ title, parentID }) => {
+      created.push({ parentID, title });
+      return 'ses_archivist';
+    },
+    messages: async () => messages,
+    prompt: async ({ sessionID, agent, text }) => {
+      prompts.push({ sessionID, agent, text });
     },
   };
-  return { client, prompts, created };
+  return { session, prompts, created };
 }
 
 async function writeAudit(lines: object[]): Promise<void> {
@@ -52,11 +42,10 @@ async function writeAudit(lines: object[]): Promise<void> {
 
 describe('harvest', () => {
   it('does not harvest the Lead, which keeps its own history', async () => {
-    const { client, prompts } = fakeClient([{ parts: [{ type: 'text', text: 'hello' }] }]);
+    const { session, prompts } = fakeSession([{ parts: [{ type: 'text', text: 'hello' }] }]);
     const result = await harvest({
-      client,
+      session,
       root,
-      directory: root,
       sessionID: 'ses_lead',
       role: 'lead',
       agent: 'agentsy',
@@ -66,11 +55,10 @@ describe('harvest', () => {
   });
 
   it('does not harvest the archivist, which would never stop', async () => {
-    const { client, prompts } = fakeClient([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
+    const { session, prompts } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     const result = await harvest({
-      client,
+      session,
       root,
-      directory: root,
       sessionID: 'ses_archivist',
       role: 'archivist',
       agent: 'oa-archivist',
@@ -80,11 +68,10 @@ describe('harvest', () => {
   });
 
   it('does not harvest a session that left nothing behind', async () => {
-    const { client, prompts } = fakeClient([]);
+    const { session, prompts } = fakeSession([]);
     const result = await harvest({
-      client,
+      session,
       root,
-      directory: root,
       sessionID: 'ses_silent',
       role: 'scout',
       agent: 'oa-scout',
@@ -99,14 +86,13 @@ describe('harvest', () => {
       { sessionID: 'ses_scout', action: 'edit', resource: 'notes.md', effect: 'deny' },
       { sessionID: 'ses_other', action: 'edit', resource: 'src/b.ts', effect: 'allow' },
     ]);
-    const { client, prompts } = fakeClient([
+    const { session, prompts } = fakeSession([
       { parts: [{ type: 'text', text: 'the lease check said no' }] },
     ]);
 
     const result = await harvest({
-      client,
+      session,
       root,
-      directory: root,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -125,11 +111,10 @@ describe('harvest', () => {
   });
 
   it('creates the archivist session as a child of the session it harvests', async () => {
-    const { client, created } = fakeClient([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
+    const { session, created } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     await harvest({
-      client,
+      session,
       root,
-      directory: root,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',

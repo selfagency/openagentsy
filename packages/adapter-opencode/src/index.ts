@@ -1,4 +1,4 @@
-import type { ClientLike } from './client.js';
+import { type ClientLike, sessionAdapter } from './client.js';
 import {
   appendAudit,
   POLICIES,
@@ -132,7 +132,13 @@ async function onSessionIdle(
   // A harvest that fails must not break the session that is closing, so it
   // is caught here and put on the record.
   try {
-    await harvest({ client, root, directory: root, sessionID, role, agent });
+    await harvest({
+      session: sessionAdapter(client, root),
+      root,
+      sessionID,
+      role,
+      agent,
+    });
   } catch (error) {
     await appendAudit(root, {
       policyId: POLICIES.harvestFailed.id,

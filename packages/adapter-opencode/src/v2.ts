@@ -9,6 +9,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
+import { harvest } from './harvest.js';
 import { checkWrite } from './write-guard.js';
 
 /**
@@ -35,6 +36,11 @@ import { checkWrite } from './write-guard.js';
  * This path is verified against `@opencode/cli@2.1.3`.
  */
 
+/** The message shape the V2 context returns. */
+export type V2SessionMessage = {
+  parts?: { type: string; text?: string }[];
+};
+
 /** The V2 context, as far as this plugin uses it. */
 export type V2Context = {
   location: { directory: string };
@@ -47,6 +53,14 @@ export type V2Context = {
       sessionID: string;
       model: { providerID: string; id: string; variant?: string };
     }) => Promise<void>;
+    /** Open a session. A parent makes it a child of that session. */
+    create: (input?: { title?: string; parentID?: string }) => Promise<{ id?: string }>;
+    /** The messages of a session. */
+    context: (input: { sessionID: string }) => Promise<readonly V2SessionMessage[]>;
+    /** Hand a session a prompt and wait for the answer. */
+    prompt: (input: { sessionID: string; text: string }) => Promise<unknown>;
+    /** Change the agent a session runs under. */
+    switchAgent: (input: { sessionID: string; agent: string }) => Promise<void>;
   };
   tool: {
     hook: (
@@ -305,7 +319,8 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
   });
 
   // The events. A session that goes idle gives its effort rung back, so the
-  // next task in that session starts on the rung the role was given.
+  // next task in that session starts on the rung the role was given. The
+  // archivist takes what the session learned, the same way the V1 path does.
   const controller = new AbortController();
   void (async () => {
     for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
@@ -318,11 +333,59 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       if (!agent) continue;
       const role = roleNameOf(agent);
       const rungs = await readRungs(root);
-      if (!rungs[role]) continue;
-      delete rungs[role];
-      await writeRungs(root, rungs);
+      if (rungs[role]) {
+        delete rungs[role];
+        await writeRungs(root, rungs);
+      }
+      await harvestV2(ctx, root, sessionID, role, agent);
     }
   })();
 
   return () => controller.abort();
+}
+
+/**
+ * The harvest, on the V2 path.
+ *
+ * A harvest that fails must not break the session that is closing, so it is
+ * caught here and put on the record, the same way the V1 path does it.
+ */
+async function harvestV2(
+  ctx: V2Context,
+  root: string,
+  sessionID: string,
+  role: string,
+  agent: string,
+): Promise<void> {
+  try {
+    await harvest({
+      session: {
+        messages: async (id) => [...(await ctx.session.context({ sessionID: id }))],
+        create: async ({ title, parentID }) => {
+          const created = await ctx.session.create({ title, parentID });
+          return created.id;
+        },
+        prompt: async ({ sessionID: id, agent: promptAgent, text }) => {
+          // A V2 prompt carries no agent, so the session is switched to the
+          // archivist before it is given the packet.
+          await ctx.session.switchAgent({ sessionID: id, agent: promptAgent });
+          await ctx.session.prompt({ sessionID: id, text });
+        },
+      },
+      root,
+      sessionID,
+      role,
+      agent,
+    });
+  } catch (error) {
+    await appendAudit(root, {
+      policyId: POLICIES.harvestFailed.id,
+      policyVersion: POLICIES.harvestFailed.version,
+      actor: agent,
+      action: 'harvest',
+      resource: sessionID,
+      effect: 'deny',
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
