@@ -765,10 +765,10 @@ export const BUDGET_STOP: Scenario = {
 export const LEAD_EFFORT_CLIMB: Scenario = {
   name: 'lead effort climb',
   description:
-    'The Lead is asked to plan a piece of work that is hard. It must climb the effort ladder, and the climb must be on record.',
+    'The Lead is asked to plan a piece of work. It must climb the effort ladder, and the climb must be on record.',
   agent: 'agentsy',
   turns: [
-    'Plan the work for a new endpoint. The planning is complicated and the decomposition is not obvious, so think it through carefully before you dispatch anyone.',
+    'The planning for the new endpoint is complicated, so climb the effort ladder before you plan it. Then say which rung you are on.',
   ],
   files: {
     'package.json': JSON.stringify(

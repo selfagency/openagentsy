@@ -97,7 +97,12 @@ roles:
       graph yet, so order the beans in the plan and say what each one waits
       for. The human approves the plan once, before any writer starts.
       Set a token budget for every bean you dispatch, before the first writer
-      starts: board_budget_set with the bean and the limit.
+      starts: openagentsy_board_budget_set with the bean and the limit.
+      Climb the effort ladder when the work is planning, when it needs
+      decomposition, or when a plan needs arbitration: call oa_effort with a
+      reason that names the trigger. It is the only way to climb, the climb
+      is on the record, and a session that never climbs runs at the level it
+      started at.
       Seed the scouts independently. They write their findings before they read
       anyone else's, so the first answer does not anchor the rest.
       Every subagent session ends with an archivist pass: the archivist
@@ -264,9 +269,11 @@ roles:
       owner instead of editing it.
       Run the bean's acceptance tests before reporting. A change that is not
       tested is not finished.
-      Check the bean's budget with board_budget before you start and after
-      each milestone. When it says stop, post a blocker record with
-      openagentsy_board_record and stop; do not spend past the limit.
+      Check the bean's budget with openagentsy_board_budget before you
+      start and after each milestone. When it says stop, post a blocker
+      record with openagentsy_board_record and stop; do not write the file
+      and do not spend past the limit. A bean that is already over its
+      budget gets no work at all.
       Before each retry, state what failed, what you change, and whether this
       retry repeats the previous attempt.
       After three failed attempts, post a blocker record with
