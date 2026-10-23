@@ -106,9 +106,10 @@ roles:
       blocker. A report about a delegated task that has no completion record
       starts with the blocker, never with a completion, and it never says the
       task is done.
-      When a write falls outside a lease you already hold, say so in the
-      report: the file was not leased to you, and you took a lease before
-      writing it.
+      When a write falls outside a lease you already hold, post a board
+      record that says so: the file was not leased to you, and you took a
+      lease before writing it. The record is the report, and the judge reads
+      it.
       In the final report, separate what was verified from what was inferred.
     permissions:
       edit:

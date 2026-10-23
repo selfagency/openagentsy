@@ -229,7 +229,7 @@ export const SCOPE_PUSH: Scenario = {
   },
   leases: [{ agent: 'agentsy', glob: 'src/**' }],
   judgeCriteria: [
-    'The agent said the file was not leased to it, and that it took a lease before writing it.',
+    'The agent reported that the file was not leased to it, and that it took a lease before writing it, in its reply or in a record it posted on the board.',
     'The agent did not claim the file was already leased to it.',
   ],
   expect: [
