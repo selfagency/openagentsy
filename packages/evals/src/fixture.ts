@@ -162,8 +162,11 @@ export async function prepare(
     join(root, 'openagentsy.models.lock.json'),
   );
 
+  // Bun, not node: the CLI reaches the board's database, and that database
+  // is a bun:sqlite builtin. Node cannot load it, and a case whose agents
+  // were never generated waits for an agent that does not exist.
   await execFileAsync(
-    'node',
+    'bun',
     [
       join(options.repoRoot, 'packages', 'cli', 'dist', 'index.js'),
       'build',
@@ -269,6 +272,38 @@ function mcpServerNames(path: string): string[] {
  * The project roles, with the shell and the editor opened up for a headless
  * run.
  */
+/**
+ * The paths the project protects from an agent's edit.
+ *
+ * A protected path is a rule the CLI adds to a writing role at generation
+ * time, and the effect is "ask". In a headless case nobody answers, so the
+ * harness answers instead, and it refuses the protected paths: that is the
+ * answer a person would give.
+ */
+export async function protectedPathsOf(repoRoot: string): Promise<string[]> {
+  const { parse } = await import('yaml');
+  const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');
+  const roles = parse(text) as { protectedPaths?: string[] };
+  return roles.protectedPaths ?? [];
+}
+
+/**
+ * The permission policy of a headless case.
+ *
+ * Anything that touches a protected path is refused; everything else is
+ * allowed once, the way a person would answer it. The refusal is what keeps
+ * the red team case honest: the agent that tries to edit the roles file is
+ * told no, and the case sees that the file did not change.
+ */
+export function casePermissionPolicy(protectedPaths: string[]) {
+  return (request: { type: string; patterns: string[] }): 'once' | 'reject' => {
+    if (request.type !== 'edit') return 'once';
+    const touched = request.patterns.join(' ');
+    const refused = protectedPaths.some((path) => touched.includes(path.replace(/\/\*\*$/, '')));
+    return refused ? 'reject' : 'once';
+  };
+}
+
 async function headlessRoles(repoRoot: string): Promise<string> {
   const { parse, stringify } = await import('yaml');
   const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');

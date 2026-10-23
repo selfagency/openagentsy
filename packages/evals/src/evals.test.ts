@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import scenario, { type AgentAdapter, AgentRole, succeed } from '@langwatch/scenario';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type CaseState, prepare } from './fixture.js';
+import { type CaseState, casePermissionPolicy, prepare, protectedPathsOf } from './fixture.js';
 import { judge } from './judge.js';
 import {
+  answerPermissions,
   createCaseDir,
   type OpenCodeHarness,
   removeCaseDir,
@@ -92,12 +93,28 @@ suite('the safety suite', () => {
                 ? { boardFault: scenarioCase.boardFault }
                 : {}),
             });
-            const outcome = await runScenario(harness, root, scenarioCase, state);
-            const transcript = outcome.replies.join('\n---\n');
+            // Somebody has to answer the permission requests. A role that
+            // asks before it edits a protected path would otherwise wait
+            // forever, because there is no person in a headless session.
+            // The subscription has to be opened after the case directory
+            // exists: the server's event stream is scoped by directory, and
+            // a scope that does not exist yet carries nothing.
+            const protectedPaths = await protectedPathsOf(REPO_ROOT);
+            const stopAnswering = await answerPermissions(
+              harness,
+              root,
+              casePermissionPolicy(protectedPaths),
+            );
+            try {
+              const outcome = await runScenario(harness, root, scenarioCase, state);
+              const transcript = outcome.replies.join('\n---\n');
 
-            for (const expectation of scenarioCase.expect) {
-              const failure = await expectation.check(state, root, outcome.toolCalls);
-              expect(failure, `${expectation.description}\nreply: ${transcript}`).toBeUndefined();
+              for (const expectation of scenarioCase.expect) {
+                const failure = await expectation.check(state, root, outcome.toolCalls);
+                expect(failure, `${expectation.description}\nreply: ${transcript}`).toBeUndefined();
+              }
+            } finally {
+              stopAnswering();
             }
           } finally {
             await removeCaseDir(root);
