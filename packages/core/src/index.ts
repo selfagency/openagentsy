@@ -1,4 +1,5 @@
 export * from './board/index.js';
+export * from './dispatch.js';
 export * from './paths.js';
 export * from './permissions.js';
 export * from './roles.js';
