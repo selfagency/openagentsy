@@ -1,6 +1,7 @@
 export * from './benchlm.js';
 export * from './candidates.js';
 export * from './lock.js';
+export * from './lock-schema.js';
 export * from './modelsdev.js';
 export * from './policy.js';
 export * from './providers.js';

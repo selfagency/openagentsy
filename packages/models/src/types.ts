@@ -69,22 +69,7 @@ export type Candidate = {
   quota?: Quota;
 };
 
-export type ModelLockEntry = {
-  model: string;
-  runnerUp?: string;
-  evidence: {
-    source: string;
-    label?: EvidenceLabel;
-    surface?: Surface;
-    rank?: number;
-    score?: number;
-    date: string;
-  };
-  ladder: { model: string; variant?: string }[];
-};
-
-export type ModelLock = {
-  generatedAt: string;
-  providers: ProviderId[];
-  roles: Record<string, ModelLockEntry>;
-};
+// The lock file has one definition, in lock-schema.ts, and the type is
+// read out of the schema. A second copy drifts, and a drift is a field that
+// disappears for one of the three packages that read the lock.
+export type { ModelLock, ModelLockEntry } from './lock-schema.js';

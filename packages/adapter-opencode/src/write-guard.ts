@@ -1,5 +1,18 @@
+import { isAbsolute, join } from 'node:path';
 import { appendAudit, decideWrite } from './guard.js';
 import { patchPaths } from './patch-paths.js';
+
+/**
+ * The path a write is aimed at, in absolute form.
+ *
+ * The board joins a relative path with node's own resolver, so the guard
+ * does the same: a string that starts with a slash is a path on Unix and
+ * not one on Windows, and a Windows path joined by hand comes out as
+ * nonsense.
+ */
+export function joinRoot(root: string, path: string): string {
+  return isAbsolute(path) ? path : join(root, path);
+}
 
 /**
  * The write guard, the one rule both runtimes apply.
@@ -88,7 +101,7 @@ export async function checkWrite(
   },
 ): Promise<{ effect: 'allow' | 'deny'; reason: string } | undefined> {
   const { toolName, path, agent, sessionID } = input;
-  const absolute = path.startsWith('/') ? path : `${root}/${path}`;
+  const absolute = joinRoot(root, path);
   const decision = await decideWrite(root, absolute, agent);
 
   if (decision.effect === 'deny') {

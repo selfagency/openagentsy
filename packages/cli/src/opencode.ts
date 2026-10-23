@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import type { Dirent } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -40,6 +40,32 @@ export function targetForVersion(version: OpenCodeVersion): Target {
 
 /** Project config file names, in the order OpenCode prefers them. */
 export const PROJECT_CONFIG_NAMES = ['opencode.json', 'opencode.jsonc'] as const;
+
+/**
+ * Every config file OpenCode reads for a project.
+ *
+ * OpenCode merges a root config with one in the config directory, so a tool
+ * that reads only the root config sees a different system from the one the
+ * runtime runs on. The doctor's job is to describe the runtime's system.
+ */
+export async function findConfigPaths(root: string): Promise<string[]> {
+  const candidates = [
+    join(root, 'opencode.json'),
+    join(root, 'opencode.jsonc'),
+    join(root, '.opencode', 'opencode.json'),
+    join(root, '.opencode', 'opencode.jsonc'),
+  ];
+  const found: string[] = [];
+  for (const path of candidates) {
+    try {
+      await readFile(path, 'utf8');
+      found.push(path);
+    } catch {
+      // A config that is not there is not a config.
+    }
+  }
+  return found;
+}
 
 /**
  * Directories that hold skills, in the order OpenCode searches them. The

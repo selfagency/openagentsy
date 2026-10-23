@@ -1,6 +1,9 @@
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { parseRoles } from '@openagentsy/core';
-import { describe, expect, it } from 'vitest';
-import { buildLock } from './lock.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildLock, readLock } from './lock.js';
 import type { Candidate, ProviderModel, RankEntry, Retention } from './types.js';
 
 const SAFE: Retention = {
@@ -210,5 +213,61 @@ describe('buildLock', () => {
       providers: ['opencode-go'],
     });
     expect(reasons.builder).toContain('coding rank');
+  });
+});
+
+describe('readLock', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'openagentsy-lock-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('reads a lock that fits the schema', async () => {
+    const path = join(root, 'openagentsy.models.lock.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        generatedAt: 'now',
+        providers: ['opencode-go'],
+        roles: {
+          builder: {
+            model: 'opencode-go/builder',
+            evidence: { source: 'test', label: 'supported', date: '2026-10-23' },
+            ladder: [{ model: 'opencode-go/builder', variant: 'low' }],
+          },
+        },
+      }),
+      'utf8',
+    );
+    const lock = await readLock(path);
+    expect(lock?.roles.builder?.model).toBe('opencode-go/builder');
+  });
+
+  it('reads a lock written by an older version', async () => {
+    // The older lock has no providers and no evidence, and it is still a
+    // lock a project can have.
+    const path = join(root, 'openagentsy.models.lock.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        generatedAt: 'now',
+        roles: { builder: { model: 'opencode-go/builder', ladder: [] } },
+      }),
+      'utf8',
+    );
+    const lock = await readLock(path);
+    expect(lock?.roles.builder?.model).toBe('opencode-go/builder');
+  });
+
+  it('refuses a lock that does not fit the schema', async () => {
+    // A cast would call this a lock. The schema says it is not one.
+    const path = join(root, 'openagentsy.models.lock.json');
+    await writeFile(path, JSON.stringify({ roles: { builder: { model: 42 } } }), 'utf8');
+    expect(await readLock(path)).toBeUndefined();
   });
 });

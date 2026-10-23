@@ -107,6 +107,11 @@ async function setupCommand(root: string, values: Values): Promise<number> {
   for (const key of result.changed) {
     process.stdout.write(`  ${key}\n`);
   }
+  if (result.merged && result.merged.length > 0) {
+    process.stdout.write(
+      `  OpenCode merges this with ${result.merged.join(', ')}, which was not read. Review it after setup.\n`,
+    );
+  }
   if (result.pluginPath) {
     process.stdout.write(
       `  ${result.dryRun ? 'would install' : 'installed'} ${result.pluginPath}\n`,

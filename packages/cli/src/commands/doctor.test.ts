@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -85,5 +85,18 @@ describe('the doctor', () => {
   it('says nothing about the compaction when it is left alone', async () => {
     const report = await runDoctor(root);
     expect(report.warnings.some((warning) => warning.includes('compaction'))).toBe(false);
+  });
+
+  it('reports every config file OpenCode merges', async () => {
+    // OpenCode reads a root config and a config in the config directory, and
+    // merges them. A doctor that reads only the root one describes a
+    // different system from the one the runtime runs on.
+    await writeFile(join(root, 'opencode.json'), JSON.stringify({}), 'utf8');
+    await mkdir(join(root, '.opencode'), { recursive: true });
+    await writeFile(join(root, '.opencode', 'opencode.jsonc'), JSON.stringify({}), 'utf8');
+
+    const report = await runDoctor(root);
+    expect(report.config.paths).toHaveLength(2);
+    expect(report.config.paths.some((path) => path.includes('.opencode'))).toBe(true);
   });
 });

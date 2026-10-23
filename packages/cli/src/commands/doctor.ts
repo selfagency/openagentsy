@@ -14,15 +14,17 @@ import { lockEntryFor, readModelLock } from '../generate/lock.js';
 import {
   detectOpenCode,
   type FoundSkill,
+  findConfigPaths,
   findSkills,
   type OpenCodeVersion,
-  PROJECT_CONFIG_NAMES,
   targetForVersion,
 } from '../opencode.js';
 import { findPluginBundle } from '../plugin.js';
 
 export type ConfigReport = {
   path: string | undefined;
+  /** Every config file OpenCode merges, in the order it reads them. */
+  paths: string[];
   exists: boolean;
   compactionAuto: unknown;
   compactionPrune: unknown;
@@ -81,8 +83,8 @@ function listMcpServers(config: Record<string, unknown>): string[] {
 }
 
 async function readProjectConfig(root: string): Promise<ConfigReport> {
-  for (const name of PROJECT_CONFIG_NAMES) {
-    const path = join(root, name);
+  const paths = await findConfigPaths(root);
+  for (const path of paths) {
     let text: string;
     try {
       text = await readFile(path, 'utf8');
@@ -94,6 +96,7 @@ async function readProjectConfig(root: string): Promise<ConfigReport> {
     const plugins = config.plugin ?? config.plugins;
     return {
       path,
+      paths,
       exists: true,
       compactionAuto: compaction.auto,
       compactionPrune: compaction.prune,
@@ -104,6 +107,7 @@ async function readProjectConfig(root: string): Promise<ConfigReport> {
 
   return {
     path: undefined,
+    paths,
     exists: false,
     compactionAuto: undefined,
     compactionPrune: undefined,
@@ -270,6 +274,30 @@ function field(label: string, value: string): string {
   return `  ${label.padEnd(12)}${value}`;
 }
 
+/**
+ * The lines about the project config.
+ *
+ * OpenCode merges every config it finds, so the ones the doctor did not
+ * read are part of the system too.
+ */
+function configLines(config: ConfigReport): string[] {
+  const lines = [field('path', config.path ?? 'not found')];
+  if (config.paths.length > 1) {
+    lines.push(field('merged', config.paths.join(', ')));
+  }
+  lines.push(
+    field(
+      'compaction',
+      `auto=${String(config.compactionAuto ?? 'unset')} prune=${String(
+        config.compactionPrune ?? 'unset',
+      )}`,
+    ),
+  );
+  lines.push(field('mcp', config.mcpServers.join(', ') || 'none'));
+  lines.push(field('plugins', config.plugins.join(', ') || 'none'));
+  return lines;
+}
+
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = [];
 
@@ -283,17 +311,7 @@ export function formatDoctorReport(report: DoctorReport): string {
 
   lines.push('');
   lines.push('Project config');
-  lines.push(field('path', report.config.path ?? 'not found'));
-  lines.push(
-    field(
-      'compaction',
-      `auto=${String(report.config.compactionAuto ?? 'unset')} prune=${String(
-        report.config.compactionPrune ?? 'unset',
-      )}`,
-    ),
-  );
-  lines.push(field('mcp', report.config.mcpServers.join(', ') || 'none'));
-  lines.push(field('plugins', report.config.plugins.join(', ') || 'none'));
+  lines.push(...configLines(report.config));
 
   if (report.warnings.length > 0) {
     lines.push('');

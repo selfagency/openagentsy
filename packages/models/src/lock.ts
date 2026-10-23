@@ -1,15 +1,22 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import type { RoleDefinition, RolesFile } from '@openagentsy/core';
+import { modelLockSchema } from './lock-schema.js';
 import { type Rejection, type Selection, type SelectOptions, selectModel } from './score.js';
 import type { Candidate, ModelLock, ModelLockEntry, ProviderModel } from './types.js';
 
 export const LOCK_FILE_NAME = 'openagentsy.models.lock.json';
 
+/**
+ * Read the lock file.
+ *
+ * The file is validated against the schema, so a lock that does not fit is
+ * a lock nobody reads, rather than a cast that lies about what it holds.
+ */
 export async function readLock(path: string): Promise<ModelLock | undefined> {
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    return parsed as ModelLock;
+    const result = modelLockSchema.safeParse(parsed);
+    return result.success ? result.data : undefined;
   } catch {
     return undefined;
   }

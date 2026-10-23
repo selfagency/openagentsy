@@ -1,41 +1,17 @@
-import { readFile } from 'node:fs/promises';
+import { type ModelLock, type ModelLockEntry, readLock } from '@openagentsy/models';
 
-export type ModelLockEntry = {
-  model: string;
-  runnerUp?: string;
-  evidence?: {
-    source: string;
-    label?: string;
-    date?: string;
-  };
-  date?: string;
-  ladder: { model: string; variant?: string }[];
-};
-
-export type ModelLock = {
-  generatedAt: string;
-  roles: Record<string, ModelLockEntry>;
-};
+export type { ModelLock, ModelLockEntry };
 
 /**
  * The lock file is written by `openagentsy models init`. It is optional: a
  * project without one still gets valid agent files, they just inherit the
  * OpenCode default model.
+ *
+ * The type and the reader come from the package that owns the lock, so the
+ * CLI and the model selector cannot drift apart.
  */
 export async function readModelLock(path: string): Promise<ModelLock | undefined> {
-  let text: string;
-  try {
-    text = await readFile(path, 'utf8');
-  } catch {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    return parsed as ModelLock;
-  } catch {
-    return undefined;
-  }
+  return readLock(path);
 }
 
 export function lockEntryFor(

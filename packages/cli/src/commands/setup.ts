@@ -26,6 +26,8 @@ export type SetupResult = {
   changed: string[];
   pluginPath?: string;
   dryRun: boolean;
+  /** The config files OpenCode merges with the one that was written. */
+  merged?: string[];
 };
 
 const FORMATTING: FormattingOptions = {
@@ -69,6 +71,27 @@ async function findConfigPath(root: string): Promise<string> {
 }
 
 /**
+ * The config files that are already there, and would be merged with a new
+ * one.
+ *
+ * OpenCode reads a root config and a config in the config directory, and
+ * merges them. Writing a root config next to a config directory that was
+ * never read is how a split brain starts.
+ */
+async function mergedConfigs(root: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const name of ['.opencode/opencode.json', '.opencode/opencode.jsonc']) {
+    const path = join(root, name);
+    const exists = await stat(path).then(
+      () => true,
+      () => false,
+    );
+    if (exists) found.push(path);
+  }
+  return found;
+}
+
+/**
  * Write the config shape OpenCode needs for OpenAgentsy.
  *
  * The two versions disagree on three things this touches: the MCP server
@@ -79,6 +102,7 @@ async function findConfigPath(root: string): Promise<string> {
 export async function runSetup(options: SetupOptions): Promise<SetupResult> {
   const configPath = options.configPath ?? (await findConfigPath(options.root));
   const command = await resolveMcpCommand(options.root);
+  const merged = await mergedConfigs(options.root);
 
   let text = '';
   try {
@@ -129,5 +153,6 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
     changed,
     ...(pluginPath !== undefined ? { pluginPath } : {}),
     dryRun: options.dryRun ?? false,
+    ...(merged.length > 0 ? { merged } : {}),
   };
 }
