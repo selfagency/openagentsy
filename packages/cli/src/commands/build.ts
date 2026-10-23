@@ -29,11 +29,19 @@ async function writeFileAt(path: string, content: string): Promise<void> {
 /**
  * Remove the agent files a previous build wrote that this one does not.
  *
- * The `oa-` prefix is the generated naming scheme, so a file that carries it
- * and is not in the current set is a role that was renamed or removed. A file
- * without the prefix is not ours, so it is left alone.
+ * A file the build wrote is one whose name carries the agent prefix, or one
+ * whose name is the agent name of a role in the roles file. A role may name
+ * its own agent, and that name does not carry the prefix, so a role that was
+ * renamed or removed leaves its file behind unless the name is looked up in
+ * the roles file as well.
+ *
+ * A file that is neither is not ours, so it is left alone.
  */
-async function removeStaleAgents(agentsDir: string, current: Set<string>): Promise<void> {
+async function removeStaleAgents(
+  agentsDir: string,
+  current: Set<string>,
+  knownNames: Set<string>,
+): Promise<void> {
   let entries: Dirent[];
   try {
     entries = await readdir(agentsDir, { withFileTypes: true });
@@ -42,8 +50,10 @@ async function removeStaleAgents(agentsDir: string, current: Set<string>): Promi
   }
   for (const entry of entries) {
     if (!entry.isFile()) continue;
-    if (!entry.name.startsWith('oa-')) continue;
-    if (current.has(entry.name.replace(/\.md$/, ''))) continue;
+    if (!entry.name.endsWith('.md')) continue;
+    const name = entry.name.replace(/\.md$/, '');
+    if (current.has(name)) continue;
+    if (!name.startsWith('oa-') && !knownNames.has(name)) continue;
     await unlink(join(agentsDir, entry.name));
   }
 }
@@ -120,7 +130,12 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   }
 
   const agents = await renderAgents(roles, lock, options.target, join(outDir, 'agents'));
-  await removeStaleAgents(join(outDir, 'agents'), new Set(agents));
+  const knownNames = new Set(
+    Object.values(roles.roles)
+      .map((role) => role.agentName)
+      .filter((name): name is string => name !== undefined),
+  );
+  await removeStaleAgents(join(outDir, 'agents'), new Set(agents), knownNames);
 
   const commands: string[] = [];
   for (const command of COMMANDS) {

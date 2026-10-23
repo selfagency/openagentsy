@@ -161,7 +161,10 @@ server.registerTool(
         .string()
         .optional()
         .describe('post: the commit, file or test the result lives in'),
-      contract: z.any().optional().describe('post: the interface other agents will call'),
+      contract: z
+        .record(z.string(), z.unknown())
+        .optional()
+        .describe('post: the interface other agents will call'),
       needs: z.string().optional().describe('post: who has to act next, and what they need'),
       surprise: z.string().optional().describe('post: what you learned that the plan did not know'),
       agent: z.string().optional().describe('inbox: whose inbox is read'),
@@ -419,6 +422,8 @@ server.registerTool(
       await appendAudit(auditPath, {
         policyId: POLICIES.budgetSet.id,
         policyVersion: POLICIES.budgetSet.version,
+        // The board cannot verify who is calling it, so the audit records the
+        // role the tool is for rather than a name that was never checked.
         actor: 'lead',
         action: 'budget_set',
         resource: input.bean,
@@ -461,7 +466,9 @@ server.registerTool(
           await appendAudit(auditPath, {
             policyId: POLICIES.budgetStop.id,
             policyVersion: POLICIES.budgetStop.version,
-            actor: bean,
+            // The caller is not known to the board, so the bean is the subject
+            // of the record and the actor is the role the tool serves.
+            actor: 'builder',
             action: 'budget_check',
             resource: bean,
             effect: 'deny',

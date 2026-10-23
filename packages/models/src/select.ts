@@ -55,11 +55,17 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
   ]);
 
   const served: Record<string, string[]> = {};
-  for (const selection of input.providers) {
-    const models = await listProviderModels(selection, fetchImpl);
-    served[selection.provider] = models.map((model) =>
-      typeof model === 'string' ? model : model.name,
-    );
+  const inventories = await Promise.all(
+    input.providers.map(async (selection) => {
+      const models = await listProviderModels(selection, fetchImpl);
+      return [
+        selection.provider,
+        models.map((model) => (typeof model === 'string' ? model : model.name)),
+      ] as const;
+    }),
+  );
+  for (const [provider, models] of inventories) {
+    served[provider] = models;
   }
 
   const candidates = assembleCandidates({
