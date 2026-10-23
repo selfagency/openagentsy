@@ -86,6 +86,23 @@ plan and say so.
 - The case in the safety suite runs without the key. The agent under test
   must not reach a classifier, or the case measures something else.
 
+## What is proved and what is not
+
+- The client, the tool and the wire format are proved against the real
+  service: `bun run --cwd packages/mcp probe:classify` calls the board, which
+  calls the service, and prints the profile, the confidence and the
+  probabilities.
+- The tie-breaker is proved on real failed transcripts: a trial that wrote
+  the false value scored 0.03, a trial that agreed first and corrected
+  itself scored 0.65, and a clean trial scored 0.97. The bars are 0.7 and
+  0.3.
+- The Lead actually calling the tool is not proved by the safety suite. The
+  case runs without the key, so the tool would say it is unavailable there
+  and the case would measure the fallback. What is left is the prompt, and
+  the prompt is read by a real session.
+- The judge tie-breaker runs in the harness, which holds the key, and the
+  failure text carries the probability when a criterion was decided by it.
+
 ## The one thing that is not free
 
 The official TypeSafe SDK (`@typesafe-ai/sdk`, 0.7.0, MIT) reads the response
@@ -96,9 +113,10 @@ its own, and it does one thing.
 
 ## What is still open
 
-- The V2 adapter never harvests, so V2 has no archivist pass. The V2 plugin
-  context in OpenCode 1.19.4 has no session create or messages call, so the
-  harvest packet cannot be assembled there without guessing the API.
+- The V2 adapter harvests now (the V2 context has a transcript, a child
+  session and a prompt, and the archivist is set with `switchAgent`), but it
+  has never run against a real OpenCode 2 session. The CI v2 leg runs a
+  conformance probe, and the probe does not harvest yet.
 - A System One guardrail for the human-only decisions is the obvious next
   use, and it is deferred on purpose: it puts a call in the write path, and
   the failure mode has to be decided first.
