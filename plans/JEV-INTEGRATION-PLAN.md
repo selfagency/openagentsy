@@ -16,9 +16,11 @@ probabilities.
 The API is one call: `POST https://api.typesafe.ai/v1/systemone` with
 `Authorization: Bearer $TYPESAFE_API_KEY`, a body of `{model, state, questions}`
 where `questions` is keyed by a name the answers come back under, and a body
-of `{model, answers, usage}` in return. `jev-latest` currently resolves to
-`jev-1.14.0`. The price is $0.042 per million input tokens, output tokens are
-free, and a call takes about 100 ms.
+of `{model, answers, usage}` in return. The client asks `jev-1.14.0`, which
+is what `jev-latest` resolved to when the thresholds were measured: the alias
+moves, and a tie-breaker with fixed bars has to ask the same model. The price
+is $0.042 per million input tokens, output tokens are free, and a call takes
+about 100 ms.
 
 The key comes from the environment and never from the repository.
 

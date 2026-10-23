@@ -65,7 +65,7 @@ describe('the client', () => {
     expect(call?.url).toBe('https://api.typesafe.ai/v1/systemone');
     expect(call?.headers.Authorization).toBe(`Bearer ${KEY}`);
     expect(call?.body).toEqual({
-      model: 'jev-latest',
+      model: 'jev-1.14.0',
       state: { request: 'fix a typo' },
       questions: {
         routing: {

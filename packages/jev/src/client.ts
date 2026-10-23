@@ -22,7 +22,14 @@ import {
  */
 
 export const DEFAULT_ENDPOINT = 'https://api.typesafe.ai';
-export const DEFAULT_MODEL = 'jev-latest';
+/**
+ * The model the client asks.
+ *
+ * The alias `jev-latest` moves, and a tie-breaker with fixed thresholds has
+ * to ask the same model the thresholds were measured against: a change of
+ * model is a change of calibration, and the bars would mean something else.
+ */
+export const DEFAULT_MODEL = 'jev-1.14.0';
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_RETRIES = 2;
 
