@@ -108,6 +108,10 @@ jobs:
           OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/deepseek/deepseek-v4-flash' }}
           OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/qwen/qwen3.8-flash' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # The key for a System One model. The harness uses it to break a tie
+          # when the judge cannot decide. The case itself runs without it: the
+          # agent under test must not reach a classifier.
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
           # The trials each case is tried inside one run. A case passes when
           # the majority of them pass, so one unlucky sample is not a verdict.
