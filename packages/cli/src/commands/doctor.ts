@@ -11,6 +11,7 @@ import {
   PROJECT_CONFIG_NAMES,
   targetForVersion,
 } from '../opencode.js';
+import { findPluginBundle } from '../plugin.js';
 
 export type ConfigReport = {
   path: string | undefined;
@@ -177,16 +178,13 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     }
   }
 
-  const bundlePath = join(root, 'packages', 'adapter-opencode', 'dist', 'index.js');
+  const bundlePath = await findPluginBundle();
   const pluginPath = join(root, '.opencode', 'plugins', 'openagentsy.js');
   const pluginInstalled = await stat(pluginPath).then(
     () => true,
     () => false,
   );
-  const bundleBuilt = await stat(bundlePath).then(
-    () => true,
-    () => false,
-  );
+  const bundleBuilt = bundlePath !== undefined;
 
   if (!pluginInstalled) {
     warnings.push('the OpenAgentsy plugin is not installed, run: openagentsy setup');
@@ -195,7 +193,12 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   return {
     opencode: { version, target },
     config,
-    plugin: { path: pluginPath, installed: pluginInstalled, bundlePath, bundleBuilt },
+    plugin: {
+      path: pluginPath,
+      installed: pluginInstalled,
+      bundlePath: bundlePath ?? '',
+      bundleBuilt,
+    },
     roles: roleReports,
     skills,
     board: {

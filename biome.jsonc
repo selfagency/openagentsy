@@ -13,6 +13,7 @@
       "!**/.openagentsy",
       "!**/.opencode",
       "!**/.tmp",
+      "!**/plugin",
       "!**/*.md",
       "!pnpm-lock.yaml"
     ]
@@ -65,7 +66,7 @@
       }
     },
     {
-      "includes": ["scripts/**", "packages/evals/src/baseline-run.ts"],
+      "includes": ["scripts/**", "packages/*/scripts/**", "packages/evals/src/baseline-run.ts"],
       "linter": {
         "rules": {
           "suspicious": {

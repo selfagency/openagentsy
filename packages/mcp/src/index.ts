@@ -85,16 +85,28 @@ const db =
  * does what, and the three rules that hold everywhere.
  */
 const USAGE_CARD = `The OpenAgentsy board. The tools:
-- board_post: leave a typed record for another agent. kind is status, contract, question, blocker or finding. Every record carries a confidence: verified, inferred or guess.
-- board_inbox: read the records addressed to you, and mark them read. A cursor, never a history.
+- board_record: the records, the hand-off between agents. op=post leaves a typed record (kind is status, contract, question, blocker or finding; every record carries a confidence: verified, inferred or guess). op=inbox reads the records addressed to you and marks them read, a cursor at a time.
+- board_lease: the leases, which agent may write which file. op=check asks whether you may write a path. op=release gives a lease back, and only the holder may release it. op=list lists the leases.
 - board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
-- board_lease_release: give a lease back. Only the holder may release it.
-- board_lease_check: ask whether you may write a path.
-- board_lease_list: list the leases.
+- board_budget: the token budgets. op=check reports whether a bean is over its budget; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.
 - board_budget_set: set a token budget for a bean. The Lead only.
-- board_budget_check: report whether a bean is over its budget. At 85 percent the builder stops and posts a blocker.
-- board_budget_list: list the budgets.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
+
+/**
+ * A field the chosen op needs.
+ *
+ * The grouped tools take one flat schema, so the field that belongs to the
+ * op is checked here rather than by the schema.
+ */
+function required<T>(value: T | undefined, name: string): T {
+  if (value === undefined) {
+    throw new BoardError(
+      `The call is missing ${name}.`,
+      'The description of the tool says which field belongs to which op.',
+    );
+  }
+  return value;
+}
 
 const server = new McpServer(
   { name: 'openagentsy', version: '0.1.0' },
@@ -119,79 +131,108 @@ function failure(error: unknown): { content: { type: 'text'; text: string }[]; i
 // --- records ----------------------------------------------------------------
 
 server.registerTool(
-  'board_post',
+  'board_record',
   {
     description:
-      'Post a typed record to the board. A record is the hand-off between agents: what was done, the state it produced, the artifact, what is needed next, and how confident you are. Keep it under 150 tokens.',
+      'The records on the board: the hand-off between agents. op=post leaves a typed record for another agent (kind is status, contract, question, blocker or finding; every record carries a confidence: verified, inferred or guess). op=inbox reads the records addressed to you and marks them read, a cursor at a time.',
     inputSchema: {
-      bean: z.string().describe('Bean this record belongs to'),
-      from: z.string().describe('Agent posting the record'),
-      kind: z.enum(RECORD_KINDS).describe('status | contract | question | blocker | finding'),
-      action: z.string().describe('What was done, one line'),
-      state: z.string().describe('The state this produced'),
+      op: z.enum(['post', 'inbox']).describe('What this call does'),
+      bean: z.string().optional().describe('post: the bean this record belongs to'),
+      from: z.string().optional().describe('post: the agent posting the record'),
+      kind: z
+        .enum(RECORD_KINDS)
+        .optional()
+        .describe('post: status | contract | question | blocker | finding'),
+      action: z.string().optional().describe('post: what was done, one line'),
+      state: z.string().optional().describe('post: the state this produced'),
       confidence: z
         .enum(CONFIDENCE_LEVELS)
-        .describe('verified = ran or read it, inferred = reasoned to it, guess = not checked'),
+        .optional()
+        .describe(
+          'post: verified = ran or read it, inferred = reasoned to it, guess = not checked',
+        ),
       to: z
         .string()
         .optional()
-        .describe('Agent the record is addressed to. Omit to broadcast to the whole board'),
-      artifact: z.string().optional().describe('Commit, file or test the result lives in'),
-      contract: z.any().optional().describe('Interface other agents will call'),
-      needs: z.string().optional().describe('Who has to act next, and what they need'),
-      surprise: z
+        .describe(
+          'post: the agent the record is addressed to. Omit to broadcast to the whole board',
+        ),
+      artifact: z
         .string()
         .optional()
-        .describe(
-          'What you learned that the plan did not know. Fill this whenever something surprised you',
-        ),
+        .describe('post: the commit, file or test the result lives in'),
+      contract: z.any().optional().describe('post: the interface other agents will call'),
+      needs: z.string().optional().describe('post: who has to act next, and what they need'),
+      surprise: z.string().optional().describe('post: what you learned that the plan did not know'),
+      agent: z.string().optional().describe('inbox: whose inbox is read'),
+      cursor: z.number().int().optional().describe('inbox: return records after this id'),
+      limit: z.number().int().optional().describe('inbox: maximum records to return, default 20'),
+      markRead: z
+        .boolean()
+        .optional()
+        .describe('inbox: mark the returned records read, default true'),
     },
   },
   async (input) => {
     try {
-      const record = createRecord(db, input);
-      await appendAudit(auditPath, {
-        policyId: POLICIES.recordPost.id,
-        policyVersion: POLICIES.recordPost.version,
-        actor: input.from,
-        action: 'board_post',
-        resource: `${input.bean}#${record.id}`,
-        effect: 'allow',
-      });
-      return text({ id: record.id, createdAt: record.createdAt });
+      return input.op === 'post'
+        ? await postRecord(input)
+        : text(
+            listRecords(db, {
+              agent: required(input.agent, 'agent'),
+              ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+              ...(input.limit !== undefined ? { limit: input.limit } : {}),
+              ...(input.markRead !== undefined ? { markRead: input.markRead } : {}),
+            }),
+          );
     } catch (error) {
       return failure(error);
     }
   },
 );
 
-server.registerTool(
-  'board_inbox',
-  {
-    description:
-      'Read the records waiting for one agent and mark them read, in one call. Broadcast records go to every agent. Returns a cursor for the next page, never the whole board.',
-    inputSchema: {
-      agent: z.string().describe('Agent whose inbox is being read'),
-      cursor: z.number().int().optional().describe('Return records after this id'),
-      limit: z.number().int().optional().describe('Maximum records to return, default 20'),
-      markRead: z.boolean().optional().describe('Mark the returned records read, default true'),
-    },
-  },
-  async (input) => {
-    try {
-      return text(
-        listRecords(db, {
-          agent: input.agent,
-          ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
-          ...(input.limit !== undefined ? { limit: input.limit } : {}),
-          ...(input.markRead !== undefined ? { markRead: input.markRead } : {}),
-        }),
-      );
-    } catch (error) {
-      return failure(error);
-    }
-  },
-);
+/**
+ * Post a record.
+ *
+ * The record is the hand-off between agents, so it carries what was done,
+ * the state it produced, and how confident the poster is.
+ */
+async function postRecord(input: {
+  bean?: string | undefined;
+  from?: string | undefined;
+  kind?: (typeof RECORD_KINDS)[number] | undefined;
+  action?: string | undefined;
+  state?: string | undefined;
+  confidence?: (typeof CONFIDENCE_LEVELS)[number] | undefined;
+  to?: string | undefined;
+  artifact?: string | undefined;
+  contract?: unknown;
+  needs?: string | undefined;
+  surprise?: string | undefined;
+}): Promise<{ content: { type: 'text'; text: string }[] }> {
+  const record = createRecord(db, {
+    bean: required(input.bean, 'bean'),
+    from: required(input.from, 'from'),
+    kind: required(input.kind, 'kind'),
+    action: required(input.action, 'action'),
+    state: required(input.state, 'state'),
+    confidence: required(input.confidence, 'confidence'),
+    to: input.to,
+    artifact: input.artifact,
+    contract: input.contract,
+    needs: input.needs,
+    surprise: input.surprise,
+  });
+  await appendAudit(auditPath, {
+    policyId: POLICIES.recordPost.id,
+    policyVersion: POLICIES.recordPost.version,
+    actor: input.from ?? 'unknown',
+    action: 'board_record',
+    resource: `${input.bean ?? 'unknown'}#${record.id}`,
+    effect: 'allow',
+  });
+  return text({ id: record.id, createdAt: record.createdAt });
+}
 
 // --- leases -----------------------------------------------------------------
 
@@ -199,7 +240,7 @@ server.registerTool(
   'board_lease_grant',
   {
     description:
-      'Record the files one agent owns. Each file has exactly one writer at a time. A glob already leased to another agent is refused.',
+      'Record the files one agent owns. Each file has exactly one writer at a time. A glob already leased to another agent is refused. The Lead only; every other role has this tool denied by name.',
     inputSchema: {
       bean: z.string().describe('Bean the lease belongs to'),
       agent: z.string().describe('Agent taking the lease'),
@@ -250,93 +291,36 @@ server.registerTool(
 );
 
 server.registerTool(
-  'board_lease_check',
+  'board_lease',
   {
     description:
-      'Check whether one path may be written. Reports the holder, or a conflict when another agent holds the file.',
+      'The leases on the board: which agent may write which file. op=check asks whether one path may be written and reports the holder, or a conflict when another agent holds the file. op=release gives a lease back, and only the holder may release it. op=list lists the leases.',
     inputSchema: {
-      path: z.string().describe('Path being written, absolute or relative to the project root'),
-      agent: z.string().optional().describe('Agent asking, so a conflict can be reported'),
+      op: z.enum(['check', 'release', 'list']).describe('What this call does'),
+      path: z
+        .string()
+        .optional()
+        .describe('check: the path being written, absolute or relative to the project root'),
+      agent: z
+        .string()
+        .optional()
+        .describe(
+          'check: the agent asking, so a conflict can be reported; release: the agent holding the lease',
+        ),
+      bean: z
+        .string()
+        .optional()
+        .describe('release: the bean the lease belongs to; list: only leases for this bean'),
+      globs: z
+        .array(z.string())
+        .optional()
+        .describe('release: the path globs to give back, relative to the project root'),
     },
   },
   async (input) => {
     try {
-      const decision = checkLease(db, {
-        path: input.path,
-        root,
-        ...(input.agent !== undefined ? { agent: input.agent } : {}),
-      });
-      if (decision.status === 'conflict') {
-        await appendAudit(auditPath, {
-          policyId: POLICIES.leaseDeny.id,
-          policyVersion: POLICIES.leaseDeny.version,
-          actor: input.agent ?? 'unknown',
-          action: 'lease_check',
-          resource: decision.path,
-          effect: 'deny',
-          detail: `held by ${decision.agent ?? 'unknown'} on ${decision.bean ?? 'unknown'}`,
-        });
-      }
-      return text(decision);
-    } catch (error) {
-      return failure(error);
-    }
-  },
-);
-
-server.registerTool(
-  'board_lease_release',
-  {
-    description:
-      'Give a lease back. A lease that is never given back locks the files it covers, so a builder that is done, or one that died, gives its files back.',
-    inputSchema: {
-      bean: z.string().describe('Bean the lease belongs to'),
-      agent: z.string().describe('Agent holding the lease'),
-      globs: z.array(z.string()).describe('Path globs, relative to the project root'),
-    },
-  },
-  async (input) => {
-    try {
-      const released = [];
-      const notHeld = [];
-      for (const glob of input.globs) {
-        const result = releaseLease(db, {
-          bean: input.bean,
-          agent: input.agent,
-          glob,
-        });
-        if (result.released && result.lease) {
-          released.push(result.lease);
-          await appendAudit(auditPath, {
-            policyId: POLICIES.leaseRelease.id,
-            policyVersion: POLICIES.leaseRelease.version,
-            actor: input.agent,
-            action: 'lease_release',
-            resource: result.lease.glob,
-            effect: 'allow',
-            detail: `bean ${input.bean}`,
-          });
-        } else {
-          notHeld.push(glob);
-        }
-      }
-      return text({ released, notHeld });
-    } catch (error) {
-      return failure(error);
-    }
-  },
-);
-
-server.registerTool(
-  'board_lease_list',
-  {
-    description: 'List the file leases the board knows about.',
-    inputSchema: {
-      bean: z.string().optional().describe('Only leases for this bean'),
-    },
-  },
-  async (input) => {
-    try {
+      if (input.op === 'check') return await checkOneLease(input);
+      if (input.op === 'release') return await releaseLeases(input);
       return text({ leases: listLeases(db, input.bean) });
     } catch (error) {
       return failure(error);
@@ -344,13 +328,76 @@ server.registerTool(
   },
 );
 
+/**
+ * Ask whether one path may be written.
+ *
+ * A conflict is on the record, because a refused write is a decision.
+ */
+async function checkOneLease(input: {
+  path?: string | undefined;
+  agent?: string | undefined;
+}): Promise<{ content: { type: 'text'; text: string }[] }> {
+  const decision = checkLease(db, {
+    path: required(input.path, 'path'),
+    root,
+    ...(input.agent !== undefined ? { agent: input.agent } : {}),
+  });
+  if (decision.status === 'conflict') {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.leaseDeny.id,
+      policyVersion: POLICIES.leaseDeny.version,
+      actor: input.agent ?? 'unknown',
+      action: 'lease_check',
+      resource: decision.path,
+      effect: 'deny',
+      detail: `held by ${decision.agent ?? 'unknown'} on ${decision.bean ?? 'unknown'}`,
+    });
+  }
+  return text(decision);
+}
+
+/**
+ * Give leases back.
+ *
+ * Only the holder may release a lease, and a glob that was not held is
+ * named so the caller knows what is still locked.
+ */
+async function releaseLeases(input: {
+  bean?: string | undefined;
+  agent?: string | undefined;
+  globs?: string[] | undefined;
+}): Promise<{ content: { type: 'text'; text: string }[] }> {
+  const bean = required(input.bean, 'bean');
+  const agent = required(input.agent, 'agent');
+  const released = [];
+  const notHeld = [];
+  for (const glob of required(input.globs, 'globs')) {
+    const result = releaseLease(db, { bean, agent, glob });
+    if (result.released && result.lease) {
+      released.push(result.lease);
+      await appendAudit(auditPath, {
+        policyId: POLICIES.leaseRelease.id,
+        policyVersion: POLICIES.leaseRelease.version,
+        actor: agent,
+        action: 'lease_release',
+        resource: result.lease.glob,
+        effect: 'allow',
+        detail: `bean ${bean}`,
+      });
+    } else {
+      notHeld.push(glob);
+    }
+  }
+  return text({ released, notHeld });
+}
+
 // --- budgets ----------------------------------------------------------------
 
 server.registerTool(
   'board_budget_set',
   {
     description:
-      'Set the token budget for a bean. The builder stops at 85 percent of it unless stopAt says otherwise.',
+      'Set the token budget for a bean. The builder stops at 85 percent of it unless stopAt says otherwise. The Lead only.',
     inputSchema: {
       bean: z.string().describe('Bean the budget belongs to'),
       tokenLimit: z.number().int().positive().describe('Total tokens the bean may spend'),
@@ -386,53 +433,49 @@ server.registerTool(
 );
 
 server.registerTool(
-  'board_budget_check',
+  'board_budget',
   {
     description:
-      'Check a bean against its token budget. Reports whether the bean has to stop and records the usage.',
+      'The token budgets on the board. op=check reports whether a bean is over its budget and records the usage; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.',
     inputSchema: {
-      bean: z.string().describe('Bean to check'),
-      tokensUsed: z.number().int().nonnegative().describe('Tokens spent so far'),
+      op: z.enum(['check', 'list']).describe('What this call does'),
+      bean: z.string().optional().describe('check: the bean to check'),
+      tokensUsed: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe('check: the tokens spent so far'),
     },
   },
   async (input) => {
     try {
-      const decision = checkBudget(db, input.bean, input.tokensUsed);
-      if (decision.configured) {
-        recordUsage(db, input.bean, input.tokensUsed);
+      if (input.op === 'check') {
+        const bean = required(input.bean, 'bean');
+        const tokensUsed = required(input.tokensUsed, 'tokensUsed');
+        const decision = checkBudget(db, bean, tokensUsed);
+        if (decision.configured) {
+          recordUsage(db, bean, tokensUsed);
+        }
+        if (decision.stop) {
+          await appendAudit(auditPath, {
+            policyId: POLICIES.budgetStop.id,
+            policyVersion: POLICIES.budgetStop.version,
+            actor: bean,
+            action: 'budget_check',
+            resource: bean,
+            effect: 'deny',
+            detail: `${tokensUsed} tokens used, stop at ${decision.stopAt}`,
+          });
+        }
+        return text(decision);
       }
-      if (decision.stop) {
-        await appendAudit(auditPath, {
-          policyId: POLICIES.budgetStop.id,
-          policyVersion: POLICIES.budgetStop.version,
-          actor: input.bean,
-          action: 'budget_check',
-          resource: input.bean,
-          effect: 'deny',
-          detail: `${input.tokensUsed} tokens used, stop at ${decision.stopAt}`,
-        });
-      }
-      return text(decision);
-    } catch (error) {
-      return failure(error);
-    }
-  },
-);
 
-server.registerTool(
-  'board_budget_list',
-  {
-    description: 'List the token budgets the board knows about.',
-    inputSchema: {},
-  },
-  async () => {
-    try {
       return text({ budgets: listBudgets(db) });
     } catch (error) {
       return failure(error);
     }
   },
 );
-
 const transport = new StdioServerTransport();
 await server.connect(transport);

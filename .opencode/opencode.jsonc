@@ -13,10 +13,16 @@
     "docker": {
       "enabled": false
     },
+    "git": {
+      "enabled": false
+    },
+    "github": {
+      "enabled": false
+    },
     "langwatch": {
       "type": "remote",
       "url": "https://app.langwatch.ai/mcp",
-      "enabled": true
+      "enabled": false
     },
     "fallow": {
       "type": "local",

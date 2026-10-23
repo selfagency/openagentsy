@@ -35,9 +35,9 @@ helper. The handler returns a result; it never throws at the caller.
 
 ```ts
 server.registerTool(
-  'board_lease_list',
+  'board_lease',
   {
-    description: 'List the file leases the board knows about.',
+    description: 'The leases on the board. op=list lists the leases.',
     inputSchema: { bean: z.string().optional().describe('Only leases for this bean') },
   },
   async (input) => {

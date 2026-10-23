@@ -4,8 +4,8 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "package.json", "tsconfig*.json"],
-      "outputs": ["dist/**"]
+      "inputs": ["src/**", "scripts/**", "package.json", "tsconfig*.json"],
+      "outputs": ["dist/**", "plugin/**"]
     },
     "typecheck": {
       "dependsOn": ["^build"],
@@ -15,7 +15,8 @@
     "test": {
       "dependsOn": ["^build"],
       "inputs": ["src/**", "fixtures/**"],
-      "outputs": []
+      "outputs": [],
+      "env": ["OPENAGENTSY_EVAL", "OPENAGENTSY_EVAL_MODEL", "OPENAGENTSY_EVAL_JUDGE_MODEL"]
     },
     "//#lint": {
       "inputs": ["**/*.{ts,tsx,js,mjs,json,jsonc,css}", "biome.jsonc"],

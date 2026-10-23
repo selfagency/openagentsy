@@ -1,0 +1,59 @@
+# Changelog
+
+Every release, from the commits that made it.
+
+## 0.1.0 - 2026-10-23
+
+### Built
+
+- the judge default is the flash model (`2dbe3ab`)
+- commit the health baseline so the gate can read it (`4a6bed0`)
+- run check on pull requests and on demand, not on every push (`be9f054`)
+- print the eval server log when the suite fails (`c6a2020`)
+- the fallow gate gates the push, not the release parent (`f4daa04`)
+- biome does not format the pnpm lockfile (`1e87bd1`)
+- approve the transitive build scripts so the install is quiet (`7461d54`)
+- fix the empty with block left by the version pin (`49abdfb`)
+- let pnpm/action-setup read the version from packageManager (`6e23e5c`)
+- pin the workflow pnpm to the packageManager version (`f3eddae`)
+- run the safety suite on v1 and probe the plugin on v2 (`1c55483`)
+
+### Added
+
+- **stack**: move to Bun workspaces, Turborepo and drizzle over bun:sqlite (`eb3a7f1`)
+- the board describes itself, and a person can read it (`474bab4`)
+- the subagent harvest, the missing piece of phase 0 (`ef3641d`)
+- the token baseline, the measurement the phase 0 exit test asks for (`7d2697f`)
+- the review command takes the criteria, and the reviewer can run node's test runner (`a196a91`)
+- the dispatch shapes, the writer cap, and the archivist in the plan (`7e85ee5`)
+- batch 3, the safety suite (`35de343`)
+- batch 2, model selection and the lease guard (`b88a1ce`)
+- batch 1 foundation, role definitions and the board (`5d6f2fc`)
+
+### Fixed
+
+- the OpenCode 2 path, written against the real plugin API (`cbbfecb`)
+- close the self-granted lease hole, and name the lead agent (`cf6e883`)
+- the judge agent frontmatter and the pre-commit gate (`3613c87`)
+
+### Documented
+
+- bring AGENTS.md up to date with what the code now does (`5e1066a`)
+- the project intelligence context files (`1ec0970`)
+- move the plans into plans/ and drop CLAUDE.md (`2794174`)
+- add the anti-slop guidance task to the phase 2 addendum (`0bcc497`)
+- what the safety suite found (`6a9dc9f`)
+
+### Changed
+
+- one helper for the audit entries a case reads (`0f11126`)
+
+### Kept
+
+- drop the in-repo fallow skill copies (`322ed41`)
+- wire fallow into the repo (`e709338`)
+- biome, husky and lint-staged (`95fe04d`)
+
+### Improved
+
+- keep the global MCP servers out of the eval cases (`571f1d0`)

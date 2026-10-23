@@ -94,14 +94,13 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
-          # The models are the ones that work: the Zen free variants crash the
-          # Bun runtime in OpenCode 1.19.4, and the free tiers answer a burst
-          # with a 429, which the harness waits out and asks again. The
-          # variables below let the models be swapped without a code change;
-          # an OpenRouter model would also be traced, through the broadcast
-          # OpenRouter sends to LangWatch.
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode-go/minimax-m3.1-flash' }}
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/glm-5.3-flash' }}
+          # The models are paid but cheap, and OpenRouter broadcasts every
+          # request to LangWatch, so the run lands in the project without a
+          # line of instrumentation. The free variants of the same models
+          # cost nothing and the account allows a thousand of them a day;
+          # the variables below swap them without a code change.
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/deepseek/deepseek-v4-flash' }}
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/qwen/qwen3.8-flash' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
         run: |

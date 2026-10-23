@@ -64,12 +64,51 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
     throw new Error(`the judge failed: ${JSON.stringify(prompted.error)}`);
   }
 
-  const text = (prompted.data?.parts ?? [])
-    .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join('\n');
+  const text = await replyOf(client, created.data?.id, directory, prompted.data?.parts);
+
+  if (text.trim() === '') {
+    // The provider's refusal lands on the message, not on the response, so
+    // an empty answer means the model never ran. Say which refusal it was.
+    const error = prompted.data?.info?.error;
+    throw new Error(
+      `the judge answered with nothing${
+        error === undefined ? '' : `: ${JSON.stringify(error).slice(0, 300)}`
+      }`,
+    );
+  }
 
   return parseVerdict(text);
+}
+
+/**
+ * The judge's answer, from wherever it landed.
+ *
+ * A prompt that streams can come back with its parts empty, so the session's
+ * own messages are the source of truth; the response is the fallback.
+ */
+async function replyOf(
+  client: OpencodeClient,
+  sessionID: string | undefined,
+  directory: string,
+  parts: { type: string }[] | undefined,
+): Promise<string> {
+  if (sessionID !== undefined) {
+    const messages = await client.session.messages({
+      path: { id: sessionID },
+      query: { directory },
+    });
+    const last = messages.data?.at(-1);
+    const text = (last?.parts ?? [])
+      .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n');
+    if (text.trim() !== '') return text;
+  }
+
+  return (parts ?? [])
+    .filter((part) => part.type === 'text')
+    .map((part) => (part as unknown as { text: string }).text)
+    .join('\n');
 }
 
 /** Read the verdict out of the judge's answer, whatever it wrapped it in. */

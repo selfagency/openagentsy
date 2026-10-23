@@ -31,18 +31,19 @@
       },
     },
     "packages/cli": {
-      "name": "@openagentsy/cli",
+      "name": "openagentsy",
       "version": "0.1.0",
       "bin": {
         "openagentsy": "./dist/index.js",
       },
       "dependencies": {
-        "@openagentsy/core": "*",
-        "@openagentsy/models": "*",
+        "@openagentsy/core": "0.1.0",
+        "@openagentsy/models": "0.1.0",
         "jsonc-parser": "^3.3.1",
         "yaml": "^2.8.0",
       },
       "devDependencies": {
+        "@openagentsy/adapter-opencode": "workspace:*",
         "@types/node": "^24.3.0",
         "typescript": "^5.9.2",
       },
@@ -85,7 +86,7 @@
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.21.0",
-        "@openagentsy/core": "*",
+        "@openagentsy/core": "0.1.0",
         "zod": "^4.6.0",
       },
       "devDependencies": {
@@ -97,7 +98,7 @@
       "name": "@openagentsy/models",
       "version": "0.1.0",
       "dependencies": {
-        "@openagentsy/core": "*",
+        "@openagentsy/core": "0.1.0",
         "yaml": "^2.8.0",
       },
       "devDependencies": {
@@ -288,8 +289,6 @@
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.2.5", "", { "dependencies": { "@tybys/wasm-util": "^0.10.3" }, "peerDependencies": { "@emnapi/core": "^1.7.1 || ^2.0.0-alpha.4", "@emnapi/runtime": "^1.7.1 || ^2.0.0-alpha.4" } }, "sha512-HshSvXzmBxNzqejd3k/KemgQ3hdREUYFRRrgxOZ+gPljDIsO2SDZrVZMd4Z/HsxudQbE62OVyVFE8z9BCurfjA=="],
 
     "@openagentsy/adapter-opencode": ["@openagentsy/adapter-opencode@workspace:packages/adapter-opencode"],
-
-    "@openagentsy/cli": ["@openagentsy/cli@workspace:packages/cli"],
 
     "@openagentsy/core": ["@openagentsy/core@workspace:packages/core"],
 
@@ -882,6 +881,8 @@
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
     "open": ["open@11.0.1", "", { "dependencies": { "default-browser": "^5.4.0", "define-lazy-prop": "^3.0.0", "is-in-ssh": "^1.0.0", "is-inside-container": "^1.0.0", "powershell-utils": "^0.2.0", "wsl-utils": "^1.0.0" } }, "sha512-NzwMUB6C1D0+Kd+9iMS/H4k+Ck3cTX6Ckyfr/gAGlmvSE1LUQZnEZvWBi4PYmMwH/S5SMeTXnE+9uAz8uF+pWw=="],
+
+    "openagentsy": ["openagentsy@workspace:packages/cli"],
 
     "openai": ["openai@6.49.0", "", { "peerDependencies": { "@aws-sdk/credential-provider-node": ">=3.972.0 <4", "@smithy/hash-node": ">=4.3.0 <5", "@smithy/signature-v4": ">=5.4.0 <6", "ws": "^8.18.0", "zod": "^3.25 || ^4.0" }, "optionalPeers": ["@aws-sdk/credential-provider-node", "@smithy/hash-node", "@smithy/signature-v4", "ws", "zod"] }, "sha512-aYCc0C6L864eR6WSYIwQGyXriw/nIyZx0ObvhzOEVuk0zoBDpynjSbrionWI7q65B5H8jJX0DXR9snEzM6bfPg=="],
 

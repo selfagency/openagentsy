@@ -39,16 +39,17 @@ describe('the board server over stdio', () => {
   it('registers the board tools', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name);
-    expect(names).toContain('board_post');
-    expect(names).toContain('board_inbox');
+    expect(names).toContain('board_record');
+    expect(names).toContain('board_lease');
     expect(names).toContain('board_lease_grant');
-    expect(names).toContain('board_lease_check');
+    expect(names).toContain('board_budget');
     expect(names).toContain('board_budget_set');
-    expect(names).toContain('board_budget_check');
+    expect(names.length).toBe(5);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
-    const posted = await call('board_post', {
+    const posted = await call('board_record', {
+      op: 'post',
       bean: 'proj-42',
       from: 'builder-2',
       kind: 'status',
@@ -59,19 +60,20 @@ describe('the board server over stdio', () => {
     });
     expect(posted.id).toBeTypeOf('number');
 
-    const inbox = await call('board_inbox', { agent: 'lead' });
+    const inbox = await call('board_record', { op: 'inbox', agent: 'lead' });
     expect(inbox.records).toHaveLength(1);
     expect(inbox.records[0].surprise).toBe('the index had no title column');
     expect(inbox.unread).toBe(1);
   });
 
   it('marks the record read for the agent that fetched it', async () => {
-    const inbox = await call('board_inbox', { agent: 'lead' });
+    const inbox = await call('board_record', { op: 'inbox', agent: 'lead' });
     expect(inbox.records).toHaveLength(0);
   });
 
   it('keeps a record addressed to another agent out of the inbox', async () => {
-    await call('board_post', {
+    await call('board_record', {
+      op: 'post',
       bean: 'proj-42',
       from: 'builder-2',
       kind: 'question',
@@ -81,12 +83,12 @@ describe('the board server over stdio', () => {
       to: 'lead',
     });
 
-    const builder = await call('board_inbox', { agent: 'builder-2' });
+    const builder = await call('board_record', { op: 'inbox', agent: 'builder-2' });
     expect(builder.records.some((record: { kind: string }) => record.kind === 'question')).toBe(
       false,
     );
 
-    const lead = await call('board_inbox', { agent: 'lead' });
+    const lead = await call('board_record', { op: 'inbox', agent: 'lead' });
     expect(lead.records).toHaveLength(1);
     expect(lead.records[0].kind).toBe('question');
   });
@@ -108,7 +110,8 @@ describe('the board server over stdio', () => {
   });
 
   it('reports a conflict when another agent holds the file', async () => {
-    const decision = await call('board_lease_check', {
+    const decision = await call('board_lease', {
+      op: 'check',
       path: join(root, 'src/api/search.ts'),
       agent: 'builder-2',
     });
@@ -117,7 +120,8 @@ describe('the board server over stdio', () => {
   });
 
   it('reports an unleased path', async () => {
-    const decision = await call('board_lease_check', {
+    const decision = await call('board_lease', {
+      op: 'check',
       path: join(root, 'src/web/page.ts'),
       agent: 'builder-2',
     });
@@ -128,10 +132,10 @@ describe('the board server over stdio', () => {
     const budget = await call('board_budget_set', { bean: 'proj-42', tokenLimit: 1000 });
     expect(budget.stopAt).toBe(850);
 
-    const under = await call('board_budget_check', { bean: 'proj-42', tokensUsed: 100 });
+    const under = await call('board_budget', { op: 'check', bean: 'proj-42', tokensUsed: 100 });
     expect(under.stop).toBe(false);
 
-    const over = await call('board_budget_check', { bean: 'proj-42', tokensUsed: 900 });
+    const over = await call('board_budget', { op: 'check', bean: 'proj-42', tokensUsed: 900 });
     expect(over.stop).toBe(true);
   });
 
@@ -150,8 +154,9 @@ describe('the board server over stdio', () => {
 
   it('names the next call when a record is invalid', async () => {
     const result = await client.callTool({
-      name: 'board_post',
+      name: 'board_record',
       arguments: {
+        op: 'post',
         bean: '',
         from: 'x',
         kind: 'status',
@@ -165,10 +170,29 @@ describe('the board server over stdio', () => {
     expect(text).toContain('Next:');
   });
 
+  it('names the field a grouped op needs when it is missing', async () => {
+    const result = await client.callTool({
+      name: 'board_record',
+      arguments: {
+        op: 'post',
+        bean: 'proj-42',
+        from: 'x',
+        kind: 'status',
+        action: 'a',
+        state: 'b',
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
+    expect(text).toContain('confidence');
+    expect(text).toContain('Next:');
+  });
+
   it('rejects a record kind that is not one of the five', async () => {
     const result = await client.callTool({
-      name: 'board_post',
+      name: 'board_record',
       arguments: {
+        op: 'post',
         bean: 'proj-42',
         from: 'x',
         kind: 'gossip',

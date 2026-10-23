@@ -4,6 +4,7 @@
   "workspaces": {
     "patterns": ["packages/*"]
   },
+  "ignoreDependencies": ["@openagentsy/adapter-opencode"],
   "health": {
     "maxCrap": 60
   },

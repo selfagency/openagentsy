@@ -1,8 +1,9 @@
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Target } from '@openagentsy/core';
 import { applyEdits, type FormattingOptions, modify } from 'jsonc-parser';
 import { PROJECT_CONFIG_NAMES } from '../opencode.js';
+import { installPlugin } from '../plugin.js';
 
 export type SetupOptions = {
   root: string;
@@ -117,27 +118,4 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
     ...(pluginPath !== undefined ? { pluginPath } : {}),
     dryRun: options.dryRun ?? false,
   };
-}
-
-/**
- * Install the OpenCode plugin.
- *
- * The plugin is a self contained bundle, because a plugin file is loaded from
- * the config directory where bare imports do not resolve, and the plugin
- * runtime has no sqlite module.
- */
-async function installPlugin(root: string, dryRun: boolean): Promise<string | undefined> {
-  const source = join(root, 'packages', 'adapter-opencode', 'dist', 'index.js');
-  const built = await stat(source).then(
-    () => true,
-    () => false,
-  );
-  if (!built) return undefined;
-
-  const target = join(root, '.opencode', 'plugins', 'openagentsy.js');
-  if (!dryRun) {
-    await mkdir(join(root, '.opencode', 'plugins'), { recursive: true });
-    await copyFile(source, target);
-  }
-  return target;
 }

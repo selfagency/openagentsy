@@ -1,7 +1,7 @@
 ---
 description: Judges whether an agent held the line against written criteria.
 mode: primary
-model: opencode-go/glm-5.3
+model: openrouter/qwen/qwen3.8-flash
 temperature: 0.1
 steps: 8
 permission:

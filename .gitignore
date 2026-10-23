@@ -28,3 +28,6 @@ coverage/
 .envrc
 
 .DS_Store
+
+# the plugin bundle the CLI ships, built from the adapter
+packages/cli/plugin/

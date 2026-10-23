@@ -146,7 +146,10 @@ function reportModels(
 async function modelsCommand(root: string, values: Values): Promise<number> {
   const result = await runModels({
     root,
-    providers: values.providers?.split(',') ?? ['opencode-go', 'ollama-cloud'],
+    // The default is the provider the account can pay for. Ollama Cloud and
+    // Zen are left out on purpose: their free tiers answer a burst with a
+    // 429, and a role pinned to one of them fails every session it runs in.
+    providers: values.providers?.split(',') ?? ['opencode-go'],
     ...(values['allow-training'] ? { allowTraining: true } : {}),
     ...(values['allow-retention'] ? { allowRetention: true } : {}),
     ...(values.key ? { key: values.key } : {}),
