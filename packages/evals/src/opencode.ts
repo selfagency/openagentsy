@@ -130,9 +130,12 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   const port = options.port ?? 40_000 + Math.floor(Math.random() * 5_000);
   const baseUrl = `http://127.0.0.1:${port}`;
 
-  const logFile = process.env.OPENAGENTSY_EVAL_SERVER_LOG;
-  const logFd =
-    logFile === undefined ? undefined : (await import('node:fs')).openSync(logFile, 'a');
+  // The server's output goes to a file even when no log path is given, so a
+  // CI run shows why a server that never answered did not answer.
+  const logFile =
+    process.env.OPENAGENTSY_EVAL_SERVER_LOG ??
+    join(tmpdir(), `openagentsy-eval-server-${port}.log`);
+  const logFd = (await import('node:fs')).openSync(logFile, 'a');
 
   // OpenCode 2 serves with a password and OpenCode 1 does not, so the
   // password is set for both and sent with every request. The harness talks
