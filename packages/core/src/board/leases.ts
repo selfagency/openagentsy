@@ -257,6 +257,22 @@ export type CheckLeaseInput = {
   agent?: string;
 };
 
+/**
+ * How specific a glob is.
+ *
+ * The most specific matching glob wins, so `src/api/**` beats `src/**`. A
+ * literal path is more specific than a wildcard, and a single star is more
+ * specific than a double one: the number of literal characters counts, and
+ * a wildcard costs. The length of the pattern is the tie-breaker, because
+ * two globs with the same literal count are the same shape and the longer
+ * one is the narrower.
+ */
+function specificity(glob: string): number {
+  const literals = glob.replace(/\*\*?/g, '').length;
+  const doubles = (glob.match(/\*\*/g) ?? []).length;
+  return literals * 10 + glob.length - doubles * 5;
+}
+
 export function decideFromLeases(
   leaseList: Lease[],
   path: string,
@@ -267,7 +283,7 @@ export function decideFromLeases(
   const relative = relativeToRoot(root, path);
   const matches = leaseList
     .filter((lease) => matchesGlob(lease.glob, relative))
-    .sort((a, b) => b.glob.length - a.glob.length);
+    .sort((a, b) => specificity(b.glob) - specificity(a.glob));
 
   const winner = matches[0];
   if (!winner) {

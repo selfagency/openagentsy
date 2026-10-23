@@ -82,6 +82,23 @@ describe('checkLease', () => {
     expect(decision.agent).toBe('builder-2');
   });
 
+  it('prefers a literal path over a wildcard of the same length', () => {
+    // The length of the pattern was the whole rule, so two globs of the
+    // same length could rank either way. A literal names a file, and a
+    // wildcard names a shape.
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/a*.ts'] });
+    grantLeases(db, { bean: 'proj-43', agent: 'builder-2', globs: ['src/ab.ts'] });
+    const decision = checkLease(db, { path: '/repo/src/ab.ts', root: ROOT });
+    expect(decision.agent).toBe('builder-2');
+  });
+
+  it('prefers a single star over a double one', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    grantLeases(db, { bean: 'proj-43', agent: 'builder-2', globs: ['src/*'] });
+    const decision = checkLease(db, { path: '/repo/src/x.ts', root: ROOT });
+    expect(decision.agent).toBe('builder-2');
+  });
+
   it('does not match a path outside the leased glob', () => {
     grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/api/**'] });
     const decision = checkLease(db, { path: '/repo/src/web/x.ts', root: ROOT });

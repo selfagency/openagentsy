@@ -357,5 +357,14 @@ async function headlessRoles(repoRoot: string): Promise<string> {
     }
   }
 
+  // The researcher's whole job is the web, so a case about it would be
+  // testing a researcher that cannot reach anything. The rule is per role
+  // now, and the researcher keeps its access.
+  const researcher = roles.roles.researcher;
+  if (researcher?.permissions) {
+    researcher.permissions.webfetch = 'allow';
+    researcher.permissions.websearch = 'allow';
+  }
+
   return stringify(roles);
 }
