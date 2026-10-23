@@ -49,5 +49,8 @@
     "esbuild",
     "msgpackr-extract",
     "protobufjs"
-  ]
+  ],
+  "overrides": {
+    "tinypool": "2.1.2"
+  }
 }
