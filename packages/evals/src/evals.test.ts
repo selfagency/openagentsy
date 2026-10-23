@@ -36,7 +36,7 @@ const _execFileAsync = promisify(execFile);
 const ENABLED = process.env.OPENAGENTSY_EVAL === '1';
 const REPO_ROOT = process.env.OPENAGENTSY_REPO_ROOT ?? join(import.meta.dirname, '..', '..', '..');
 const MODEL = process.env.OPENAGENTSY_EVAL_MODEL;
-const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'ollama-cloud/minimax-m3.1-flash';
+const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'opencode-go/qwen3.8-flash';
 
 const suite = ENABLED ? describe : describe.skip;
 
@@ -54,27 +54,60 @@ suite('the safety suite', () => {
     await harness?.stop();
   });
 
-  for (const scenarioCase of SCENARIOS) {
-    it(scenarioCase.name, async () => {
-      const root = await createCaseDir(scenarioCase.name.replace(/\s+/g, '-'));
-      try {
-        const state = await prepare(root, scenarioCase, {
-          repoRoot: REPO_ROOT,
-          headless: true,
-          ...(scenarioCase.boardFault !== undefined ? { boardFault: scenarioCase.boardFault } : {}),
-        });
-        const outcome = await runScenario(harness, root, scenarioCase, state);
-        const transcript = outcome.replies.join('\n---\n');
-
-        for (const expectation of scenarioCase.expect) {
-          const failure = await expectation.check(state, root, outcome.toolCalls);
-          expect(failure, `${expectation.description}\nreply: ${transcript}`).toBeUndefined();
-        }
-      } finally {
-        await removeCaseDir(root);
+  // The cases run side by side: each one has its own throwaway directory,
+  // its own board and its own session, and the server serves any directory
+  // it is asked for. The cap is the providers' patience, not the machine's:
+  // ten sessions at once would trade minutes for 429s.
+  const cap = Number(process.env.OPENAGENTSY_EVAL_CONCURRENCY ?? 3);
+  let running = 0;
+  const queue: (() => void)[] = [];
+  const acquire = () =>
+    new Promise<void>((resolve) => {
+      if (running < cap) {
+        running += 1;
+        resolve();
+        return;
       }
-    }, 900_000);
-  }
+      queue.push(() => {
+        running += 1;
+        resolve();
+      });
+    });
+  const release = () => {
+    running -= 1;
+    queue.shift()?.();
+  };
+
+  describe.concurrent('the cases', () => {
+    for (const scenarioCase of SCENARIOS) {
+      it(scenarioCase.name, async () => {
+        await acquire();
+        try {
+          const root = await createCaseDir(scenarioCase.name.replace(/\s+/g, '-'));
+          try {
+            const state = await prepare(root, scenarioCase, {
+              repoRoot: REPO_ROOT,
+              headless: true,
+              ...(scenarioCase.boardFault !== undefined
+                ? { boardFault: scenarioCase.boardFault }
+                : {}),
+            });
+            const outcome = await runScenario(harness, root, scenarioCase, state);
+            const transcript = outcome.replies.join('\n---\n');
+
+            for (const expectation of scenarioCase.expect) {
+              const failure = await expectation.check(state, root, outcome.toolCalls);
+              expect(failure, `${expectation.description}\nreply: ${transcript}`).toBeUndefined();
+            }
+          } finally {
+            await removeCaseDir(root);
+          }
+        } finally {
+          release();
+        }
+      }, 900_000);
+    }
+  });
 });
 
 /**

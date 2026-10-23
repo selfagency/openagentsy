@@ -95,7 +95,7 @@ jobs:
         env:
           OPENAGENTSY_EVAL: "1"
           OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'ollama-cloud/minimax-m3.1-flash' }}
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/qwen3.8-flash' }}
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
         run: |
           set -o pipefail
