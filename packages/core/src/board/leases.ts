@@ -1,5 +1,5 @@
 import { isAbsolute, join } from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { isInsideRoot, matchesGlob, normalizePath, relativeToRoot } from '../paths.js';
 import type { BoardDatabase } from './db.js';
 import { leases } from './schema.js';
@@ -38,18 +38,28 @@ export type GrantLeasesResult = {
  * The number of writers on the board.
  *
  * A writer is an agent that holds at least one lease. A scout that reads
- * holds none, so it never counts.
+ * holds none, so it never counts. Two spellings of one name are one writer:
+ * the cap counts writers, not the ways a name is written.
  */
 export function writerCount(db: BoardDatabase): number {
-  const rows = db.selectDistinct({ agent: leases.agent }).from(leases).all();
+  const rows = db
+    .selectDistinct({ agent: sql<string>`lower(${leases.agent})` })
+    .from(leases)
+    .all();
   return rows.length;
 }
 
+/**
+ * The name an agent is known by, in the spelling the board stores it under.
+ *
+ * The comparison on this board is case-insensitive, so the agent that holds
+ * a lease is found under either spelling of its name.
+ */
 function holdsAnyLease(db: BoardDatabase, agent: string): boolean {
   const row = db
     .select({ id: leases.id })
     .from(leases)
-    .where(eq(leases.agent, agent))
+    .where(sql`lower(${leases.agent}) = ${agent.toLowerCase()}`)
     .limit(1)
     .get();
   return row !== undefined;
@@ -129,7 +139,13 @@ export function releaseLease(
   const held = db
     .select()
     .from(leases)
-    .where(and(eq(leases.glob, glob), eq(leases.agent, input.agent), eq(leases.bean, input.bean)))
+    .where(
+      and(
+        eq(leases.glob, glob),
+        sql`lower(${leases.agent}) = ${input.agent.toLowerCase()}`,
+        eq(leases.bean, input.bean),
+      ),
+    )
     .get();
   if (!held) return { released: false };
 

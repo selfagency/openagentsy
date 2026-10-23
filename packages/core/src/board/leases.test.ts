@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { BoardDatabase } from './db.js';
 import { migrate, openDatabase } from './db.js';
-import { checkLease, grantLeases, listLeases, writerCount } from './leases.js';
+import { checkLease, grantLeases, listLeases, releaseLease, writerCount } from './leases.js';
 
 let db: BoardDatabase;
 
@@ -123,5 +123,70 @@ describe('the writer cap', () => {
     );
     expect(result.granted).toHaveLength(1);
     expect(result.capReached).toBeUndefined();
+  });
+
+  it('counts one writer for two spellings of the same name', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'Builder-1', globs: ['src/**'] });
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['web/**'] });
+    expect(writerCount(db)).toBe(1);
+  });
+
+  it('lets a writer take another lease under a different spelling of its name', () => {
+    for (const agent of ['builder-1', 'builder-2', 'builder-3']) {
+      grantLeases(db, { bean: 'proj-42', agent, globs: [`${agent}/**`] });
+    }
+    const result = grantLeases(
+      db,
+      { bean: 'proj-42', agent: 'Builder-2', globs: ['builder-2/more/**'] },
+      { writerCap: 3 },
+    );
+    expect(result.granted).toHaveLength(1);
+    expect(result.capReached).toBeUndefined();
+  });
+});
+
+describe('releaseLease', () => {
+  it('gives the lease back', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    const result = releaseLease(db, {
+      bean: 'proj-42',
+      agent: 'builder-1',
+      glob: 'src/**',
+    });
+    expect(result.released).toBe(true);
+    expect(listLeases(db)).toHaveLength(0);
+  });
+
+  it('gives the lease back under a different spelling of the holder name', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'Builder-1', globs: ['src/**'] });
+    const result = releaseLease(db, {
+      bean: 'proj-42',
+      agent: 'builder-1',
+      glob: 'src/**',
+    });
+    expect(result.released).toBe(true);
+    expect(listLeases(db)).toHaveLength(0);
+  });
+
+  it('refuses to release a lease another agent holds', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    const result = releaseLease(db, {
+      bean: 'proj-42',
+      agent: 'builder-2',
+      glob: 'src/**',
+    });
+    expect(result.released).toBe(false);
+    expect(listLeases(db)).toHaveLength(1);
+  });
+
+  it('refuses to release a lease another bean holds', () => {
+    grantLeases(db, { bean: 'proj-42', agent: 'builder-1', globs: ['src/**'] });
+    const result = releaseLease(db, {
+      bean: 'proj-43',
+      agent: 'builder-1',
+      glob: 'src/**',
+    });
+    expect(result.released).toBe(false);
+    expect(listLeases(db)).toHaveLength(1);
   });
 });
