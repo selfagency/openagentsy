@@ -18,12 +18,13 @@ plugin or MCP surface changes | a rule in `AGENTS.md` changes.
 | --- | --- | --- | --- |
 | Language | TypeScript | 5.9 | strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` |
 | Runtime | Bun | 1.2 | `bun:sqlite` for the board and the plugin, one runtime everywhere |
-| Package manager | Bun + Turborepo | 1.2 / 2.6 | workspace of six packages, strict isolated linker, turbo orders the tasks |
+| Package manager | Bun + Turborepo | 1.2 / 2.6 | workspace of seven packages, strict isolated linker, turbo orders the tasks |
 | Lint and format | Biome | 2.6 | one tool, one config, no `.eslintrc` + `.prettierrc` pair |
 | Tests | Vitest | 3.2 | the safety suite drives real OpenCode sessions through it |
 | Storage | bun:sqlite + drizzle | Bun 1.2 | the board owns the database; the plugin opens it directly |
 | Tool server | @modelcontextprotocol/sdk | 1.x | the board is an MCP server, so V1 and V2 share it |
 | Validation | zod | 4 | every MCP tool input and every role file is validated |
+| Decisions | TypeSafe Jev | 1.14 | a System One model answers typed questions with calibrated probabilities |
 | Bundling | tsdown | 0.15 | the plugin loads from a directory with no `node_modules` |
 
 ## Code Patterns
@@ -49,6 +50,16 @@ server.registerTool(
   },
 );
 ```
+
+### The decision model (the classifier)
+
+A System One model does not write text. It answers typed questions about a
+state and returns typed values with probabilities, and the code branches on
+them. The client lives in `packages/jev` and it never throws: a decision that
+cannot be made is a result the caller handles.
+
+The official TypeSafe SDK is not used. It reads the response body twice in
+its fetch path, which Bun refuses, and this project runs on Bun everywhere.
 
 ### The agent file (the component)
 
@@ -134,8 +145,10 @@ export type Confidence = 'verified' | 'inferred' | 'guess';
 | What | Where |
 | --- | --- |
 | The role schema and the permission mapping | `packages/core/src/roles.ts`, `packages/core/src/permissions.ts` |
+| The dispatch profiles the Lead classifies into | `packages/core/src/dispatch.ts` |
 | The board, its tables and its audit | `packages/core/src/board/` |
 | The board tool surface | `packages/mcp/src/index.ts:86` |
+| The System One client | `packages/jev/src/client.ts` |
 | The lease guard | `packages/adapter-opencode/src/guard.ts:100` |
 | The agent file renderer | `packages/cli/src/generate/agent.ts:66` |
 | The role source of truth | `roles.yaml` |

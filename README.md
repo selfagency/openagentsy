@@ -60,11 +60,26 @@ comes from.
 | `board_lease_grant` | takes a lease on files. The Lead only |
 | `board_budget` | `op=check` reports whether a bean is over its budget, `op=list` lists the budgets |
 | `board_budget_set` | sets a token budget, stopping at 85 percent of it. The Lead only |
+| `board_classify` | classifies a request into the dispatch profiles, with the probability of each and the confidence. The Lead calls it before it spawns anything. It needs a TypeSafe key; without one it says so, and the Lead classifies the request itself |
 
 State lives in `.openagentsy/board.sqlite`. Every decision appends a line to
 `.openagentsy/audit.jsonl` with a policy id and a version. The plugin opens the
 same database directly with `bun:sqlite`, so the guard sees the leases as they
 are.
+
+## The classifier
+
+The Lead has to decide how much of the system a request deserves before it
+spawns anything, and that decision decides the token spend. `board_classify`
+asks a System One model, which answers with a probability for each profile
+instead of prose, and the Lead takes the cheaper plan when the confidence is
+low.
+
+It is optional. Set `TYPESAFE_API_KEY` in the environment to use it; without
+the key nothing changes and the Lead classifies the request itself. The key
+is never written into the repository. The same model breaks a tie in the
+safety suite when the judge cannot decide a criterion, so a case that was
+undecided gets a number rather than a shrug.
 
 ## The plugin
 
