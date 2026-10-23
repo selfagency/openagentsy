@@ -189,6 +189,16 @@ const COMMANDS: Record<string, (root: string, values: Values) => Promise<number>
  * function stays small enough to read.
  */
 export async function main(argv: string[]): Promise<number> {
+  // The board's driver is bun:sqlite, so the whole tool needs Bun. A Node
+  // install fails at the first query, and the message here says which
+  // runtime to use instead of showing a module resolution error.
+  if (!process.versions.bun) {
+    process.stderr.write(
+      'openagentsy runs on Bun: the board uses bun:sqlite, which Node does not have.\nRun it with: bunx openagentsy@0.1.0 <command>\n',
+    );
+    return 1;
+  }
+
   const { values, positionals } = parseArgs({
     args: argv,
     allowPositionals: true,

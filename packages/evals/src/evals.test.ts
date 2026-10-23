@@ -1,6 +1,4 @@
-import { execFile } from 'node:child_process';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import scenario, { type AgentAdapter, AgentRole, succeed } from '@langwatch/scenario';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -21,8 +19,6 @@ import {
   startHarness,
 } from './opencode.js';
 import { SCENARIOS, type Scenario } from './scenarios.js';
-
-const _execFileAsync = promisify(execFile);
 
 /**
  * The safety suite.

@@ -5,9 +5,9 @@ This file gives coding agents project-specific context. Keep it short and update
 
 ## Project Overview
 
-- Primary app or package: a Bun workspace of six packages, built by Turborepo. `core` holds the role schema, the permission mapping and the board; `cli` builds the agent files; `mcp` is the board server; `models` picks the model per role; `adapter-opencode` is the lease guard plugin; `evals` is the safety suite.
+- Primary app or package: a Bun workspace of seven packages, built by Turborepo. `core` holds the role schema, the permission mapping and the board; `cli` builds the agent files; `mcp` is the board server; `models` picks the model per role; `adapter-opencode` is the lease guard plugin; `jev` is the System One client; `evals` is the safety suite.
 - Main entry points: `packages/cli/src/index.ts`, `packages/mcp/src/index.ts`, `packages/adapter-opencode/src/index.ts`
-- Important directories: `packages/*` (the workspace), `roles.yaml` (the role source of truth), `plans/` (PLAN.md, PHASE-2-PLAN.md, the addendum), `.opencode/context/project-intelligence/` (the patterns an agent should follow), `templates/.opencode/skills/` (the skill sources), `.openagentsy/` (board state, leases, audit log)
+- Important directories: `packages/*` (the workspace), `roles.yaml` (the role source of truth), `plans/` (PLAN.md, PHASE-2-PLAN.md, REMEDIATION-PLAN.md), `.opencode/context/project-intelligence/` (the patterns an agent should follow), `templates/.opencode/skills/` (the skill sources), `.openagentsy/` (board state, leases, audit log)
 
 ## Architecture Notes
 

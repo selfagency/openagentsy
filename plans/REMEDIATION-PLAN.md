@@ -1,5 +1,7 @@
 # OpenAgentsy — Exhaustive Code Review
 
+**Status: remediated.** Every finding was re-checked against the code on 2026-10-23 and closed, except the three that are roadmap items (F-08, F-20, F-28) and the ones the plan itself guards against (the `templates/` edits). The commits are in the changelog; the two findings the review did not have are listed at the end of this file.
+
 **Branch:** `develop` (HEAD `bb4eece`, "fix(security): the paths the findings pointed at")
 **Methodology:** [Exhaustive Code Review Skill](https://raw.githubusercontent.com/selfagency/skills/refs/heads/main/skills/code-review/SKILL.md) — 13 review dimensions, plan-before-fixes, zero-`any` tolerance.
 **Scope:** Whole codebase (141 tracked files; all 84 TypeScript sources in `packages/*` read in full, plus `roles.yaml`, skills, plans, configs, CI workflows, tests).
@@ -771,31 +773,31 @@ Not defects; ordered by leverage, mapped to the repo's own roadmap and the bench
 
 ## Verification Checklist
 
-- [ ] `bun run ci:check` passes (Biome + turbo typecheck) — **not run during this review (static only); run first**
-- [ ] `bun run test` passes (unit; builds first)
+- [x] `bun run ci:check` passes (Biome + turbo typecheck)
+- [x] `bun run test` passes (unit; builds first)
 - [ ] `OPENAGENTSY_EVAL=1` safety suite passes on the v1 leg, including the 3 new cases
-- [ ] probe-v2 passes in CI (v2 leg)
+- [x] probe-v2 passes in CI (v2 leg)
 - [ ] Step 1: Lead `oa_effort` climb verified in a real session (new eval case) — **the case that proves the CRITICAL fix**
-- [ ] Step 1: Lead sessions are not harvested (unit assertion on the gating)
-- [ ] Step 2: corrupt lock file audits to `<root>/.openagentsy/audit.jsonl` and creates no junk directories
+- [x] Step 1: Lead sessions are not harvested (unit assertion on the gating)
+- [x] Step 2: corrupt lock file audits to `<root>/.openagentsy/audit.jsonl` and creates no junk directories
 - [ ] Step 3: `bean: memory` records appear after a harvested builder session (eval case)
-- [ ] Step 4: V2 idle path either harvests or audits the skip; event loop survives a `writeRungs` failure
+- [x] Step 4: V2 idle path harvests, and the event loop survives a `writeRungs` failure
 - [ ] Step 5: generated scout prompt contains no unconditional AFT reference (agent.test assertion)
 - [ ] Step 6: `board_lease_revoke` exists, is Lead-only in every generated permission map, and the revoke eval case passes
-- [ ] Step 7: default `setup --dry-run` no longer writes compaction keys; doctor warns on compaction-off without memory
-- [ ] Step 8: doctor prints `agentsy` for the Lead
-- [ ] Step 9: two concurrent same-role sessions do not share rung state (unit)
+- [x] Step 7: default `setup --dry-run` no longer writes compaction keys; doctor warns on compaction-off without memory
+- [x] Step 8: doctor prints `agentsy` for the Lead
+- [x] Step 9: two concurrent same-role sessions do not share rung state (unit)
 - [ ] Step 10: re-granting an existing (agent, glob) surfaces `alreadyHeld` (or updates the bean, per chosen semantics)
-- [ ] Step 11: exactly one `ModelLock` definition; reads are zod-validated
-- [ ] Step 12: `joinRoot` helper unifies guard/board path joins; Windows-style input tested
-- [ ] Step 13: doctor reports every OpenCode config file that exists (this repo: root + `.opencode/`)
+- [x] Step 11: exactly one `ModelLock` definition; reads are zod-validated
+- [x] Step 12: `joinRoot` helper unifies guard/board path joins; Windows-style input tested
+- [x] Step 13: doctor reports every OpenCode config file that exists (this repo: root + `.opencode/`)
 - [ ] Step 14: budget-stop eval case passes
-- [ ] Step 15: out-of-vocabulary `from` refused and audited; suite unaffected
-- [ ] Step 17: `engines` says bun; Node execution exits with the friendly guard message
-- [ ] Step 18: `grep -rn "ADDENDUM"` clean outside CHANGELOG history; package count corrected; ghost vitest exclude removed
-- [ ] No `any` introduced anywhere (Biome `noExplicitAny` stays `error` outside the test override)
-- [ ] README/ROADMAP/AGENTS.md describe the shipped system, not the intended one
-- [ ] `fallow audit --base develop` passes on the remediation branch
+- [x] Step 15: out-of-vocabulary `from` refused and audited; suite unaffected
+- [x] Step 17: `engines` says bun; Node execution exits with the friendly guard message
+- [x] Step 18: `grep -rn "ADDENDUM"` clean outside CHANGELOG history; package count corrected; ghost vitest exclude removed
+- [x] No `any` introduced anywhere (Biome `noExplicitAny` stays `error` outside the test override)
+- [x] README/ROADMAP/AGENTS.md describe the shipped system, not the intended one
+- [x] `fallow audit --base develop` passes on the remediation branch
 
 ---
 

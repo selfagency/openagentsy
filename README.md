@@ -90,9 +90,11 @@ bare imports do not resolve.
 
 It refuses a write to a file that no lease covers or that another agent owns,
 and puts the decision on the record. It applies the effort level of the rung a
-role climbed to, and `oa_effort` is the only way to climb. At the end of a
+session climbed to, and `oa_effort` is the only way to climb. At the end of a
 session it collects what happened and asks the archivist to distil it into
-candidate memories.
+candidate memories, which the archivist posts on the board for the Lead to
+read. The archivist runs in a child session of the session it harvests, so it
+stays out of your session history.
 
 ## Models
 
@@ -199,7 +201,9 @@ code met the real binary.
 
 4. **The effort levels come from the model, not from the role.** `glm-5.3` has
    `low`, `high` and `max`, and no `medium` or `xhigh`. The lock file takes the
-   levels from models.dev and the role asks for the closest one.
+   levels from models.dev, and a role's start level clamps down to the lowest
+   level the model offers while its ceiling clamps up to the highest, so a role
+   never starts expensive and never caps below what it asked for.
 
 5. **The plugin reads the board database directly.** The plugin runtime is Bun,
    and `bun:sqlite` is a Bun builtin, so the plugin opens the same database the

@@ -24,4 +24,3 @@ not all of them.
 ## Related
 
 - `plans/PHASE-2-PLAN.md` — the packages of the next phase.
-- `plans/PHASE-2-PLAN-ADDENDUM.md` — the anti-slop work, added to it.

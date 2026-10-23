@@ -79,6 +79,8 @@ roles:
     guidance: report findings
     permissions:
       edit: deny
+      openagentsy_board_lease_grant: deny
+      openagentsy_board_lease_revoke: deny
     skills: []
     modelProfile:
       primarySignal: coding
@@ -245,5 +247,35 @@ describe('renderCommand', () => {
       if (!role) throw new Error(`no role "${command.role}" for the ${command.name} command`);
       expect(agentIdFor(file, command.role)).toBe(agentIdOf(role));
     }
+  });
+});
+
+describe('the generated prompts', () => {
+  it('names no tool that a default install does not register', () => {
+    // The scout used to be told to prefer AFT tools that setup never
+    // registers, so a literal scout looked for them and found nothing.
+    const file = roles();
+    for (const name of Object.keys(file.roles)) {
+      const markdown = renderAgent(role(file, name), file, { target: 'v1' });
+      const mentions = markdown.match(/\b(aft_[a-z_]+)\b/g) ?? [];
+      for (const tool of mentions) {
+        // The mention is allowed when it is conditional: "when the AFT
+        // tools are registered" names a tool that may not be there.
+        const conditional = markdown.includes('When the AFT tools are registered');
+        expect(conditional, `${name} names ${tool} without saying it may be absent`).toBe(true);
+      }
+    }
+  });
+
+  it('gives the lease revoke to the Lead alone', () => {
+    // The board cannot verify who is calling it, so the permission map
+    // decides. Every other role has the tool denied by name.
+    const file = roles();
+    const lead = frontmatter(renderAgent(role(file, 'lead'), file, { target: 'v1' }));
+    const reviewer = frontmatter(renderAgent(role(file, 'reviewer'), file, { target: 'v1' }));
+    const leadPermission = lead.permission as Record<string, unknown>;
+    const reviewerPermission = reviewer.permission as Record<string, unknown>;
+    expect(leadPermission.openagentsy_board_lease_revoke).toBeUndefined();
+    expect(reviewerPermission.openagentsy_board_lease_revoke).toBe('deny');
   });
 });

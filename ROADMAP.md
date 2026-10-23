@@ -38,10 +38,16 @@ OpenCode V1, the board, the guard, the safety suite.
 
 - The task store and the Beans compatible board. The board carries records,
   not tasks.
+- The memory store. The harvest's candidates land on the board as records
+  under the `memory` bean, addressed to the Lead; a `ctx_memory` style store
+  is 2a.
 - The footprint estimator, the ledger and the offload router. These are the
   first of the 2a packages, and they need the new agent to be worth
   building.
 - The V2 harness port. See 0.2.0.
+- The AFT registration. The scout's guidance is conditional: it prefers the
+  AFT tools when they are registered and reads narrowly with the built-in
+  tools when they are not.
 
 ## 0.2.0 — OpenCode V2
 

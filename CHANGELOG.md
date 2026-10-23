@@ -38,6 +38,31 @@ Every release, from the commits that made it.
 ### Fixed
 
 - a lease glob was a regular expression, and a glob with many stars hung every lease check; the matcher walks the pattern and the path once, in linear time (`bb4eece`)
+- the plugin bundle was two files, and the copy takes one, so the plugin failed to load and the lease guard never registered; the bundle is inlined, the build fails if it imports a path next to it, and a test loads it (`722dd76`)
+- the plugin looked the role up by the agent id, so the Lead (whose id is 'agentsy' and whose role key is 'lead') could never climb and its own session was harvested (`3e22b06`)
+- an unreadable state file was audited to a path cut out of the file name, so the audit line landed where nothing reads it (`533a4df`)
+- a failure in the V2 event loop killed the subscription, so the rungs stopped being given back and the failure was a silence (`533a4df`)
+- the archivist's candidate memories had no destination, so the harvest evaporated; a candidate is a board record now (`1d84e86`)
+- the prompts named tools and features the system does not have: the AFT tools, the bean dependencies, the budgets (`1d84e86`)
+- the setup turned the compaction off for every project, and nothing else shrinks the context; it is opt-in now (`7e70d17`)
+- the doctor printed 'oa-lead' for the agent a person picks, and it had no test (`7e70d17`)
+- the effort tool said it climbed when the lock entry had no provider to switch to (`2c1b4da`)
+- the budget usage was overwritten by the last report, so a report that went backwards lowered the number (`2c1b4da`)
+- a hand edited record took every inbox down when its contract did not parse (`2c1b4da`)
+- the write guard joined a path by hand, so a Windows path came out as nonsense (`b2db0b5`)
+- the lock file had two definitions that had already drifted; the schema is the definition now (`b2db0b5`)
+- the doctor read one config file and OpenCode merges two (`b2db0b5`)
+- a rung belonged to a role, so two builders shared one effort level (`0126063`)
+- a test that depended on a key in the environment passed on a laptop and failed in CI (`abca829`)
+
+### Added
+
+- the Lead can take a lease back, for a session that died holding it; three of those put the board over the writer cap for good (`4528b3c`)
+- a record has to name an agent the board knows, so a builder cannot post a completion as another builder (`617a3bc`)
+- the safety suite runs on Claude Haiku, which is a better instruction follower per dollar than the flash model (`401b444`)
+- the judge answers per criterion, over the board records and the guard decisions rather than over the narration (`910a1c0`)
+
+
 - the criterion the judge hands to the tie-breaker was a key in a request, and the judge reads that name from a conversation (`bb4eece`)
 - a provider name became a key in the inventory of what a provider serves, unchecked (`bb4eece`)
 - a correct agent was scored as silent, because two checks demanded one spelling of its name and two demanded that it try a forbidden write (`aab4d78`)
