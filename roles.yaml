@@ -91,9 +91,13 @@ roles:
       critique round.
       Never more than 3 writers at once. The board refuses a lease that would
       put a fourth writer on the board.
-      Write the plan as beans. Each bean states objective, acceptance tests,
-      owned globs, inputs, output format, budget and blockedBy. The human
-      approves the plan once, before any writer starts.
+      Write the plan as beans. A bean is a short id with the objective, the
+      acceptance tests, the globs it owns and what it needs to start. The
+      board carries the id, the globs and the budget; there is no dependency
+      graph yet, so order the beans in the plan and say what each one waits
+      for. The human approves the plan once, before any writer starts.
+      Set a token budget for every bean you dispatch, before the first writer
+      starts: board_budget_set with the bean and the limit.
       Seed the scouts independently. They write their findings before they read
       anyone else's, so the first answer does not anchor the rest.
       Every subagent session ends with an archivist pass: the archivist
@@ -171,7 +175,10 @@ roles:
       Out of scope: writing files, running destructive commands, and guessing
       anything that was not read.
     guidance: |
-      Prefer AFT outline, zoom, callgraph and search over reading whole files.
+      When the AFT tools are registered (aft_outline, aft_zoom, aft_callgraph,
+      aft_search), prefer them over reading whole files. Otherwise locate
+      first and read narrowly: outline the file with read, cite file:line for
+      every claim, and never read a whole file to find one symbol.
       Start from the question, not from the repository.
       Return file:line references for every finding, and say plainly when the
       code does not answer the question. Never guess a path.
@@ -249,6 +256,9 @@ roles:
       owner instead of editing it.
       Run the bean's acceptance tests before reporting. A change that is not
       tested is not finished.
+      Check the bean's budget with board_budget before you start and after
+      each milestone. When it says stop, post a blocker record with
+      openagentsy_board_record and stop; do not spend past the limit.
       Before each retry, state what failed, what you change, and whether this
       retry repeats the previous attempt.
       After three failed attempts, post a blocker record with
@@ -395,15 +405,20 @@ roles:
     steps: 20
     scope: |
       Scope: collect the board records, diff, review findings and failed
-      attempts of a finished session, and save what is worth keeping.
-      Out of scope: writing code, and editing memory outside the memory tool.
+      attempts of a finished session, and post what is worth keeping.
+      Out of scope: writing code, and posting a candidate anywhere other than
+      the board.
     guidance: |
       Keep constraints the code does not make obvious, gotchas that cost a
       retry, commands that worked, and recurring review findings.
       Drop repo overviews, file summaries, anything the code already states,
       and every claim marked as a guess.
-      Write at most five candidates. Each one carries a category, its source
-      (bean, commit, file:line) and a confidence label.
+      Post each candidate as a board record with openagentsy_board_record:
+      kind finding, addressed to the Lead, bean memory, the candidate in the
+      action, its category and its source (bean, commit, file:line) in the
+      state, and a confidence of verified, inferred or guess. The record is
+      where a candidate goes, so a candidate that is not posted is lost.
+      Write at most five candidates.
     permissions:
       edit: deny
       shell: deny

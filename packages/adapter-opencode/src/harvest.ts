@@ -182,7 +182,11 @@ function buildPacket(input: {
     input.transcript.length > 0 ? input.transcript : '(it said nothing)',
     '',
     'Read the board for the records of this session if you need more.',
-    'Save at most five candidate memories, each with a category, its source and a confidence.',
+    'Post at most five candidate memories as board records with',
+    'openagentsy_board_record: kind finding, addressed to the Lead, bean',
+    'memory, the candidate in the action, its category and source (bean,',
+    'commit, file:line) in the state, and a confidence of verified, inferred',
+    'or guess. A candidate that is not posted is lost.',
     'Drop what the code already says and anything you cannot point at.',
   ];
   return lines.join('\n');

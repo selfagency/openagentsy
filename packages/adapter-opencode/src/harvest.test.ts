@@ -110,6 +110,23 @@ describe('harvest', () => {
     expect(packet).toContain('the lease check said no');
   });
 
+  it('names where a candidate goes', async () => {
+    // A candidate with no destination evaporates: the archivist is told to
+    // save five memories and there is nowhere to save them.
+    const { session, prompts } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
+    await harvest({
+      session,
+      root,
+      sessionID: 'ses_scout',
+      role: 'scout',
+      agent: 'oa-scout',
+    });
+    const packet = prompts[0]?.text ?? '';
+    expect(packet).toContain('openagentsy_board_record');
+    expect(packet).toContain('memory');
+    expect(packet).toContain('at most five');
+  });
+
   it('creates the archivist session as a child of the session it harvests', async () => {
     const { session, created } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     await harvest({
