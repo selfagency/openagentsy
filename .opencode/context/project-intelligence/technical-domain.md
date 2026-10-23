@@ -17,11 +17,11 @@ plugin or MCP surface changes | a rule in `AGENTS.md` changes.
 | Layer | Technology | Version | Rationale |
 | --- | --- | --- | --- |
 | Language | TypeScript | 5.9 | strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` |
-| Runtime | Node | 22 | `node:sqlite` for the board, no native build step |
-| Package manager | pnpm | 12 | workspace of six packages, strict resolution |
+| Runtime | Bun | 1.2 | `bun:sqlite` for the board and the plugin, one runtime everywhere |
+| Package manager | Bun + Turborepo | 1.2 / 2.6 | workspace of six packages, strict isolated linker, turbo orders the tasks |
 | Lint and format | Biome | 2.6 | one tool, one config, no `.eslintrc` + `.prettierrc` pair |
 | Tests | Vitest | 3.2 | the safety suite drives real OpenCode sessions through it |
-| Storage | node:sqlite | Node 22 | the board owns the database; the plugin cannot open it |
+| Storage | bun:sqlite + drizzle | Bun 1.2 | the board owns the database; the plugin opens it directly |
 | Tool server | @modelcontextprotocol/sdk | 1.x | the board is an MCP server, so V1 and V2 share it |
 | Validation | zod | 4 | every MCP tool input and every role file is validated |
 | Bundling | tsdown | 0.15 | the plugin loads from a directory with no `node_modules` |

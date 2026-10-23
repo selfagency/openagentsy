@@ -1,0 +1,36 @@
+OpenAgentsy
+Copyright (C) 2026 the OpenAgentsy authors
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. See LICENSE.
+
+This repository incorporates or adapts code from these projects, under
+the terms noted:
+
+- hmans/beans (Apache-2.0): the fractional-order algorithm in
+  packages/tasks/src/fractional.ts is a port of pkg/bean/fractional.go.
+  Apache-2.0 code may be included in GPL-3 works; this NOTICE records the
+  origin and the license.
+- zhaono1/agent-playbook (MIT): the lesson lifecycle states, the start
+  packet and the eval-artifact contract in packages/hooks/src/lessons/,
+  and the host-conformance states in packages/adapters/src/conformance.ts,
+  are adapted from its self-improving-agent, eval-artifact and
+  long-task-coordinator designs.
+- miqdadbadjuber/anti-slop (MIT): the quality rules in packages/quality/
+  are adapted from its rules, keeping the R-XX identifiers in rule
+  metadata.
+- Nutlope/hallmark (MIT): the floor rules and the tier system in
+  packages/quality/ are adapted from its rules, keeping the Floor numbers.
+  Its sloplint.mjs is called as an external check when installed, not
+  vendored.
+- junhoyeo/tokscale (MIT) and xiufengsun/TokenTracker (MIT): ideas only —
+  OpenCode database discovery, the pricing fallback chain, the outcomes
+  sidecar and the privacy rule. No code copied.
+- EcoLogits (CC BY-SA 4.0, docs): the footprint formulas in
+  packages/footprint/ are re-implemented from the published methodology,
+  with credit in the UI and this NOTICE. Its models.json data is fetched
+  at runtime and cached, not bundled, until its data license is confirmed.
+- models.dev (MIT): model and cost data, bundled at build time through
+  the @opencode-ai/models package.

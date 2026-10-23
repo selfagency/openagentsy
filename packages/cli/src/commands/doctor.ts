@@ -1,6 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join, relative } from 'node:path';
-import { loadRoles, type Target } from '@openagentsy/core';
+import { closeDatabase, listLeases, loadRoles, openDatabase, type Target } from '@openagentsy/core';
 import { parse as parseJsonc } from 'jsonc-parser';
 import { lockEntryFor, readModelLock } from '../generate/lock.js';
 import {
@@ -32,8 +32,6 @@ export type BoardReport = {
   root: string;
   databasePath: string;
   databaseExists: boolean;
-  leaseSnapshotPath: string;
-  leaseSnapshotExists: boolean;
   leases: number;
   auditPath: string;
   auditExists: boolean;
@@ -114,17 +112,6 @@ async function countAuditLines(path: string): Promise<number> {
   }
 }
 
-async function readLeaseSnapshot(path: string): Promise<{ leases: unknown[] } | undefined> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null) return undefined;
-    const leases = (parsed as { leases?: unknown[] }).leases;
-    return Array.isArray(leases) ? { leases } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function runDoctor(root: string): Promise<DoctorReport> {
   const warnings: string[] = [];
   const version = await detectOpenCode();
@@ -171,7 +158,6 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   const skills = await findSkills(root);
   const stateDir = join(root, '.openagentsy');
   const databasePath = join(stateDir, 'board.sqlite');
-  const leaseSnapshotPath = join(stateDir, 'leases.json');
   const auditPath = join(stateDir, 'audit.jsonl');
 
   const databaseExists = await stat(databasePath).then(
@@ -179,7 +165,17 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     () => false,
   );
 
-  const leaseSnapshot = await readLeaseSnapshot(leaseSnapshotPath);
+  // The leases live in the database now; the doctor counts them the way the
+  // board does, without opening a second connection for long.
+  let leaseCount = 0;
+  if (databaseExists) {
+    const db = openDatabase(databasePath);
+    try {
+      leaseCount = listLeases(db).length;
+    } finally {
+      closeDatabase(db);
+    }
+  }
 
   const bundlePath = join(root, 'packages', 'adapter-opencode', 'dist', 'index.js');
   const pluginPath = join(root, '.opencode', 'plugins', 'openagentsy.js');
@@ -206,9 +202,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
       root: relative(root, stateDir) || '.openagentsy',
       databasePath,
       databaseExists,
-      leaseSnapshotPath,
-      leaseSnapshotExists: leaseSnapshot !== undefined,
-      leases: leaseSnapshot?.leases.length ?? 0,
+      leases: leaseCount,
       auditPath,
       auditExists: await stat(auditPath).then(
         () => true,
@@ -278,7 +272,7 @@ export function formatDoctorReport(report: DoctorReport): string {
       `${report.board.databasePath} ${report.board.databaseExists ? 'found' : 'missing'}`,
     ),
   );
-  lines.push(field('leases', `${report.board.leaseSnapshotPath} ${report.board.leases} lease(s)`));
+  lines.push(field('leases', `${report.board.leases} lease(s)`));
   lines.push(field('audit', `${report.board.auditPath} ${report.board.auditEntries} entries`));
 
   lines.push('');

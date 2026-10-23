@@ -17,20 +17,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
-          cache: pnpm
+          bun-version: latest
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Lint and typecheck
-        run: pnpm ci:check
+        run: bun run ci:check
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
 
       - name: Test
-        run: pnpm test
+        run: bun run test
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
 
       # On a pull request the base is the branch it targets. On a push to
       # develop the base is the head the push moved, so the gate sees only
@@ -39,7 +41,7 @@ jobs:
       - name: Fallow gate
         run: |
           if [ -n "${{ github.base_ref }}" ]; then
-            pnpm exec fallow audit --base origin/${{ github.base_ref }} --format human --quiet
+            bunx fallow audit --base origin/${{ github.base_ref }} --format human --quiet
           else
-            pnpm exec fallow audit --base "${{ github.event.before }}" --format human --quiet
+            bunx fallow audit --base "${{ github.event.before }}" --format human --quiet
           fi

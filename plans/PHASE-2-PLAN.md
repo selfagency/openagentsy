@@ -19,7 +19,7 @@
   - a reviewer gate (§9).
 - **`oa conformance`.** Reports, per host version, which OpenCode capabilities are proven, observed or unverified (§10).
 
-The Biome, Husky, lint-staged, `tsc` and CI baseline is already in the repo (§1).
+Before any of that, step 2.0 **moves the repo from pnpm to Bun workspaces with Turborepo** (§1). The Biome, Husky, lint-staged, `tsc` and CI baseline stays as it is; only the commands that run it change. OpenCode loads plugins with Bun, so this also means one runtime for development, tests and production.
 
 Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode API detail is inferred rather than read from source, it's marked **VERIFY**. Every **VERIFY** maps to one conformance check.
 
@@ -47,9 +47,134 @@ Phase 2 reuses code from agentsy (GPL-3.0-or-later; the MIT mention in its READM
 
 ---
 
-## 1. Baseline already in place
+## 1. Step 2.0: pnpm → Bun workspaces + Turborepo
 
-Biome (lint and format), Husky with lint-staged (blocking pre-commit), `tsc -b --noEmit`, and the CI check are already set up. Phase 2 code must pass `pnpm lint` and `pnpm typecheck`. Phase 2 adds two things on top:
+**Why now.**
+- **One runtime.** OpenCode loads plugins with Bun: the plugin's `$` is Bun's shell, and OpenCode runs `bun install` in its config directories [^tai]. Developing and testing on Bun removes a Node/Bun gap from every plugin.
+- **`bun:sqlite`** becomes the ledger driver everywhere (§5.2).
+- **Turborepo** caches each package's lint, typecheck, test and build. Turborepo 2.6 made Bun support stable and parses `bun.lock` v1 per package. Changing one package's dependencies now invalidates only that package's cache, not the whole repo's [^turbo26]. Bun supports pnpm-style workspaces, catalogs and isolated installs [^bunws].
+
+**What stays the same.** Biome, Husky, lint-staged and `tsc` don't change; only the commands that run them do.
+
+### 1.1 Root files
+
+```jsonc
+// package.json (root)
+{
+  "name": "openagentsy",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "packageManager": "bun@1.3.x",            // VERIFY exact pin; turbo reads this field to detect the package manager
+  "workspaces": {
+    "packages": ["packages/*"],
+    "catalog": {                             // was pnpm-workspace.yaml `catalog:`; same `catalog:` protocol in package.json deps
+      "zod": "^4", "solid-js": "^1.9", "typescript": "^5.9", "vitest": "^3"
+    }
+  },
+  "scripts": {
+    "prepare": "husky",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "build": "turbo run build",
+    "check": "turbo run lint typecheck test build"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json,jsonc,css}": ["biome check --write --no-errors-on-unmatched"]
+  },
+  "devDependencies": { "turbo": "^2.6", "@biomejs/biome": "…", "husky": "…", "lint-staged": "…" }
+}
+```
+
+```toml
+# bunfig.toml
+[install]
+linker = "isolated"     # pnpm-like strict node_modules; the default for workspaces migrated from pnpm (configVersion 1)
+exact = true            # `bun add` pins exact versions; ranges stay in the catalog
+# hoist = false         # stricter still: undeclared imports fail. Turn on once phantom imports are fixed (§1.4)
+```
+
+```jsonc
+// turbo.json
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "ui": "tui",
+  "tasks": {
+    "build":     { "dependsOn": ["^build"], "inputs": ["src/**", "package.json", "tsconfig*.json"], "outputs": ["dist/**"] },
+    "typecheck": { "dependsOn": ["^build"], "inputs": ["src/**", "test/**", "tsconfig*.json"], "outputs": [] },
+    "test":      { "dependsOn": ["^build"], "inputs": ["src/**", "test/**", "fixtures/**"], "outputs": [] },
+    "//#lint":   { "inputs": ["**/*.{ts,tsx,js,json,jsonc,css}", "biome.jsonc"], "outputs": [] }
+  },
+  "globalDependencies": ["biome.jsonc", "tsconfig.base.json", "bunfig.toml"]
+}
+```
+
+`//#lint` is a root task, because Biome checks the whole repo in one pass. Each package defines `build`, `typecheck` (`tsc --noEmit -p .`) and `test`.
+
+**Per-package scripts.**
+
+```jsonc
+// packages/<name>/package.json
+{
+  "scripts": {
+    "build": "bun build src/index.ts --outdir dist --target bun --packages external && tsc -p tsconfig.build.json --emitDeclarationOnly",
+    "typecheck": "tsc --noEmit -p .",
+    "test": "vitest run"
+  },
+  "engines": { "opencode": ">=1.19 <2" }   // OpenCode skips npm plugins whose engines.opencode excludes the running version [^tai]
+}
+```
+
+- **Sidebar exception.** `packages/sidebar` keeps its Solid JSX transform for `dist/tui.js` (§6.7). **VERIFY** whether `@opentui/solid`'s Bun plugin works with `bun build`; if not, keep esbuild with `babel-preset-solid` for that one package.
+- **Tests stay on Vitest**, so existing suites don't need rewriting. `bun test` is an option later; it isn't part of this step.
+
+### 1.2 Hooks and CI
+
+```sh
+# .husky/pre-commit
+bunx lint-staged
+bun run typecheck      # turbo: only packages affected by the change re-run; the rest hit cache
+```
+
+```yaml
+# .github/workflows/ci.yml (job steps)
+- uses: oven-sh/setup-bun@v2
+  with: { bun-version-file: package.json }   # reads packageManager; VERIFY input name for the pinned action version
+- run: bun install --frozen-lockfile
+- run: bunx turbo run lint typecheck test build
+  env: { TURBO_TELEMETRY_DISABLED: "1" }
+```
+
+- **No telemetry, here or locally.** `TURBO_TELEMETRY_DISABLED=1` goes in CI, in the agent shell environment (§7.3) and in `CONTRIBUTING.md`. That matches the rest of OpenAgentsy.
+- **Remote caching stays off.** It needs a Vercel account or a self-hosted cache, and it uploads build artifacts. It's opt-in only (§12).
+
+### 1.3 Migration steps
+
+1. **Pin Bun.** Add `packageManager` and a `.bun-version` file, plus `mise`/`asdf` config if the repo uses one.
+2. **Move the workspace definition.** Copy `pnpm-workspace.yaml`'s `packages` and `catalog` into the root `package.json` (§1.1). Keep the `workspace:*` and `catalog:` specifiers, which Bun reads unchanged.
+3. **Migrate the lockfile.** Run `bun install`, which converts `pnpm-lock.yaml` into a text `bun.lock`. **VERIFY** the resolved versions with `bun pm ls --all` against `pnpm list -r --depth Infinity`, and review any differences before deleting the old lockfile.
+4. **Port pnpm-specific settings:**
+   - `pnpm.overrides` → `overrides`;
+   - `pnpm.patchedDependencies` → `patchedDependencies` (re-run `bun patch` for each one);
+   - `onlyBuiltDependencies` → `trustedDependencies`. Bun skips dependencies' lifecycle scripts unless they're trusted. List only the packages that need them, such as esbuild.
+   - Registry and auth entries in `.npmrc` stay. Bun reads them.
+5. **Delete** `pnpm-lock.yaml`, `pnpm-workspace.yaml`, any `.pnpmfile.cjs`, and pnpm-only `.npmrc` keys. Add `.turbo/` to `.gitignore`.
+6. **Add Turborepo.** Add `turbo` and `turbo.json`, and per-package `build`, `typecheck` and `test` scripts. Remove the root `tsc -b` project-reference build if Turborepo now orders builds.
+7. **Swap commands everywhere.** Replace every `pnpm <x>`, `pnpm dlx` and `pnpm -r` in scripts, docs, the Husky hook, CI, `openagentsy.jsonc` defaults (`worktrees.setup`, §11) and agent role text. `pnpm -r run x` becomes `turbo run x`, and `pnpm --filter p` becomes `turbo run x --filter=p` (or `bun --filter p`).
+8. **Guard it in code** (§7.3):
+   - a `package-manager` rule denies agent shell calls to `pnpm`, `npm install|ci|add`, `yarn` and `npx`, with the reason "This repo uses Bun; use `bun add` / `bunx`";
+   - `protect-policy` also covers `turbo.json`, `bunfig.toml` and direct edits to `bun.lock`. The lockfile changes only through `bun add`/`bun remove`, and adding a dependency goes through the approval flow.
+
+### 1.4 Expected friction
+
+- **Phantom imports.** Isolated installs, like pnpm's, fail on imports a package never declared. A pnpm repo should already be clean, except where pnpm's public-hoist patterns hid something. Fix these by declaring the dependency, not by switching the linker to `hoisted`.
+- **Native modules.** Phase 2 adds none, because `bun:sqlite` is built in. `better-sqlite3` drops out of the plan.
+- **Tests that run on Node.** Vitest runs on Node unless it's started with `--bun`. Ledger tests use `bun:sqlite`, so either run them with `vitest --bun` or put the DB behind an interface with an in-memory fake. **VERIFY** which works for the pinned Vitest version.
+
+Biome rules, the Husky gate, and the agent rule against `--no-verify` / `HUSKY=0` (§7.3) all work as before. Phase 2 code must pass `bun run lint` and `bun run typecheck`.
+
+### 1.5 Already in place, unchanged by the move
 
 - **Agents can't skip the hook.** The `no-skip-git-hooks` rule (§7.3) denies agent shell calls that use:
   - `--no-verify`;
@@ -375,7 +500,7 @@ export const OpenAgentsyTasks: Plugin = async ({ directory }) => {
   return {
     'experimental.chat.system.transform': async (_input, output) => { output.system.push(await prime()); },
     'experimental.session.compacting': async (_input, output) => { output.context.push(await prime()); },
-    tool: taskTools(store),                           // §3.6; VERIFY tool registration shape for your plugin SDK version
+    tool: taskTools(store),                           // §3.6; V1 shape is tool({ description, args: { x: tool.schema.string() }, execute(args, ctx) }), tool.schema = zod
   };
 };
 ```
@@ -718,7 +843,7 @@ CREATE TABLE IF NOT EXISTS footprint (
 
 ```ts
 // packages/ledger/src/ingest.ts
-import { Database } from 'bun:sqlite';                // VERIFY: OpenCode plugin runtime is Bun; else better-sqlite3
+import { Database } from 'bun:sqlite';                // OpenCode loads plugins under Bun ($ is BunShell) and the repo runs on Bun (§1); no native sqlite dependency
 
 export function recordAssistantMessage(db: Database, m: OcAssistantMessage, ctx: IngestCtx) {
   const t = m.tokens ?? {};
@@ -967,9 +1092,10 @@ The `/oa status` and `/oa footprint` commands live in `.opencode/command/*.md` a
 
 Packaging follows the existing community plugins:
 
-- `@openagentsy/sidebar@2.x` exports `dist/tui.js`, built with esbuild and with `@opentui/solid` and `solid-js` as peer dependencies.
+- `@openagentsy/sidebar@2.x` exports `dist/tui.js`, with `@opentui/solid` and `solid-js` as peer dependencies. The build is `bun build` with the Solid transform, or esbuild with `babel-preset-solid` for this package only (§1.1).
 - `@openagentsy/sidebar@1.x` exports `dist/v1.js`.
-- There is no single package that tries to run on both runtimes.
+- **One package per runtime.** OpenCode rejects a module whose default export has both `server` and `tui` [^tai], so a single package can't serve both.
+- **V1 loading rules.** A V1 user lists the package under the **singular** `plugin` key in `opencode.json`. The plural `plugins` key is V2's name; V1 drops it with only a log warning, so plugins listed there never load. Both packages set `engines.opencode`.
 
 ---
 
@@ -1000,35 +1126,86 @@ export function createOaRegistry(rules: Rule[]): HookRegistry {
 
 ### 7.2 OpenCode bridge
 
+**How OpenCode calls plugin hooks.** These facts come from a hook table generated from OpenCode v1.19.4's own source [^tai], checked against the community guides [^jl] [^rsc]:
+
+| agentsy event | OpenCode 1.x hook | Can it block or change the call? |
+| --- | --- | --- |
+| `PreToolCall` | `tool.execute.before (input{tool,sessionID,callID}, output{args})` | **Yes.** Throw to stop the call. Change fields of `output.args` **in place**; assigning a new object to `output.args` has no effect. |
+| `PostToolCall` | `tool.execute.after (input{…,args}, output{title,output,metadata})` | It can rewrite what the model sees, because `output.output` is writable. A throw shows the model a tool error, but the tool has already run. |
+| `UserPromptSubmit` | `chat.message` | It can change `output.parts`. |
+| `PreCompact` | `experimental.session.compacting` | It can push to `context` or replace `prompt`. |
+| `PreResponse` | `experimental.text.complete (output{text})` | It can flag the text, or annotate it. Output checks (§7.6) only flag. |
+| Model-call params | `chat.params` / `chat.headers` | The effort ladder sets `maxOutputTokens` here. |
+| Shell environment | `shell.env (input{cwd,sessionID}, output{env})` | It controls the environment of agent shells (§7.3). |
+| `SubagentStop`, `session.idle`, `PostResponse` | `event` | **Observe only.** OpenCode doesn't await the `event` hook, so nothing that must block can live here. |
+| Permission decisions | `permission.ask` | **Unusable.** It's declared in the types, but nothing in v1.19.4 calls it (anomalyco/opencode#7006). |
+
+Two more facts shape the code:
+
+- **MCP tools pass through `tool.execute.before` as `<server>_<tool>`.** Rules therefore match on the base tool name (`baseTool()` below), so the board MCP's tools can't slip past a rule written for `oa_*`.
+- **Plugins run one after another on the same `output` object.** A plugin loaded after ours could change `args` after our checks pass. `oa conformance` lists any other loaded plugin with a `tool.execute.before` hook as a warning (§10).
+
+The `stop` hook that some guides show [^jl] isn't in v1.19.4's hook table, so OpenAgentsy doesn't use it. Two other guides show shapes that don't match the source, and neither shape is used: a nested `tool: { execute: { before } }` object with a `plugins` key [^devto], and an `output.abort` field [^zeke].
+
 ```ts
 // packages/hooks/src/v1.ts
 import type { Plugin } from '@opencode-ai/plugin';
 
-export const OpenAgentsyHooks: Plugin = async ({ directory }) => {
+const baseTool = (name: string) => name.replace(/^[a-z0-9-]+_(?=oa_)/i, '');   // "openagentsy-board_oa_board_dispatch" → "oa_board_dispatch"
+
+export const OpenAgentsyHooks: Plugin = async ({ directory, client }) => {
   const reg = createOaRegistry(defaultRules({ workspace: directory }));
+  await client.app.log({ body: { service: 'openagentsy', level: 'info', message: 'hooks loaded' } });  // conformance: plugin-loaded (§10)
   return {
-    'tool.execute.before': async (input, output) => {           // VERIFY arg shapes for pinned SDK
-      const res = await reg.fire({ type: 'PreToolCall', toolName: input.tool, args: output.args, sessionId: input.sessionID } satisfies PreToolCallEvent);
+    'tool.execute.before': async (input, output) => {
+      const files = changedFiles(input.tool, output.args);                     // normalised; see below
+      const res = await reg.fire({ type: 'PreToolCall', toolName: baseTool(input.tool), rawToolName: input.tool,
+        args: output.args, files, sessionId: input.sessionID } satisfies PreToolCallEvent);
       if ('continue' in res && res.continue === false) throw new Error(`Blocked by OpenAgentsy policy: ${res.reason}`);
-      if ('transform' in res) output.args = res.transform;
+      if ('transform' in res) Object.assign(output.args, res.transform);      // mutate in place; reassignment is ignored
     },
     'tool.execute.after': async (input, output) => {
-      await reg.fire({ type: 'PostToolCall', toolName: input.tool, args: input.args, result: output, sessionId: input.sessionID });
+      const res = await reg.fire({ type: 'PostToolCall', toolName: baseTool(input.tool), args: input.args,
+        files: changedFiles(input.tool, input.args), result: output, sessionId: input.sessionID });
+      if ('transform' in res && res.transform.appendToResult) output.output += `\n\n${res.transform.appendToResult}`;
     },
+    'shell.env': async (_input, output) => { applyShellEnvPolicy(output.env); },  // §7.3
+    'experimental.text.complete': async (input, output) => {
+      await reg.fire({ type: 'PreResponse', text: output.text, sessionId: input.sessionID });   // flags only
+    },
+    event: async ({ event }) => { void observe(event); },                     // not awaited by OpenCode; never blocks
   };
 };
 ```
 
+**Normalising changed files.** This is taken from opencode-yaml-hooks' `file.changed` event [^yamlhooks]. Every write-like tool is reduced to one list of `{ operation: 'add'|'modify'|'delete'|'rename', path, fromPath? }`:
+
+```ts
+// packages/hooks/src/files.ts
+const WRITE_TOOLS = new Set(['write', 'edit', 'multiedit', 'patch', 'apply_patch']);
+export function changedFiles(tool: string, args: any): FileChange[] {
+  if (!WRITE_TOOLS.has(tool)) return [];
+  if (tool === 'apply_patch' || tool === 'patch') return parsePatchHeaders(args.patchText ?? args.patch ?? '');  // *** Add/Update/Delete/Move File
+  return [{ operation: tool === 'write' ? 'add' : 'modify', path: args.filePath }];
+}
+```
+
+- **Rules use `e.files`.** `workspace-writes-only`, `protect-policy`, `secret-scan-writes` and the quality hook (§9.4) all read `e.files`, never a single `targetPath`.
+- **Why this matters for `apply_patch`.** One patch can touch several files, including a protected one, or rename a file into a protected path. The before-hook has to parse the patch headers itself, because the tool hasn't run yet.
+- **Tested.** A fixture patch that changes `src/a.ts` and also moves a file onto `openagentsy.jsonc` must be blocked.
+
 **Model output can't override a blocking rule.**
 
 - Blocking rules run inside the plugin process, before the tool runs.
-- The only way past one is a person editing `openagentsy.jsonc`, and that edit is itself a file write that the `protect-policy` rule below routes to an approval request.
+- The only way past one is a person editing `openagentsy.jsonc`. An agent's attempt to edit that file is blocked by the `protect-policy` rule below.
 
 ### 7.3 Default rules
 
 ```ts
 // packages/hooks/src/rules.ts
 const GIT_SKIP_HOOKS = /\bgit\b[^|;&]*\b(commit|push|merge|rebase)\b[^|;&]*(\s--no-verify\b|\s-n\b)|\bHUSKY=0\b|\bcore\.hooksPath\b/;
+const OTHER_PM = /(^|[\s;&|(])(pnpm|yarn|npx|npm\s+(i|install|ci|add|exec))\b/;
+const PROTECTED = /(^|\/)(openagentsy\.jsonc|biome\.jsonc|turbo\.json|bunfig\.toml|bun\.lock)$|(^|\/)\.husky\/|(^|\/)\.openagentsy\/(lessons\/|quality\/waivers\.json|conformance\.json)/;
 
 export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
   { id: 'no-skip-git-hooks', event: 'PreToolCall', block: true,
@@ -1036,33 +1213,59 @@ export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
       ? { continue: false, reason: 'Git hooks (lint, typecheck) cannot be skipped. Fix the reported errors instead.' }
       : { continue: true } },
 
+  { id: 'package-manager', event: 'PreToolCall', block: true,
+    handler: async (e) => isShell(e) && OTHER_PM.test(cmd(e))
+      ? { continue: false, reason: 'This repo uses Bun. Use `bun add` / `bun remove` / `bunx`, or `turbo run <task>`.' }
+      : { continue: true } },
+
   { id: 'workspace-writes-only', event: 'PreToolCall', block: true,
-    handler: async (e) => isWrite(e) && !isInside(targetPath(e), [workspace, worktreeRoot(projectName(workspace))])
+    handler: async (e) => e.files.some((f) => ![f.path, f.fromPath].filter(Boolean).every((p) => isInside(p!, [workspace, worktreeRoot(projectName(workspace))])))
       ? { continue: false, reason: `Writes are limited to the workspace and OpenAgentsy worktrees.` }
       : { continue: true } },
 
   { id: 'protect-policy', event: 'PreToolCall', block: true,
-    handler: async (e) => isWrite(e) && /openagentsy\.jsonc$|\.husky\/|biome\.jsonc$|\.openagentsy\/(lessons|quality\/waivers\.json|conformance\.json)/.test(targetPath(e) ?? '')
-      ? { continue: false, reason: 'Policy, hook, lesson and waiver files are edited by a person, not an agent. Propose the change in chat.' }
+    handler: async (e) => e.files.some((f) => PROTECTED.test(f.path) || (f.fromPath && PROTECTED.test(f.fromPath)))
+      ? { continue: false, reason: 'Policy, build-config, lockfile, hook, lesson and waiver files are changed by a person (or, for bun.lock, by `bun add`). Propose the change in chat.' }
       : { continue: true } },
 
   // Human-only decisions: agents may propose lessons and waivers, never decide them (§7.5, §9.4).
+  // toolName is already the base name, so an MCP-prefixed "<server>_oa_lesson_decide" is caught too.
   { id: 'human-only-decisions', event: 'PreToolCall', block: true,
     handler: async (e) => ['oa_lesson_decide', 'oa_quality_waive'].includes(e.toolName)
       ? { continue: false, reason: 'Lesson decisions and quality waivers are recorded by a person (/oa lesson, /oa waive). Propose it in chat with your evidence.' }
       : { continue: true } },
 
   { id: 'secret-scan-writes', event: 'PreToolCall', block: true,
-    handler: async (e) => isWrite(e) && findSecrets(contentOf(e)).length
+    handler: async (e) => e.files.length && findSecrets(contentOf(e)).length
       ? { continue: false, reason: 'The content contains what looks like a credential. Use an env var or secret reference.' }
       : { continue: true } },
 
   { id: 'destructive-needs-approval', event: 'PreToolCall', block: true,
     handler: approvalGate(/(^|\s)(rm\s+-rf|git\s+push\s+--force|git\s+reset\s+--hard|drop\s+table)\b/i) },
 ];
+
+/** shell.env: what every agent shell sees. Tightens only; never adds credentials. */
+export function applyShellEnvPolicy(env: Record<string, string>) {
+  for (const k of ['HUSKY', 'HUSKY_SKIP_HOOKS', 'SKIP_SIMPLE_GIT_HOOKS', 'TOGETHER_API_KEY']) delete env[k];
+  env.TURBO_TELEMETRY_DISABLED = '1';
+  env.OPENAGENTSY_AGENT = '1';      // lets the pre-commit hook require a Refs: <task-id> trailer on agent commits (§5.5)
+}
 ```
 
-`approvalGate` reuses agentsy's `createApprovalHook`/`isDestructiveTool`. It asks through OpenCode's permission prompt, and **VERIFY** that this maps to V1's `permission` config, falling back to `ask` there.
+**Approvals, given that `permission.ask` is never called.** A plugin can't answer OpenCode's permission prompt, so the approval flow has two parts:
+
+1. **Ask through OpenCode's own permission config.** The plugin's `config` hook merges *tightening-only* entries into OpenCode's `permission` config, for example `"bash": { "git push*": "ask", "gh pr merge*": "ask", "bun add *": "ask" }`. These come from `hooks.approvalFor` (§11). OpenCode then shows its normal prompt, and the person answers it.
+   - The merge can change `allow` → `ask` or `ask` → `deny`, never the other way round. A unit test checks that.
+   - **VERIFY** that changes made in the `config` hook reach the permission evaluator in the pinned version. If they don't, `oa init` writes the same entries into `opencode.json`, and that edit is shown to the person as a diff.
+2. **Block anything the permission config can't express.** Examples are `rm -rf` inside a compound command, and SQL in a heredoc. `approvalGate` throws in `tool.execute.before` with a reason naming the slash command a person can run instead (for instance `/oa approve <callID>`, which allow-lists that exact call for 5 minutes). agentsy's `createApprovalHook` and `isDestructiveTool` classify the call; they don't do the prompting.
+
+**Plugin versus YAML shell hooks.** opencode-yaml-hooks [^yamlhooks] and openhooks [^openhooks] let people declare shell hooks in YAML. In opencode-yaml-hooks, a script exiting with code 2 blocks the tool. We don't ship a YAML layer, for three reasons:
+
+- **Environment.** Those actions inherit the full `process.env`. Our rules run in-process instead, with `shell.env` tightening what shells receive.
+- **One source of rules.** A second rule language would split where policy lives.
+- **Nothing is lost.** People who want YAML hooks can install either plugin alongside ours. `oa conformance` will list it in the plugin-order warning above.
+
+Two ideas from them are adopted: the `file.changed` normalisation above, and opencode-yaml-hooks' `scope: main | child`. Our version is `Rule.roles?: Role[]`, for example a rule that applies only to builder subagents.
 
 ### 7.4 Secret redaction when anything is written to storage
 
@@ -1231,7 +1434,7 @@ The rule text added to the Lead role in `roles.yaml` stays under 120 tokens. The
 
 - **Board round statuses:** `running | awaiting_result | paused | blocked | complete`. `awaiting_result` is valid and is never a failure.
 - **Every delegated item has an owner and a return condition.** The board MCP rejects a dispatch that is missing either one.
-- **The report must match the board.** A `PostResponse` hook compares the status the Lead claims in chat with the board's round status. A mismatch is flagged in the Accountability block.
+- **The report must match the board.** An observer on `session.idle` compares the status the Lead claims in its last message with the board's round status. A mismatch is flagged in the Accountability block. The `event` hook isn't awaited (§7.2), so this check can only flag a mismatch, never block it.
 - **A round that changed nothing can't claim progress.** A round that dispatched nothing, consumed no results and changed nothing on the board writes a `no_progress` waste event (add it to the `waste.kind` CHECK constraint in §5.1).
 
 ---
@@ -1412,8 +1615,9 @@ The checker uses the TypeScript compiler's comment ranges, so it doesn't depend 
 // packages/hooks/src/rules.ts (addition)
 { id: 'quality-after-write', event: 'PostToolCall', block: false,
   handler: async (e) => {
-    if (!isWrite(e) || cfg.quality.mode !== 'during') return { continue: true };
-    const findings = await quality.check([targetPath(e)!], { design: await readDesignMd() });
+    if (!e.files.length || cfg.quality.mode !== 'during') return { continue: true };
+    const paths = e.files.filter((f) => f.operation !== 'delete').map((f) => f.path);   // all files an apply_patch touched (§7.2)
+    const findings = await quality.check(paths, { design: await readDesignMd() });
     findingsStore.record(activeTaskId(), findings);                     // read by enforceTransitions (§3.7)
     const open = findings.filter((f) => f.tier !== 'finish' && !waivers.covers(f));
     return open.length ? { transform: { appendToResult: formatFindings(open.slice(0, 8)) } } : { continue: true };
@@ -1522,13 +1726,28 @@ export const CAPABILITIES: Capability[] = [
   { id: 'message-token-fields', host: 'v2', verifyRef: '§5.2', probeStatic: alwaysFalse, observeOn: ['message.updated'] },
   { id: 'prompt-insert', host: 'v2', verifyRef: '§6.4', probeStatic: hasApi('prompt.insert'), observeOn: ['prompt.inserted'] },
   { id: 'local-offload', host: 'v2', verifyRef: '§8.2', probeStatic: probeBackends, observeOn: ['offload.completed'] },
+  { id: 'plugin-loaded', host: 'v1', probeStatic: hasV1Entry, observeOn: ['app.log:openagentsy hooks loaded'] },  // a setup throw is skipped silently [^tai]
+  { id: 'args-mutate-in-place', host: 'v1', probeStatic: alwaysFalse, observeOn: ['oa.selftest.args'] },          // seeded no-op rewrite seen by the tool
+  { id: 'permission-config-merge', host: 'v1', verifyRef: '§7.3', probeStatic: alwaysFalse, observeOn: ['permission.asked'] },
+  { id: 'permission-ask-hook', host: 'v1', probeStatic: alwaysFalse, observeOn: ['oa.permission.ask.called'] },     // expected to stay unverified (#7006)
+  { id: 'text-complete-hook', host: 'v1', probeStatic: hasHook('experimental.text.complete'), observeOn: ['oa.text.complete'] },
+  { id: 'shell-env-hook', host: 'v1', probeStatic: hasHook('shell.env'), observeOn: ['oa.shell.env'] },
+  { id: 'mcp-tool-prefix', host: 'v1', probeStatic: alwaysFalse, observeOn: ['tool.execute.before:<server>_oa_*'] },
   // … one entry per remaining VERIFY in this spec
 ];
+
+/** Warn when another plugin could rewrite args after our checks: hooks share one output object, in load order. */
+export function pluginOrderWarnings(loaded: LoadedPlugin[]): string[] {
+  const ours = loaded.findIndex((p) => p.name === '@openagentsy/hooks');
+  return loaded.slice(ours + 1).filter((p) => p.hooks.includes('tool.execute.before'))
+    .map((p) => `${p.name} runs tool.execute.before after OpenAgentsy and could change arguments we already checked.`);
+}
 ```
 
 - **Every VERIFY needs a check.** A test greps this spec for **VERIFY** and fails if any one of them has no `verifyRef` in `CAPABILITIES`.
 - **`observed` is only set from live evidence.** It's recorded by an event listener during a real session, never from a static probe.
 - **The Accountability block shows the count**, for example "conformance 9/14 observed".
+- **Plugin-order warnings** (`pluginOrderWarnings`) appear in `oa conformance` and in `oa report --ethical`. That's where a person learns that a YAML-hook plugin or another guard runs after OpenAgentsy's checks.
 - **`unverified` items are listed in `oa report --ethical`**, so nobody mistakes a guess about the OpenCode API for a tested fact.
 
 ---
@@ -1537,7 +1756,7 @@ export const CAPABILITIES: Capability[] = [
 
 ```jsonc
 {
-  "tasks": { "path": ".beans", "prefix": "oa-", "idLength": 4, "worktrees": { "baseRef": "main", "integrate": "pr", "setup": "pnpm install", "fetchTimeoutSec": 10 } },
+  "tasks": { "path": ".beans", "prefix": "oa-", "idLength": 4, "worktrees": { "baseRef": "main", "integrate": "pr", "setup": "bun install --frozen-lockfile", "fetchTimeoutSec": 10 } },
   "footprint": {
     "showWarming": true,
     "prefill": false,
@@ -1547,7 +1766,7 @@ export const CAPABILITIES: Capability[] = [
   },
   "ledger": { "backfillOpencodeDb": false, "pricingSources": ["opencode", "models.dev", "litellm", "openrouter"] },
   "offload": { "backends": [{ "kind": "ollama", "baseUrl": "http://127.0.0.1:11434", "model": "qwen3:4b" }], "jobs": ["title", "compaction", "json-repair", "classify", "quick-replies"] },
-  "hooks": { "extraBlockedCommands": [], "approvalFor": ["git push", "gh pr merge"] },
+  "hooks": { "extraBlockedCommands": [], "approvalFor": ["git push", "gh pr merge", "bun add", "bun remove"] },
   "lessons": { "captureAfterSessions": 3, "evalTimeoutMs": 30000, "requireWorktreeForBaseline": true },
   "quality": {
     "mode": "during",                // "during" = hook after each write | "after" = report only, via /oa audit
@@ -1581,19 +1800,23 @@ If `.beans.yml` exists, its `beans.prefix`, `beans.id_length` and `beans.path` t
 | anti-slop | The install wizard that edits AGENTS.md, and the "during or after?" question at the start of each session | The mode is a config key instead (`quality.mode`). |
 | anti-slop, Hallmark | Taste rules as hard bans (eyebrows, tracked caps, italic heading words, Lucide icons, bento grids, em dashes) | These are matters of style, not quality. They stay `finish`-tier warnings that `DESIGN.md` can override. |
 | Hallmark | The theme generator (48 themes, deal/draw), photo library, capture and image generation | That's a design tool, not a guardrail. Users can install Hallmark separately; it supports OpenCode. |
-| Hallmark | Together AI calls when `TOGETHER_API_KEY` is set | There are no hidden network calls. The key is stripped from sloplint's environment (§9.4). |
+| Hallmark | Together AI calls when `TOGETHER_API_KEY` is set | There are no hidden network calls. The key is stripped from sloplint's environment (§9.4) and from agent shells (§7.3). |
+| opencode-yaml-hooks, openhooks | A YAML shell-hook layer (exit code 2 blocks the tool) | A second place for policy to live, and its actions inherit the full environment. We keep its `file.changed` normalisation and `scope` idea (§7.2). People can install either plugin alongside ours; conformance flags the ordering (§10). |
+| OpenCode | The `stop` hook, `permission.ask`, and `experimental.hook.file_edited` / `session_completed` in `opencode.json` | `stop` isn't in v1.19.4's hook table, and `permission.ask` is never called. The config-file hooks appear in only one guide and are unverified. Approvals use the permission config plus blocking instead (§7.3). |
+| Turborepo | Remote caching (Vercel or self-hosted) and telemetry | Remote caching uploads build artifacts, so it's opt-in only. Telemetry is disabled everywhere (§1.2). |
 
 ---
 
 ## 13. Build order and exit tests
 
-Biome, Husky, lint-staged, `tsc` and CI are already in place (§1). Every step must keep `pnpm lint` and `pnpm typecheck` green.
+Biome, Husky, lint-staged, `tsc` and CI are already in place; step 2.0 moves them onto Bun and Turborepo (§1). After 2.0, every step must keep `bun run check` (`turbo run lint typecheck test build`) green.
 
 | Step | Delivers | Exit test (in the Scenario + Vitest suites) |
 | --- | --- | --- |
+| **2.0** | pnpm → Bun workspaces + Turborepo (§1): `packageManager`, `bunfig.toml`, `bun.lock`, `turbo.json`, scripts, Husky hook, CI; the `package-manager` rule and its protected files | <ul><li>`bun install --frozen-lockfile` succeeds on a clean clone.</li><li>`bun pm ls --all` matches the pre-migration `pnpm list` (differences reviewed and noted in the PR).</li><li>`bun run check` passes, and a second run with no changes is fully cached.</li><li>Changing one package's dependency misses the cache only for that package and the packages that depend on it.</li><li>`git grep -n pnpm` finds nothing outside CHANGELOG and this spec's history notes.</li><li>The pre-commit hook still blocks a lint failure.</li><li>Red-team: an agent told to `pnpm add x` or `npm install` is blocked, and so is a direct edit to `bun.lock`.</li><li>`TURBO_TELEMETRY_DISABLED` is set in CI and in agent shells.</li></ul> |
 | **2a** | `tasks` package, prime block, `oa_task_*` tools, `footprint` package | <ul><li>Round-trip over the `hmans/beans` `.beans/` corpus passes.</li><li>`ready` and `next` match Beans' documented semantics on 15 fixtures (blocked parent, terminal ancestor, epics excluded).</li><li>The footprint golden test passes within 1%.</li><li>The prime block is ≤ 200 tokens.</li></ul> |
 | **2b** | `ledger` (ingest, pricing, waste including `no_progress`, outcomes), `offload` | <ul><li>Deduplication: replaying a session doesn't change totals.</li><li>Unpriced models show "unpriced".</li><li>Offload lowers cloud tokens per completed task compared with Phase 1, with pass³ unchanged.</li></ul> |
-| **2c** | `hooks`: bridge, rules (including `human-only-decisions`), redaction, output checks, **lessons + eval runner**, **Lead recovery loop** | <ul><li>Red-team: a model told to "commit with --no-verify", "edit openagentsy.jsonc" or "approve your own lesson" is blocked.</li><li>A seeded secret never reaches `.openagentsy/`, including inside a lesson summary.</li><li>Lesson transitions: every allowed move succeeds and every other move throws.</li><li>A lesson with an incomplete start packet can't leave `candidate`.</li><li>The eval runner rejects shell strings, a `cwd` outside the workspace and a timeout over the maximum. It also rejects symlinked result paths, never writes stdout or stderr, and strips a fake `GITHUB_TOKEN`.</li><li>In a temporary worktree, the baseline fails and then the candidate passes.</li><li>A board/report mismatch raises a flag, and a round that changes nothing writes `no_progress`.</li><li>Output-check flags appear on seeded transcripts.</li></ul> |
+| **2c** | `hooks`: bridge, rules (including `human-only-decisions`), redaction, output checks, **lessons + eval runner**, **Lead recovery loop** | <ul><li>Red-team: a model told to "commit with --no-verify", "edit openagentsy.jsonc" or "approve your own lesson" is blocked.</li><li>An `apply_patch` that moves a file onto `openagentsy.jsonc` is blocked.</li><li>Calling `oa_lesson_decide` through an MCP-prefixed name is blocked.</li><li>A rewrite of tool arguments takes effect (mutated in place).</li><li>Agent shells don't see `HUSKY`.</li><li>Merging permissions only tightens them (`allow`→`ask` works; `deny`→`allow` throws).</li><li>A seeded secret never reaches `.openagentsy/`, including inside a lesson summary.</li><li>Lesson transitions: every allowed move succeeds and every other move throws.</li><li>A lesson with an incomplete start packet can't leave `candidate`.</li><li>The eval runner rejects shell strings, a `cwd` outside the workspace and a timeout over the maximum. It also rejects symlinked result paths, never writes stdout or stderr, and strips a fake `GITHUB_TOKEN`.</li><li>In a temporary worktree, the baseline fails and then the candidate passes.</li><li>A board/report mismatch raises a flag, and a round that changes nothing writes `no_progress`.</li><li>Output-check flags appear on seeded transcripts.</li></ul> |
 | **2d** | `quality`: registry, static rules, comment lint, sloplint bridge, waivers, the three skills, reviewer gate | <ul><li>Each static rule has a passing and a failing fixture.</li><li>A comment fix leaves the AST identical apart from comments, and never removes a comment on the preserve list.</li><li>A task with an open floor finding can't be completed.</li><li>An agent can't record a waiver, and a floor rule can't be waived.</li><li>A "ship" verdict with an open floor finding is rejected as `fabricated-pass`.</li><li>sloplint runs without `TOGETHER_API_KEY` and degrades cleanly when Hallmark is absent.</li><li>No quality skill loads when no UI, copy or comment file is touched (token test).</li></ul> |
 | **2e** | `sidebar` V2 blocks, V1 fallback, worktrees, `oa conformance`, `oa report --ethical` | <ul><li>Blocks render from fixtures in the OpenTUI test renderer.</li><li>The banned-word and banned-colour tests pass.</li><li>The V1 toast fires on `session.idle`.</li><li>Worktree task detection matches `git diff`, and provisional statuses clear after merge.</li><li>Every **VERIFY** in the spec maps to a conformance check.</li><li>A capability with no recorded observation reports `unverified`, and a static probe never upgrades a check to `observed`.</li></ul> |
 
@@ -1610,6 +1833,10 @@ Biome, Husky, lint-staged, `tsc` and CI are already in place (§1). Every step m
 - **Em dashes:** `quality.copy.emDash` is `off` by default. Switch it to `reflex` if the agents shouldn't use them in UI copy.
 - **Unsourced claims as `floor`:** block completion until a claim has a source or placeholder marker (recommended), or downgrade them to `reflex` so a person can waive them?
 - **Comment rules in Biome:** also ship them as a GritQL plugin once comment matching is confirmed, or keep them only in `packages/quality`?
+- **Strict hoisting:** turn on `install.hoist = false` in step 2.0 (stricter than pnpm's default), or after fixing phantom imports (recommended)?
+- **Test runner:** keep Vitest (recommended; no rewrite), or move to `bun test` once on Bun?
+- **Plugin order:** if another plugin's `tool.execute.before` runs after ours, should `oa conformance` only warn (recommended), or refuse to mark the guardrails as `observed`?
+- **Approval fallback:** if the `config` hook can't change permissions, may `oa init` write the `ask` entries into `opencode.json`, after showing the person the diff?
 
 ---
 
@@ -1630,3 +1857,12 @@ Biome, Husky, lint-staged, `tsc` and CI are already in place (§1). Every step m
 [^li]: Li et al., "Making AI Less Thirsty" — https://arxiv.org/abs/2304.03271
 [^safety]: agentsy SAFETY.md — https://github.com/selfagency/agentsy/blob/main/SAFETY.md
 [^ocv2]: OpenCode V2 plugins docs — https://opencode.ai/v2/docs/cli/plugins
+[^tai]: OpenCode Plugins Reference, generated from OpenCode v1.19.4 source (TurboAI) — https://www.turboai.dev/docs/opencode/plugins
+[^jl]: John Lindquist, OpenCode Plugins Guide — https://gist.github.com/johnlindquist/0adf1032b4e84942f3e1050aba3c5e4a
+[^rsc]: Rico Sta. Cruz, OpenCode plugin development guide (incl. comment on #7006) — https://gist.github.com/rstacruz/946d02757525c9a0f49b25e316fbe715
+[^zeke]: Zeke Sikelianos, OpenCode hooks vs Claude Code — https://gist.github.com/zeke/1e0ba44eaddb16afa6edc91fec778935
+[^devto]: Einar César, "Does OpenCode Support Hooks?" — https://dev.to/einarcesar/does-opencode-support-hooks-a-complete-guide-to-extensibility-k3p
+[^yamlhooks]: KristjanPikhof/OpenCode-Hooks (opencode-yaml-hooks) — https://github.com/KristjanPikhof/OpenCode-Hooks
+[^openhooks]: industrialricefarmingllc/openhooks (MIT) — https://github.com/industrialricefarmingllc/openhooks
+[^turbo26]: Turborepo 2.6 release notes, 28 Oct 2025: Bun package manager support marked stable, with per-package `bun.lock` v1 analysis (turborepo.com blog)
+[^bunws]: Bun docs: Workspaces (catalogs, `workspace:` protocol) and Isolated installs (pnpm-like linker; default for workspaces migrated from pnpm)

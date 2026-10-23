@@ -19,6 +19,9 @@ dist/
 # the coverage the quality gate reads
 coverage/
 
+# turborepo cache
+.turbo/
+
 # local secrets
 .env
 .env.local

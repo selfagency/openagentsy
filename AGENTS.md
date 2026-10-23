@@ -5,32 +5,32 @@ This file gives coding agents project-specific context. Keep it short and update
 
 ## Project Overview
 
-- Primary app or package: a pnpm workspace of six packages. `core` holds the role schema, the permission mapping and the board; `cli` builds the agent files; `mcp` is the board server; `models` picks the model per role; `adapter-opencode` is the lease guard plugin; `evals` is the safety suite.
+- Primary app or package: a Bun workspace of six packages, built by Turborepo. `core` holds the role schema, the permission mapping and the board; `cli` builds the agent files; `mcp` is the board server; `models` picks the model per role; `adapter-opencode` is the lease guard plugin; `evals` is the safety suite.
 - Main entry points: `packages/cli/src/index.ts`, `packages/mcp/src/index.ts`, `packages/adapter-opencode/src/index.ts`
 - Important directories: `packages/*` (the workspace), `roles.yaml` (the role source of truth), `plans/` (PLAN.md, PHASE-2-PLAN.md, the addendum), `.opencode/context/project-intelligence/` (the patterns an agent should follow), `templates/.opencode/skills/` (the skill sources), `.openagentsy/` (board state, leases, audit log)
 
 ## Architecture Notes
 
-- Module boundaries: pnpm workspaces (packages/*). `core` sits under everything; `adapter-opencode` and `mcp` sit on top of it.
-- The board owns the SQLite database at `.openagentsy/board.sqlite`. The plugin cannot read it: the OpenCode plugin runtime has no sqlite module, so the board publishes a JSON lease snapshot at `.openagentsy/leases.json` that the plugin reads.
+- Module boundaries: Bun workspaces (packages/*), tasks ordered by turbo. `core` sits under everything; `adapter-opencode` and `mcp` sit on top of it.
+- The board owns the SQLite database at `.openagentsy/board.sqlite`. The plugin opens it directly with `bun:sqlite` (the plugin runtime is Bun), so there is no snapshot file and no staleness window.
 - Generated or vendored code: `openagentsy.models.lock.json` comes from `openagentsy models init`, and `.opencode/agents/` comes from `openagentsy build`. Do not hand-edit either. `templates/` is the source of the skills, not a generated directory.
 - Sensitive areas: the lease guard in `packages/adapter-opencode` decides who may write. The board cannot verify the caller, so the enforcement is the permission map: `roles.yaml` denies `openagentsy_board_lease_grant` to every role but the Lead, which takes the tool out of the other toolsets entirely. The safety suite in `packages/evals` is what proves the guard holds.
 
 ## Commands
 
-- Install: `pnpm install`
-- Build: `pnpm build` (the plugin is bundled by `tsdown`; the rest is `tsc -b`)
-- Test: `pnpm test` (unit tests only; it builds first, then runs vitest)
-- One package: `pnpm --filter @openagentsy/core test`
-- Lint: `pnpm lint` (Biome). Fix: `pnpm lint:fix`
-- Typecheck: `pnpm typecheck` (`tsc -b`, no `--noEmit`: a composite project may not disable emit)
-- Everything CI runs: `pnpm ci:check` (Biome, then the typecheck)
-- The CLI: `node packages/cli/dist/index.js build`, or `pnpm openagentsy build` after a build
-- The safety suite: `OPENAGENTSY_EVAL=1 pnpm vitest run packages/evals`. It is excluded from `pnpm test` and takes about 25 minutes for the six cases. `OPENAGENTSY_EVAL_MODEL` and `OPENAGENTSY_EVAL_JUDGE_MODEL` pick the models; `LANGWATCH_API_KEY` is optional and only uploads the conversations.
+- Install: `bun install`
+- Build: `bun run build` (turbo; the plugin is bundled by `tsdown`, the rest is `tsc -b`)
+- Test: `bun run test` (unit tests only; it builds first, then runs vitest under bun)
+- One package: `bunx --bun vitest run packages/core`
+- Lint: `bun run lint` (Biome). Fix: `bun run lint:fix`
+- Typecheck: `bun run typecheck` (turbo; per package `tsc -b`, no `--noEmit`: a composite project may not disable emit)
+- Everything CI runs: `bun run ci:check` (Biome, then the typecheck)
+- The CLI: `bun packages/cli/dist/index.js build`, or `bun run openagentsy build` after a build
+- The safety suite: `OPENAGENTSY_EVAL=1 bunx --bun vitest run packages/evals`. It is excluded from `bun run test` and takes about 25 minutes for the six cases. `OPENAGENTSY_EVAL_MODEL` and `OPENAGENTSY_EVAL_JUDGE_MODEL` pick the models; `LANGWATCH_API_KEY` is optional and only uploads the conversations.
 
 ## Traps
 
-- The plugin runtime has no `node:sqlite` and no bare imports. A plugin that uses either fails to load silently. That is why `adapter-opencode` is bundled by `tsdown` and why its `tsconfig.json` sets `emitDeclarationOnly`: `tsc -b` must never write into `packages/adapter-opencode/dist`, or it replaces the bundle with output that cannot load as a plugin.
+- The plugin runtime is Bun, and `bun:sqlite` works there — proven with a probe on v1 and v2. The adapter opens the board database directly; there is no lease snapshot file. Bare imports still do not resolve in a plugin file, so `adapter-opencode` is bundled by `tsdown`, and its `tsconfig.json` sets `emitDeclarationOnly`: `tsc -b` must never write into `packages/adapter-opencode/dist`, or it replaces the bundle with output that cannot load as a plugin.
 - The installed plugin is a copy. `.opencode/plugins/openagentsy.js` is what OpenCode loads, and it does not change when the bundle in `packages/adapter-opencode/dist` is rebuilt. After changing the adapter, copy the new bundle over it, or the session keeps running the old guard.
 - The plugin's `tool.execute.before` hook does **not** fire for MCP tool calls. It fires for the file and shell tools only. So the plugin cannot stamp a session's identity onto a board call, and no board rule may depend on the caller being known.
 - The V1 agent permission key is `bash`, not `shell`. OpenCode 1.19.3 drops a `shell` key silently. V1 uses `bash` and `task`; V2 uses `shell` and `subagent`.

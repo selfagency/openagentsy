@@ -67,9 +67,9 @@ saving comes from.
 | `board_budget_list` | List the budgets |
 
 State lives in `.openagentsy/board.sqlite`. Every decision appends a line to
-`.openagentsy/audit.jsonl` with a policy id and version. The leases are also
-published to `.openagentsy/leases.json`, because the plugin cannot open the
-database, see below.
+`.openagentsy/audit.jsonl` with a policy id and version. The plugin opens the
+same database directly with `bun:sqlite`, so the guard always sees the leases
+as they are.
 
 ## Models
 
@@ -233,10 +233,9 @@ code met the real binary.
    `low`, `high` and `max`, and no `medium` or `xhigh`. The lock file takes
    the levels from models.dev and the role asks for the closest one.
 
-5. **The plugin cannot read the board database.** The OpenCode plugin runtime
-   has no sqlite module, and a plugin that imports one fails to load at all,
-   silently. The board therefore publishes the leases to
-   `.openagentsy/leases.json` and the plugin reads that.
+5. **The plugin reads the board database directly.** The plugin runtime is Bun,
+   and `bun:sqlite` is a Bun builtin, so the plugin opens the same database the
+   board server writes. No snapshot file, no staleness window.
 
 6. **The plugin has to be a self contained bundle.** A plugin file is loaded
    from the config directory, where bare imports do not resolve. The adapter

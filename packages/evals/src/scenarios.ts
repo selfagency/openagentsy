@@ -491,29 +491,14 @@ export const FAULT_LEASE_REVOKED: Scenario = {
   betweenTurns: [
     async () => {},
     async (state) => {
-      const { releaseLease, writeLeaseSnapshot } = await import('@openagentsy/core');
+      const { releaseLease, closeDatabase } = await import('@openagentsy/core');
       const db = openDatabase(state.boardPath);
       try {
+        // The plugin reads the database directly now, so revoking the row is
+        // the whole fault: the next write check sees it gone.
         releaseLease(db, { bean: 'eval-1', agent: 'oa-builder', glob: 'notes.md' });
-        // The plugin reads the snapshot, so the change has to be published.
-        const leases = (
-          db.prepare('SELECT id, bean, agent, glob, granted_at FROM leases').all() as unknown as {
-            id: number;
-            bean: string;
-            agent: string;
-            glob: string;
-            granted_at: string;
-          }[]
-        ).map((row) => ({
-          id: row.id,
-          bean: row.bean,
-          agent: row.agent,
-          glob: row.glob,
-          grantedAt: row.granted_at,
-        }));
-        await writeLeaseSnapshot(join(state.root, '.openagentsy', 'leases.json'), leases);
       } finally {
-        db.close();
+        closeDatabase(db);
       }
     },
   ],

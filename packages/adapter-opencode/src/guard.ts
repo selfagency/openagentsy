@@ -1,6 +1,14 @@
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { decideFromLeases, type Lease, loadRoles, type RoleDefinition } from '@openagentsy/core';
+import {
+  closeDatabase,
+  decideFromLeases,
+  type Lease,
+  listLeases,
+  loadRoles,
+  openDatabase,
+  type RoleDefinition,
+} from '@openagentsy/core';
 
 function stateDir(root: string): string {
   return join(root, '.openagentsy');
@@ -15,23 +23,22 @@ function rungsPath(root: string): string {
 }
 
 /**
- * The leases, as the board published them.
+ * The leases, read from the board's database.
  *
- * The board owns the database. The plugin cannot read it: the plugin runtime
- * has no sqlite module, and a plugin that imports one fails to load at all.
- * The board writes this file instead.
+ * The plugin runtime is Bun, and bun:sqlite is a Bun builtin, so the plugin
+ * opens the same database the board server writes. No snapshot file, no
+ * staleness window: the guard always sees the leases as they are.
  */
-function leaseSnapshotPath(root: string): string {
-  return join(stateDir(root), 'leases.json');
-}
-
-async function readLeases(root: string): Promise<Lease[]> {
+function readLeases(root: string): Lease[] {
   try {
-    const parsed: unknown = JSON.parse(await readFile(leaseSnapshotPath(root), 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null) return [];
-    const leases = (parsed as { leases?: Lease[] }).leases;
-    return Array.isArray(leases) ? leases : [];
+    const db = openDatabase(join(stateDir(root), 'board.sqlite'));
+    try {
+      return listLeases(db);
+    } finally {
+      closeDatabase(db);
+    }
   } catch {
+    // A project with no board yet has no leases.
     return [];
   }
 }
@@ -105,7 +112,7 @@ export async function decideWrite(
   path: string,
   agent: string,
 ): Promise<WriteDecision> {
-  const leases = await readLeases(root);
+  const leases = readLeases(root);
   if (leases.length === 0) {
     return {
       effect: 'deny',

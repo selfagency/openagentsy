@@ -1,0 +1,5 @@
+[install]
+# pnpm-like strict node_modules: undeclared imports fail, like pnpm's layout.
+linker = "isolated"
+# `bun add` pins exact versions; ranges live in the workspace catalog.
+exact = true

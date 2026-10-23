@@ -1,10 +1,10 @@
-import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
+import type { BoardDatabase } from './db.js';
 import { migrate, openDatabase } from './db.js';
 import { BoardError, createRecord, listRecords } from './records.js';
 import type { PostRecordInput } from './types.js';
 
-let db: DatabaseSync;
+let db: BoardDatabase;
 
 beforeEach(() => {
   db = openDatabase(':memory:');

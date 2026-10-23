@@ -1,4 +1,6 @@
-import type { DatabaseSync } from 'node:sqlite';
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import type { BoardDatabase } from './db.js';
+import { recordReads, records } from './schema.js';
 import {
   type BoardRecord,
   CONFIDENCE_LEVELS,
@@ -18,35 +20,21 @@ export class BoardError extends Error {
   }
 }
 
-type RecordRow = {
-  id: number;
-  bean: string;
-  kind: string;
-  from_agent: string;
-  to_agent: string | null;
-  action: string;
-  state: string;
-  artifact: string | null;
-  contract: string | null;
-  needs: string | null;
-  surprise: string | null;
-  confidence: string;
-  created_at: string;
-};
+type RecordRow = typeof records.$inferSelect;
 
 function toRecord(row: RecordRow, read: boolean): BoardRecord {
   const record: BoardRecord = {
     id: row.id,
     bean: row.bean,
     kind: row.kind as RecordKind,
-    from: row.from_agent,
+    from: row.fromAgent,
     action: row.action,
     state: row.state,
     confidence: row.confidence as Confidence,
     read,
-    createdAt: row.created_at,
+    createdAt: row.createdAt,
   };
-  if (row.to_agent !== null) record.to = row.to_agent;
+  if (row.toAgent !== null) record.to = row.toAgent;
   if (row.artifact !== null) record.artifact = row.artifact;
   if (row.contract !== null) record.contract = JSON.parse(row.contract) as unknown;
   if (row.needs !== null) record.needs = row.needs;
@@ -54,7 +42,7 @@ function toRecord(row: RecordRow, read: boolean): BoardRecord {
   return record;
 }
 
-export function createRecord(db: DatabaseSync, input: PostRecordInput): BoardRecord {
+export function createRecord(db: BoardDatabase, input: PostRecordInput): BoardRecord {
   const empty = (['bean', 'from', 'action', 'state'] as const).find(
     (field) => input[field].trim().length === 0,
   );
@@ -78,30 +66,27 @@ export function createRecord(db: DatabaseSync, input: PostRecordInput): BoardRec
   }
 
   const createdAt = new Date().toISOString();
-  const result = db
-    .prepare(
-      `INSERT INTO records
-         (bean, kind, from_agent, to_agent, action, state, artifact, contract, needs, surprise, confidence, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      input.bean,
-      input.kind,
-      input.from,
-      input.to ?? null,
-      input.action,
-      input.state,
-      input.artifact ?? null,
-      input.contract === undefined ? null : JSON.stringify(input.contract),
-      input.needs ?? null,
-      input.surprise ?? null,
-      input.confidence,
+  const inserted = db
+    .insert(records)
+    .values({
+      bean: input.bean,
+      kind: input.kind,
+      fromAgent: input.from,
+      toAgent: input.to ?? null,
+      action: input.action,
+      state: input.state,
+      artifact: input.artifact ?? null,
+      contract: input.contract === undefined ? null : JSON.stringify(input.contract),
+      needs: input.needs ?? null,
+      surprise: input.surprise ?? null,
+      confidence: input.confidence,
       createdAt,
-    );
+    })
+    .returning()
+    .get();
 
-  const id = Number(result.lastInsertRowid);
   return {
-    id,
+    id: inserted.id,
     bean: input.bean,
     kind: input.kind,
     from: input.from,
@@ -146,71 +131,53 @@ const MAX_LIMIT = 100;
  * (record, agent), so one agent reading a broadcast does not clear it for
  * the others.
  */
-export function listRecords(db: DatabaseSync, query: InboxQuery): InboxResult {
+export function listRecords(db: BoardDatabase, query: InboxQuery): InboxResult {
   const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const cursor = query.cursor ?? 0;
   const agent = query.agent;
 
-  const rows = (agent === undefined
-    ? db
-        .prepare(
-          `SELECT id, bean, kind, from_agent, to_agent, action, state, artifact, contract, needs, surprise, confidence, created_at
-               FROM records
-              WHERE id > ?
-              ORDER BY id ASC
-              LIMIT ?`,
-        )
-        .all(cursor, limit)
-    : db
-        .prepare(
-          `SELECT id, bean, kind, from_agent, to_agent, action, state, artifact, contract, needs, surprise, confidence, created_at
-               FROM records
-              WHERE id > ?
-                AND (to_agent = ? OR to_agent IS NULL)
-                AND NOT EXISTS (
-                  SELECT 1 FROM record_reads
-                   WHERE record_reads.record_id = records.id
-                     AND record_reads.agent = ?
-                )
-              ORDER BY id ASC
-              LIMIT ?`,
-        )
-        .all(cursor, agent, agent, limit)) as unknown as RecordRow[];
+  // A record is unread for an agent when no row in record_reads names both.
+  const unreadFor =
+    agent === undefined
+      ? undefined
+      : sql`NOT EXISTS (
+    SELECT 1 FROM ${recordReads}
+     WHERE ${recordReads.recordId} = ${records.id}
+       AND ${recordReads.agent} = ${agent}
+  )`;
 
-  const records = rows.map((row) => toRecord(row, false));
+  const addressed =
+    agent === undefined ? undefined : or(eq(records.toAgent, agent), isNull(records.toAgent));
 
-  const unreadRow = (agent === undefined
-    ? db
-        .prepare(
-          `SELECT COUNT(*) AS count
-               FROM records
-              WHERE id > ?`,
-        )
-        .get(cursor)
-    : db
-        .prepare(
-          `SELECT COUNT(*) AS count
-               FROM records
-              WHERE (to_agent = ? OR to_agent IS NULL)
-                AND NOT EXISTS (
-                  SELECT 1 FROM record_reads
-                   WHERE record_reads.record_id = records.id
-                     AND record_reads.agent = ?
-                )`,
-        )
-        .get(agent, agent)) as unknown as { count: number };
+  const rows = db
+    .select()
+    .from(records)
+    .where(
+      agent === undefined
+        ? gt(records.id, cursor)
+        : and(gt(records.id, cursor), addressed, unreadFor),
+    )
+    .orderBy(records.id)
+    .limit(limit)
+    .all();
 
-  if (query.markRead !== false && agent !== undefined && records.length > 0) {
-    const mark = db.prepare(
-      `INSERT OR IGNORE INTO record_reads (record_id, agent, read_at) VALUES (?, ?, ?)`,
-    );
+  const found = rows.map((row) => toRecord(row, false));
+
+  const unreadRow = db
+    .select({ count: sql<number>`count(*)` })
+    .from(records)
+    .where(agent === undefined ? gt(records.id, cursor) : and(addressed, unreadFor))
+    .get();
+
+  if (query.markRead !== false && agent !== undefined && found.length > 0) {
     const readAt = new Date().toISOString();
-    for (const record of records) {
-      mark.run(record.id, agent, readAt);
-    }
+    db.insert(recordReads)
+      .values(found.map((record) => ({ recordId: record.id, agent, readAt })))
+      .onConflictDoNothing()
+      .run();
   }
 
-  const nextCursor = records.at(-1)?.id ?? cursor;
+  const nextCursor = found.at(-1)?.id ?? cursor;
 
-  return { records, nextCursor, unread: Number(unreadRow.count) };
+  return { records: found, nextCursor, unread: Number(unreadRow?.count ?? 0) };
 }

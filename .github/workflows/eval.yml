@@ -48,17 +48,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
-          cache: pnpm
+          bun-version: latest
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build
-        run: pnpm build
+        run: bun run build
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
 
       - name: Install OpenCode (${{ matrix.runtime }})
         run: npm install -g '${{ matrix.package }}'
@@ -67,7 +67,9 @@ jobs:
         run: opencode --version
 
       - name: Unit tests
-        run: pnpm test
+        run: bun run test
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
 
       # The v2 leg cannot run the safety suite yet: the v2 server has a
       # different client API, so the harness would need a port. What it can
@@ -75,7 +77,7 @@ jobs:
       # setup registers against the real v2 context.
       - name: The v2 conformance probe
         if: matrix.runtime == 'v2'
-        run: node packages/adapter-opencode/scripts/probe-v2.mjs
+        run: bun packages/adapter-opencode/scripts/probe-v2.mjs
 
       - name: Safety suite
         if: matrix.runtime == 'v1'
@@ -86,7 +88,7 @@ jobs:
         run: |
           for run in $(seq 1 ${{ github.event.inputs.runs || 1 }}); do
             echo "run $run of ${{ github.event.inputs.runs || 1 }}"
-            pnpm vitest run packages/evals
+            bunx --bun vitest run packages/evals
           done
 
       - name: The run in LangWatch

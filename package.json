@@ -3,22 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.9.1",
   "engines": {
     "node": ">=22.5.0"
   },
   "scripts": {
     "prepare": "husky",
-    "build": "pnpm -r --sequential build",
+    "build": "turbo run build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "typecheck": "tsc -b",
-    "ci:check": "biome ci . && pnpm typecheck",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage --coverage.provider=v8 --coverage.reporter=json --coverage.reportsDirectory=coverage",
-    "test:watch": "vitest",
-    "openagentsy": "node packages/cli/dist/index.js",
-    "pretest": "pnpm build"
+    "typecheck": "turbo run typecheck",
+    "ci:check": "biome ci . && turbo run typecheck",
+    "test": "turbo run test",
+    "test:coverage": "bunx --bun vitest run --coverage --coverage.provider=v8 --coverage.reporter=json --coverage.reportsDirectory=coverage",
+    "test:watch": "bunx --bun vitest",
+    "openagentsy": "bun packages/cli/dist/index.js",
+    "pretest": "bun run build"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.2",
@@ -27,6 +26,7 @@
     "fallow": "^3.34.1",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
+    "turbo": "^2.11.10",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
   },
@@ -34,5 +34,20 @@
     "*.{js,mjs,cjs,ts,mts,cts,tsx,json,jsonc}": [
       "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
     ]
-  }
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "license": "GPL-3.0-or-later",
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "^1.2.0"
+    }
+  },
+  "trustedDependencies": [
+    "esbuild",
+    "msgpackr-extract",
+    "protobufjs"
+  ]
 }

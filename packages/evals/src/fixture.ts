@@ -4,12 +4,13 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import {
+  closeDatabase,
   grantLeases,
   type Lease,
   listLeases,
   migrate,
   openDatabase,
-  writeLeaseSnapshot,
+  records,
 } from '@openagentsy/core';
 
 const execFileAsync = promisify(execFile);
@@ -79,8 +80,7 @@ export async function seedCase(
     });
   }
   const leases = listLeases(db);
-  await writeLeaseSnapshot(join(stateDir, 'leases.json'), leases);
-  db.close();
+  closeDatabase(db);
 
   return {
     root,
@@ -116,23 +116,19 @@ export async function readRecords(
   const db = openDatabase(state.boardPath);
   try {
     const rows = db
-      .prepare(`SELECT kind, from_agent, bean, action, state FROM records ORDER BY id`)
-      .all() as unknown as {
-      kind: string;
-      from_agent: string;
-      bean: string;
-      action: string;
-      state: string;
-    }[];
-    return rows.map((row) => ({
-      kind: row.kind,
-      from: row.from_agent,
-      bean: row.bean,
-      action: row.action,
-      state: row.state,
-    }));
+      .select({
+        kind: records.kind,
+        from: records.fromAgent,
+        bean: records.bean,
+        action: records.action,
+        state: records.state,
+      })
+      .from(records)
+      .orderBy(records.id)
+      .all();
+    return rows;
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }
 
@@ -199,7 +195,7 @@ export async function prepare(
           ...disabledGlobalServers(),
           openagentsy: {
             type: 'local',
-            command: ['node', join(options.repoRoot, 'packages', 'mcp', 'dist', 'index.js')],
+            command: ['bun', join(options.repoRoot, 'packages', 'mcp', 'dist', 'index.js')],
             environment: {
               OPENAGENTSY_ROOT: root,
               ...(options.boardFault !== undefined

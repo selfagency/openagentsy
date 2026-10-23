@@ -1,13 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  grantLeases,
-  listLeases,
-  migrate,
-  openDatabase,
-  writeLeaseSnapshot,
-} from '@openagentsy/core';
+import { closeDatabase, grantLeases, migrate, openDatabase } from '@openagentsy/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { decideWrite, planClimb, readRungs, recordClimb, roleNameOf } from './guard.js';
 
@@ -76,14 +70,13 @@ beforeEach(async () => {
   await mkdir(join(root, '.openagentsy'), { recursive: true });
   const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
   migrate(db);
-  db.close();
+  closeDatabase(db);
 });
 
 async function publishLease(agent: string, glob: string): Promise<void> {
   const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
   grantLeases(db, { bean: 'proj-1', agent, globs: [glob] });
-  await writeLeaseSnapshot(join(root, '.openagentsy', 'leases.json'), listLeases(db));
-  db.close();
+  closeDatabase(db);
 }
 
 describe('roleNameOf', () => {

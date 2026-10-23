@@ -39,10 +39,12 @@ async function resolveMcpCommand(root: string): Promise<string[]> {
   if (built) {
     // A relative path keeps the config portable. The MCP server runs with the
     // project directory as its working directory, so it resolves the same way
-    // on every machine.
-    return ['node', join('packages', 'mcp', 'dist', 'index.js')];
+    // on every machine. It runs under bun: the board's driver is bun:sqlite,
+    // and bun is the runtime OpenCode loads plugins with, so one runtime
+    // covers the plugin, the board and the tests.
+    return ['bun', join('packages', 'mcp', 'dist', 'index.js')];
   }
-  return ['npx', '-y', '@openagentsy/mcp'];
+  return ['bunx', '@openagentsy/mcp'];
 }
 
 async function findConfigPath(root: string): Promise<string> {

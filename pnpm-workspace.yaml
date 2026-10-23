@@ -1,15 +1,2 @@
 packages:
   - packages/*
-
-# esbuild ships a platform binary via a postinstall script. vitest needs it.
-allowBuilds:
-  esbuild: true
-  msgpackr-extract: true
-  # protobufjs ships its CLI; the coverage provider pulls it in.
-  protobufjs: true
-  # The langwatch scenario package pulls cloudflared and ffmpeg-static in as
-  # transitive dependencies. Their build scripts download binaries the tests
-  # never use, so they are approved to keep CI's install quiet, and the
-  # downloads are the cost of the dependency, not of the tests.
-  cloudflared: true
-  ffmpeg-static: true

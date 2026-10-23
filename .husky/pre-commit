@@ -1,5 +1,5 @@
-pnpm exec lint-staged
-pnpm typecheck
+bunx lint-staged
+bun run typecheck
 # The changed-code gate. HEAD is the base because the staged changes sit on
 # top of it, so only what this commit introduces can fail the gate.
 #
@@ -11,5 +11,5 @@ if git rev-parse --verify HEAD >/dev/null 2>&1; then
 else
   BASE=develop
 fi
-pnpm test:coverage
-pnpm exec fallow audit --base "$BASE" --coverage coverage/coverage-final.json --format human --quiet
+bun run test:coverage
+bunx fallow audit --base "$BASE" --coverage coverage/coverage-final.json --format human --quiet

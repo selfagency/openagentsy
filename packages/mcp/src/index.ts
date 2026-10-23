@@ -21,7 +21,6 @@ import {
   recordUsage,
   releaseLease,
   setBudget,
-  writeLeaseSnapshot,
 } from '@openagentsy/core';
 import { z } from 'zod';
 
@@ -37,7 +36,6 @@ const stateDir = join(root, '.openagentsy');
 const WRITER_CAP = 3;
 const databasePath = join(stateDir, 'board.sqlite');
 const auditPath = join(stateDir, 'audit.jsonl');
-const leaseSnapshotPath = join(stateDir, 'leases.json');
 
 await mkdir(stateDir, { recursive: true });
 const rawDb = openDatabase(databasePath);
@@ -57,7 +55,15 @@ const db =
     ? rawDb
     : new Proxy(rawDb, {
         get(target, property, receiver) {
-          if (property === 'prepare') {
+          // Drizzle's query builders all start at one of these methods, so
+          // failing them fails every tool the same way.
+          if (
+            property === 'select' ||
+            property === 'insert' ||
+            property === 'update' ||
+            property === 'delete' ||
+            property === 'run'
+          ) {
             return () => {
               throw new BoardError(
                 `The board did not answer. Injected fault: ${fault}.`,
@@ -203,9 +209,6 @@ server.registerTool(
   async (input) => {
     try {
       const result = grantLeases(db, input, { writerCap: WRITER_CAP });
-      // The plugin cannot open the database, so the board publishes the leases
-      // as a file the plugin can read.
-      await writeLeaseSnapshot(leaseSnapshotPath, listLeases(db));
       for (const lease of result.granted) {
         await appendAudit(auditPath, {
           policyId: POLICIES.leaseGrant.id,
@@ -317,9 +320,6 @@ server.registerTool(
           notHeld.push(glob);
         }
       }
-      // The plugin reads the leases from the snapshot, so the snapshot is
-      // written on every change to the leases.
-      await writeLeaseSnapshot(leaseSnapshotPath, listLeases(db));
       return text({ released, notHeld });
     } catch (error) {
       return failure(error);

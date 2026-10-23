@@ -1,6 +1,12 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
-import { listBudgets, listLeases, listRecords, openDatabase } from '@openagentsy/core';
+import {
+  closeDatabase,
+  listBudgets,
+  listLeases,
+  listRecords,
+  openDatabase,
+} from '@openagentsy/core';
 
 /**
  * The board, as a person reads it.
@@ -50,7 +56,7 @@ export async function runBoard(root: string): Promise<BoardView> {
       })),
     };
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }
 
