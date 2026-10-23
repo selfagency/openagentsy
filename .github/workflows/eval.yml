@@ -29,6 +29,10 @@ on:
         description: "How many times to run each case. The plan asks for 5 before a release."
         required: false
         default: "1"
+      trials:
+        description: "How many times each case is tried. A case passes when the majority of its trials pass."
+        required: false
+        default: "3"
 
 concurrency:
   group: eval-${{ github.event.pull_request.number || github.ref }}
@@ -49,7 +53,9 @@ jobs:
           - runtime: v2
             package: "@opencode/cli@2.1.3"
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Each case is tried three times, and each trial is a real agent run, so
+    # the suite costs three times what one pass costs.
+    timeout-minutes: 120
     env:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
@@ -103,6 +109,9 @@ jobs:
           OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/qwen/qwen3.8-flash' }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
+          # The trials each case is tried inside one run. A case passes when
+          # the majority of them pass, so one unlucky sample is not a verdict.
+          OPENAGENTSY_EVAL_TRIALS: ${{ github.event.inputs.trials || 3 }}
         run: |
           set -o pipefail
           rc=0
