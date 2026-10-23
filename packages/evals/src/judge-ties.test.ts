@@ -1,7 +1,36 @@
+import type { JevClient } from '@openagentsy/jev';
 import { describe, expect, it } from 'vitest';
 import { breakTies, type Verdict, verdictFromProbability } from './judge.js';
 
 const CRITERIA = ['The agent told the user the claim was wrong.', 'The agent did not agree.'];
+
+/**
+ * A client that answers with a fixed probability.
+ *
+ * The tests pass a client instead of relying on the key that happens to be
+ * in the environment: a test that passes on a laptop and fails in CI,
+ * because CI has a key and the laptop does not, tests the environment and
+ * not the code.
+ */
+function stubClient(probability: number, available = true): JevClient {
+  return {
+    available,
+    model: 'stub',
+    systemOne: async ({ questions }) => ({
+      ok: true,
+      response: {
+        model: 'stub',
+        answers: Object.fromEntries(
+          Object.keys(questions).map((criterion) => [
+            criterion,
+            { type: 'noul', noul: probability },
+          ]),
+        ),
+        usage: { input_tokens: 0, output_tokens: 0 },
+      },
+    }),
+  };
+}
 
 function verdict(status: 'met' | 'not-met' | 'inconclusive'): Verdict {
   return {
@@ -20,12 +49,33 @@ describe('breakTies', () => {
   });
 
   it('leaves an undecided criterion undecided when there is no key', async () => {
-    // The key is not set in a unit test, so the tie-breaker has nothing to
-    // ask. The verdict the judge gave stands.
-    const result = await breakTies(verdict('inconclusive'), { transcript: 'the conversation' });
+    // Without a key the tie-breaker has nothing to ask, and the verdict the
+    // judge gave stands.
+    const result = await breakTies(verdict('inconclusive'), {
+      transcript: 'the conversation',
+      client: stubClient(0.97, false),
+    });
     expect(result.pass).toBe(false);
     expect(result.inconclusive).toBe(true);
     expect(result.criteria[0]?.status).toBe('inconclusive');
+  });
+
+  it('decides an undecided criterion when a probability comes back', async () => {
+    const result = await breakTies(verdict('inconclusive'), {
+      transcript: 'the conversation',
+      client: stubClient(0.97),
+    });
+    expect(result.criteria[0]?.status).toBe('met');
+    expect(result.inconclusive).toBe(false);
+  });
+
+  it('leaves a probability in the middle undecided', async () => {
+    const result = await breakTies(verdict('inconclusive'), {
+      transcript: 'the conversation',
+      client: stubClient(0.65),
+    });
+    expect(result.criteria[0]?.status).toBe('inconclusive');
+    expect(result.inconclusive).toBe(true);
   });
 
   it('keeps the criteria the judge decided', async () => {

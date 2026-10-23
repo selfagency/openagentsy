@@ -1,4 +1,4 @@
-import { createJevClient, isJevAvailable, noul } from '@openagentsy/jev';
+import { createJevClient, type JevClient, noul } from '@openagentsy/jev';
 import type { OpencodeClient } from '@opencode-ai/sdk';
 import { parseModel } from './opencode.js';
 
@@ -169,6 +169,7 @@ export async function breakTies(
     transcript: string;
     evidence?: string | undefined;
     criteria?: readonly string[] | undefined;
+    client?: JevClient | undefined;
   },
 ): Promise<Verdict> {
   // Only a criterion the case asked about can be tied. A criterion that came
@@ -181,7 +182,11 @@ export async function breakTies(
     (entry) => entry.status === 'inconclusive' && isKnown(entry.criterion),
   );
   if (undecided.length === 0) return verdict;
-  if (!isJevAvailable()) return verdict;
+
+  // The client is the one that decides whether a tie can be broken, and the
+  // key is what decides that. A caller that passes a client decides both.
+  const client = options.client ?? createJevClient();
+  if (!client.available) return verdict;
 
   // The questions are keyed by criterion, and a criterion is untrusted text.
   // A null-prototype object keeps a name like __proto__ from reaching the
@@ -198,7 +203,6 @@ export async function breakTies(
     });
   }
 
-  const client = createJevClient();
   const outcome = await client.systemOne({
     state: {
       conversation: options.transcript,
