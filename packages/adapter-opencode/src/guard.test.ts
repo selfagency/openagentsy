@@ -3,7 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDatabase, grantLeases, migrate, openDatabase } from '@openagentsy/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { decideWrite, planClimb, readRungs, recordClimb, roleNameOf } from './guard.js';
+import {
+  decideWrite,
+  planClimb,
+  readRungs,
+  recordClimb,
+  roleKeyForAgent,
+  roleNameOf,
+} from './guard.js';
 
 let root: string;
 
@@ -29,7 +36,7 @@ roles:
     effort:
       startVariant: low
       ceilingVariant: high
-      climbTriggers: []
+      climbTriggers: [planning]
   builder:
     description: Implements a bean
     mode: subagent
@@ -66,6 +73,13 @@ roles:
 
 const LOCK = {
   roles: {
+    lead: {
+      model: 'opencode-go/lead-model',
+      ladder: [
+        { model: 'opencode-go/lead-model', variant: 'medium' },
+        { model: 'opencode-go/lead-ceiling', variant: 'high' },
+      ],
+    },
     builder: {
       model: 'opencode-go/builder-model',
       ladder: [
@@ -103,6 +117,37 @@ describe('roleNameOf', () => {
 
   it('leaves a name that is not prefixed alone', () => {
     expect(roleNameOf('build')).toBe('build');
+  });
+});
+
+describe('roleKeyForAgent', () => {
+  it('resolves the agent name a role carries to the role key', async () => {
+    // The Lead's agent id is 'agentsy' and its role key is 'lead'. A lock, a
+    // rung and a trigger are stored under the role key, so a lookup under
+    // the agent id finds nothing at all.
+    expect(await roleKeyForAgent(root, 'agentsy')).toBe('lead');
+  });
+
+  it('resolves the agent id spelling of a role to the same key', async () => {
+    expect(await roleKeyForAgent(root, 'oa-builder')).toBe('builder');
+    expect(await roleKeyForAgent(root, 'builder')).toBe('builder');
+  });
+
+  it('leaves a name that is not a role alone', async () => {
+    // A custom agent is not in the roles file, and its own name is the best
+    // answer there is.
+    expect(await roleKeyForAgent(root, 'my-agent')).toBe('my-agent');
+  });
+
+  it('falls back to the plain name when the roles file cannot be read', async () => {
+    const empty = await mkdtemp(join(tmpdir(), 'openagentsy-empty-'));
+    expect(await roleKeyForAgent(empty, 'agentsy')).toBe('agentsy');
+  });
+
+  it('lets the Lead climb, which the agent id alone could not', async () => {
+    const role = await roleKeyForAgent(root, 'agentsy');
+    const plan = await planClimb(root, role, 'planning');
+    expect(plan.ok).toBe(true);
   });
 });
 

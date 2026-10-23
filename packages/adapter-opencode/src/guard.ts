@@ -165,6 +165,23 @@ function roleKeyOf(roles: { roles: Record<string, RoleDefinition> }, name: strin
 }
 
 /**
+ * The role key an agent id names.
+ *
+ * The Lead's agent id is 'agentsy' and its role key is 'lead'. A lock, a
+ * rung and a trigger are all stored under the role key, so a lookup under
+ * the agent id finds nothing at all. A name that is not a role keeps its own
+ * spelling, so a custom agent still works.
+ */
+export async function roleKeyForAgent(root: string, agent: string): Promise<string> {
+  try {
+    const roles = await loadRoles(join(root, 'roles.yaml'));
+    return roleKeyOf(roles, agent);
+  } catch {
+    return roleNameOf(agent);
+  }
+}
+
+/**
  * Decide whether one path may be written.
  *
  * The rules are the ones in the core package, not a second copy.

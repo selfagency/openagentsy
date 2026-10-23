@@ -4,7 +4,7 @@ import {
   readRungs,
   recordClimb,
   refuseClimb,
-  roleNameOf,
+  roleKeyForAgent,
   rungTarget,
   writeRungs,
 } from './guard.js';
@@ -53,7 +53,7 @@ const effortTool = (root: string, client: ClientLike) =>
       reason: tool.schema.string().describe('Why you are climbing. Name the trigger that fired.'),
     },
     async execute(args, context) {
-      const role = roleNameOf(context.agent);
+      const role = await roleKeyForAgent(root, context.agent);
       const plan = await planClimb(root, role, args.reason);
 
       if (!plan.ok) {
@@ -119,7 +119,7 @@ async function onSessionIdle(
   sessionID: string,
   agent: string,
 ): Promise<void> {
-  const role = roleNameOf(agent);
+  const role = await roleKeyForAgent(root, agent);
 
   const rungs = await readRungs(root);
   if (rungs[role]) {
@@ -154,7 +154,7 @@ async function setupServer(
     'chat.message': async (_input) => {},
     'chat.params': async (input, output) => {
       sessionAgents.set(input.sessionID, input.agent);
-      const role = roleNameOf(input.agent);
+      const role = await roleKeyForAgent(root, input.agent);
       const target = await rungTarget(root, role);
       if (!target) return;
 

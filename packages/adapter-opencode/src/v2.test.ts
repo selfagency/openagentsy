@@ -21,6 +21,13 @@ function fakeContext(events: { type: string; properties?: { sessionID?: string }
   const prompts: { sessionID: string; text: string }[] = [];
   const contextHooks: ((event: V2ContextEvent) => Promise<void> | void)[] = [];
   const rungs = new Map<string, string>();
+  // The subscription ends when the events run out, and the idle handler has
+  // finished by then: the loop awaits the body before it asks for the next
+  // event. A timer would be a guess.
+  let finish = (): void => {};
+  const done = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
 
   const ctx: V2Context = {
     location: { directory: root },
@@ -53,22 +60,21 @@ function fakeContext(events: { type: string; properties?: { sessionID?: string }
     },
     event: {
       subscribe: async function* () {
-        for (const event of events) yield event;
+        try {
+          for (const event of events) yield event;
+        } finally {
+          finish();
+        }
       },
     },
   };
 
-  return { ctx, created, prompts, contextHooks, rungs };
-}
-
-/** Let the event loop turn, so the idle handler can finish. */
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  return { ctx, created, prompts, contextHooks, rungs, done };
 }
 
 describe('the OpenCode 2 path', () => {
   it('harvests a session that goes idle', async () => {
-    const { ctx, created, prompts, contextHooks } = fakeContext([
+    const { ctx, created, prompts, contextHooks, done } = fakeContext([
       { type: 'session.idle', properties: { sessionID: 'ses_1' } },
     ]);
     await setupV2(ctx);
@@ -78,7 +84,7 @@ describe('the OpenCode 2 path', () => {
     for (const hook of contextHooks) {
       await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
     }
-    await settle();
+    await done;
 
     expect(created).toHaveLength(1);
     // The archivist session is a child of the session it harvests.
@@ -90,11 +96,11 @@ describe('the OpenCode 2 path', () => {
   });
 
   it('leaves a session it does not know alone', async () => {
-    const { ctx, created, prompts } = fakeContext([
+    const { ctx, created, prompts, done } = fakeContext([
       { type: 'session.idle', properties: { sessionID: 'ses_unknown' } },
     ]);
     await setupV2(ctx);
-    await settle();
+    await done;
 
     expect(created).toHaveLength(0);
     expect(prompts).toHaveLength(0);

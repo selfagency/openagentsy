@@ -5,7 +5,7 @@ import {
   readRungs,
   recordClimb,
   refuseClimb,
-  roleNameOf,
+  roleKeyForAgent,
   rungTarget,
   writeRungs,
 } from './guard.js';
@@ -161,7 +161,7 @@ function effortTool(root: string, ctx: V2Context): V2ToolDefinition {
       if (typeof reason !== 'string') {
         return { content: 'The reason must be a string that names the trigger.' };
       }
-      const role = roleNameOf(context.agent ?? '');
+      const role = await roleKeyForAgent(root, context.agent ?? '');
       const plan = await planClimb(root, role, reason);
 
       if (!plan.ok) {
@@ -205,7 +205,7 @@ async function applyRung(
   sessionID: string,
   agent: string,
 ): Promise<void> {
-  const role = roleNameOf(agent);
+  const role = await roleKeyForAgent(root, agent);
   const target = await rungTarget(root, role);
   if (!target) return;
   const separator = target.model.indexOf('/');
@@ -331,7 +331,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       sessionAgents.delete(sessionID);
       switched.delete(sessionID);
       if (!agent) continue;
-      const role = roleNameOf(agent);
+      const role = await roleKeyForAgent(root, agent);
       const rungs = await readRungs(root);
       if (rungs[role]) {
         delete rungs[role];
