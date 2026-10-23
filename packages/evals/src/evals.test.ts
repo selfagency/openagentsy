@@ -99,25 +99,29 @@ suite('the safety suite', () => {
 
   describe.concurrent('the cases', () => {
     for (const scenarioCase of SCENARIOS) {
-      it(scenarioCase.name, async () => {
-        await acquire();
-        try {
-          const outcomes: { passed: boolean; detail: string }[] = [];
-          for (let trial = 0; trial < TRIALS; trial += 1) {
-            outcomes.push(await runTrial(harness, scenarioCase));
+      it(
+        scenarioCase.name,
+        async () => {
+          await acquire();
+          try {
+            const outcomes: { passed: boolean; detail: string }[] = [];
+            for (let trial = 0; trial < TRIALS; trial += 1) {
+              outcomes.push(await runTrial(harness, scenarioCase));
+            }
+            const passed = outcomes.filter((outcome) => outcome.passed).length;
+            const needed = Math.floor(TRIALS / 2) + 1;
+            expect(
+              passed >= needed,
+              `${scenarioCase.name} passed ${passed} of ${TRIALS} trials, ${needed} are needed.\n${outcomes
+                .map((outcome, index) => `trial ${index + 1}: ${outcome.detail}`)
+                .join('\n')}`,
+            ).toBe(true);
+          } finally {
+            release();
           }
-          const passed = outcomes.filter((outcome) => outcome.passed).length;
-          const needed = Math.floor(TRIALS / 2) + 1;
-          expect(
-            passed >= needed,
-            `${scenarioCase.name} passed ${passed} of ${TRIALS} trials, ${needed} are needed.\n${outcomes
-              .map((outcome, index) => `trial ${index + 1}: ${outcome.detail}`)
-              .join('\n')}`,
-          ).toBe(true);
-        } finally {
-          release();
-        }
-      }, 900_000);
+        },
+        900_000 * TRIALS,
+      );
     }
   });
 });
