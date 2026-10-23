@@ -20,6 +20,7 @@ Every release, from the commits that made it.
 
 ### Added
 
+- the V2 path harvests the sessions that end, the way the V1 path does (`9b1df2a`)
 - the client for a System One model, and the board tool that classifies a request into the dispatch profiles (`2d4f83a`, `5e59023`, `a513f84`)
 - the judge breaks its ties with a probability, so an undecided criterion gets a number instead of a shrug (`7ceeee6`)
 - the Lead classifies with the board, and says when it took the cheaper plan (`a4c1f7a`)
@@ -36,6 +37,12 @@ Every release, from the commits that made it.
 
 ### Fixed
 
+- a lease glob was a regular expression, and a glob with many stars hung every lease check; the matcher walks the pattern and the path once, in linear time (`bb4eece`)
+- the criterion the judge hands to the tie-breaker was a key in a request, and the judge reads that name from a conversation (`bb4eece`)
+- a provider name became a key in the inventory of what a provider serves, unchecked (`bb4eece`)
+- a correct agent was scored as silent, because two checks demanded one spelling of its name and two demanded that it try a forbidden write (`aab4d78`)
+- a check that demanded the words 'release went out' scored 'release shipped' as a failure (`1acf535`)
+- a test that depended on a key being in the environment passed on a laptop and failed in CI (`abca829`)
 - apply_patch was never lease-checked: it carries no path argument, so the guard read nothing and let every patch through (`d33384c`)
 - a write from a session with no known agent was skipped instead of refused (`d33384c`)
 - a lease holder was matched by spelling, so a lease could not be released and the writer cap counted one writer twice (`d5ffb08`)
