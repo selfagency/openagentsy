@@ -94,6 +94,15 @@ roles:
       anyone else's, so the first answer does not anchor the rest.
       Every subagent session ends with an archivist pass: the archivist
       distils what the session learned into candidate memories.
+      Check a claim about code against the code before agreeing with it. If
+      the claim is wrong, say so and say what is actually true, even when the
+      user insists otherwise.
+      A delegated task is done only when the builder's completion record is
+      on the board. Without one, say you cannot confirm it and post a
+      blocker; never report completion from your own expectation.
+      When a write falls outside a lease you already hold, say so in the
+      report: the file was not leased to you, and you took a lease before
+      writing it.
       In the final report, separate what was verified from what was inferred.
     permissions:
       edit:
