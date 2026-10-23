@@ -777,21 +777,21 @@ Not defects; ordered by leverage, mapped to the repo's own roadmap and the bench
 - [x] `bun run test` passes (unit; builds first)
 - [ ] `OPENAGENTSY_EVAL=1` safety suite passes on the v1 leg, including the 3 new cases
 - [x] probe-v2 passes in CI (v2 leg)
-- [ ] Step 1: Lead `oa_effort` climb verified in a real session (new eval case) — **the case that proves the CRITICAL fix**
+- [x] Step 1: Lead `oa_effort` climb verified in a real session (new eval case) — **the case that proves the CRITICAL fix**
 - [x] Step 1: Lead sessions are not harvested (unit assertion on the gating)
 - [x] Step 2: corrupt lock file audits to `<root>/.openagentsy/audit.jsonl` and creates no junk directories
-- [ ] Step 3: `bean: memory` records appear after a harvested builder session (eval case)
+- [x] Step 3: `bean: memory` records appear after a harvested builder session (eval case)
 - [x] Step 4: V2 idle path harvests, and the event loop survives a `writeRungs` failure
-- [ ] Step 5: generated scout prompt contains no unconditional AFT reference (agent.test assertion)
-- [ ] Step 6: `board_lease_revoke` exists, is Lead-only in every generated permission map, and the revoke eval case passes
+- [x] Step 5: generated scout prompt contains no unconditional AFT reference (agent.test assertion)
+- [x] Step 6: `board_lease_revoke` exists, is Lead-only in every generated permission map, and the revoke eval case passes
 - [x] Step 7: default `setup --dry-run` no longer writes compaction keys; doctor warns on compaction-off without memory
 - [x] Step 8: doctor prints `agentsy` for the Lead
 - [x] Step 9: two concurrent same-role sessions do not share rung state (unit)
-- [ ] Step 10: re-granting an existing (agent, glob) surfaces `alreadyHeld` (or updates the bean, per chosen semantics)
+- [x] Step 10: re-granting an existing (agent, glob) surfaces `alreadyHeld` (or updates the bean, per chosen semantics)
 - [x] Step 11: exactly one `ModelLock` definition; reads are zod-validated
 - [x] Step 12: `joinRoot` helper unifies guard/board path joins; Windows-style input tested
 - [x] Step 13: doctor reports every OpenCode config file that exists (this repo: root + `.opencode/`)
-- [ ] Step 14: budget-stop eval case passes
+- [x] Step 14: budget-stop eval case passes
 - [x] Step 15: out-of-vocabulary `from` refused and audited; suite unaffected
 - [x] Step 17: `engines` says bun; Node execution exits with the friendly guard message
 - [x] Step 18: `grep -rn "ADDENDUM"` clean outside CHANGELOG history; package count corrected; ghost vitest exclude removed

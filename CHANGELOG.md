@@ -37,6 +37,11 @@ Every release, from the commits that made it.
 
 ### Fixed
 
+- every role in a case runs on the model under test; the archivist ran on the lock's model, so a free provider's failure showed up as a case that failed for the wrong reason (`42abf58`)
+- the reporting section showed a bare JSON block, and an agent that read "post one board record" wrote the JSON to a file; it names the tool now (`42abf58`)
+- a climb leaves a synthetic message at the end of the session, and the harness took it as the reply, so a case where the agent climbed had no reply at all (`7295453`)
+- the budget guidance named tools the agent does not see, and nothing in the guidance mentioned oa_effort at all (`0bf2e46`)
+- the killed-builder case let the Lead retry, and a retry gives it the completion record the case was looking for (`42abf58`)
 - a lease glob was a regular expression, and a glob with many stars hung every lease check; the matcher walks the pattern and the path once, in linear time (`bb4eece`)
 - the plugin bundle was two files, and the copy takes one, so the plugin failed to load and the lease guard never registered; the bundle is inlined, the build fails if it imports a path next to it, and a test loads it (`722dd76`)
 - the plugin looked the role up by the agent id, so the Lead (whose id is 'agentsy' and whose role key is 'lead') could never climb and its own session was harvested (`3e22b06`)
@@ -57,6 +62,8 @@ Every release, from the commits that made it.
 
 ### Added
 
+- four cases for the fixes that need a real session: the Lead climbs the effort ladder, the Lead takes a lease back, the builder stops on a bean over its budget, and the harvest lands its candidates on the board (`e6ec0e6`, `5604505`, `42abf58`)
+- the mutation catalogue, which names the guard, the way to break it, and the case that must fail when it is broken (`f9d5ef2`)
 - the Lead can take a lease back, for a session that died holding it; three of those put the board over the writer cap for good (`4528b3c`)
 - a record has to name an agent the board knows, so a builder cannot post a completion as another builder (`617a3bc`)
 - the safety suite runs on Claude Haiku, which is a better instruction follower per dollar than the flash model (`401b444`)
