@@ -1,0 +1,24 @@
+{
+  "name": "@openagentsy/adapter-opencode",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@openagentsy/core": "*",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.19.3",
+    "@types/node": "^24.3.0",
+    "tsdown": "^0.15.0",
+    "typescript": "^5.9.2"
+  }
+}

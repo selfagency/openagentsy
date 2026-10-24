@@ -1,0 +1,49 @@
+name: check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Lint and typecheck
+        run: bun run ci:check
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      - name: Test
+        run: bun run test
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      # On a pull request the base is the branch it targets. On a push to
+      # develop the base is the head the push moved, so the gate sees only
+      # what this push introduced; main is the release parent and is weeks
+      # behind develop, which would gate every function added since it.
+      - name: Fallow gate
+        env:
+          GATE_BASE_REF: ${{ github.base_ref }}
+          GATE_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$GATE_BASE_REF" ]; then
+            bunx fallow audit --health-baseline .fallow/health-baseline.json --base origin/$GATE_BASE_REF --format human --quiet
+          else
+            bunx fallow audit --health-baseline .fallow/health-baseline.json --base "$GATE_BEFORE" --format human --quiet
+          fi

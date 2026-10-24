@@ -1,0 +1,51 @@
+{
+  "name": "openagentsy",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "openagentsy": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json && chmod +x dist/index.js && node scripts/copy-plugin.mjs",
+    "typecheck": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "@openagentsy/core": "0.1.0",
+    "@openagentsy/models": "0.1.0",
+    "jsonc-parser": "^3.3.1",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2",
+    "@openagentsy/adapter-opencode": "workspace:*"
+  },
+  "description": "The hub and spoke agent system for OpenCode: one Lead, many specialists, one writer per file.",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/selfagency/openagentsy.git"
+  },
+  "homepage": "https://github.com/selfagency/openagentsy#readme",
+  "bugs": {
+    "url": "https://github.com/selfagency/openagentsy/issues"
+  },
+  "keywords": [
+    "agents",
+    "opencode",
+    "coordination",
+    "leases",
+    "mcp",
+    "bun"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "plugin"
+  ]
+}

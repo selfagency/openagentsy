@@ -1,0 +1,56 @@
+{
+  "name": "openagentsy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "build": "turbo run build",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "turbo run typecheck",
+    "ci:check": "biome ci . && turbo run typecheck",
+    "test": "turbo run test",
+    "test:coverage": "bunx --bun vitest run --coverage --coverage.provider=v8 --coverage.reporter=json --coverage.reportsDirectory=coverage",
+    "test:watch": "bunx --bun vitest",
+    "openagentsy": "bun packages/cli/dist/index.js",
+    "pretest": "bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@types/node": "^24.3.0",
+    "@vitest/coverage-v8": "^3.2.7",
+    "fallow": "^3.34.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "turbo": "^2.11.10",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,ts,mts,cts,tsx,json,jsonc}": [
+      "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
+    ]
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "license": "GPL-3.0-or-later",
+  "devEngines": {
+    "packageManager": {
+      "name": "bun",
+      "version": "^1.2.0"
+    }
+  },
+  "trustedDependencies": [
+    "esbuild",
+    "msgpackr-extract",
+    "protobufjs"
+  ],
+  "overrides": {
+    "tinypool": "2.1.2"
+  }
+}

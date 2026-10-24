@@ -1,0 +1,51 @@
+# Aliases from a provider model id to a BenchLM catalog key.
+#
+# The join key is the model id with the punctuation removed. That matches most
+# models on its own, but a provider id and a BenchLM key can point at the same
+# model under different names when one of them carries a date or a release
+# suffix. Every entry here was confirmed against the BenchLM catalog.
+#
+# Checked: 2026-10-22
+# Source: https://benchlm.ai/data/leaderboard.json
+
+version: 1
+
+aliases:
+  # provider id -> BenchLM key
+  "opencode-go/deepseek-v4-pro": deepseek-v4-pro-0813
+  "opencode-go/qwen3.8-flash": qwen3-8-flash-next
+  "opencode-go/qwen3.8-max": qwen3-8-max
+  "opencode-go/qwen3.7-max": qwen3-8-max
+  "opencode-go/muse-spark-1.2-contributor": muse-spark-1-2
+  "opencode-go/muse-spark-1.3-contributor": muse-spark-1-3
+  "opencode-go/muse-spark-1.2": muse-spark-1-2
+  "opencode-go/muse-spark-1.3": muse-spark-1-3
+  "opencode-go/minimax-m2.5": minimax-m2-5
+  "opencode-go/minimax-m2.7": minimax-m3
+  "opencode-go/minimax-m3.1-flash": minimax-m3-1-flash
+  "opencode-go/glm-5.1": glm-5-1
+  "opencode-go/glm-5.2": glm-5-2
+  "opencode-go/glm-5.3": glm-5-3
+  "opencode-go/glm-5.3-flash": glm-5-3-flash
+  "opencode-go/kimi-k2.6": kimi-k2-6
+  "opencode-go/kimi-k2.7-code": kimi-k2-7-code
+  "opencode-go/kimi-k3": kimi-k3
+  "opencode-go/gpt-6-luna": gpt-6-luna
+  "opencode-go/gpt-5.6-luna": gpt-5-6-luna
+  "opencode-go/claude-haiku-5-5": claude-haiku-5-5
+  "opencode-go/gemini-4-argon-contributor": gemini-4-argon
+  "opencode-go/hy3": hy-3
+  "opencode-go/hy4-preview": hy-4
+  "opencode-go/omen-alpha": omen-alpha
+  "opencode-go/step-5-preview": step-5
+  "opencode-go/mimo-v2.5-pro": mimo-v2-5-pro
+  "opencode-go/mimo-v2.6-pro": mimo-v2-6-pro
+  "opencode/muse-spark-1.3": muse-spark-1-3
+  "opencode/muse-spark-1.2": muse-spark-1-2
+  "opencode/deepseek-v4-flash": deepseek-v4-flash
+  "opencode/minimax-m2.1": minimax-m2-5
+  "ollama-cloud/muse-spark-1.3": muse-spark-1-3
+  "ollama-cloud/muse-spark-1.2": muse-spark-1-2
+  "ollama-cloud/deepseek-v4-pro": deepseek-v4-pro-0813
+  "ollama-cloud/qwen3.8-flash": qwen3-8-flash-next
+  "ollama-cloud/gemini-4-argon": gemini-4-argon

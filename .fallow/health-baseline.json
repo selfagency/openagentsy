@@ -1,0 +1,17 @@
+{
+  "kind": "health",
+  "finding_counts": {
+    "packages/models/src/candidates.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    },
+    "packages/models/src/score.ts": {
+      "crap_high": {
+        "count": 1
+      }
+    }
+  },
+  "runtime_coverage_findings": [],
+  "target_keys": ["packages/models/src/score.ts:high impact"]
+}
