@@ -3,9 +3,35 @@ import type { Candidate, EvidenceLabel, ProviderModel, Surface } from './types.j
 
 export const LARGE_CONTEXT_TOKENS = 200_000;
 
+/**
+ * The candidate set, with the preferences that ride with it.
+ *
+ * The lock builder picks a model for every role from one set and takes no
+ * preference of its own, so a preference that applies to every role travels
+ * with the set. The flash preference is one: every role applies it, and
+ * every role still decides on its own whether the flash variant qualifies.
+ */
+export type CandidateSet = Candidate[] & { preferFlash?: boolean };
+
+/** The candidate set, with the flash preference turned on. */
+export function withFlashPreference(candidates: Candidate[]): CandidateSet {
+  return Object.assign([...candidates], { preferFlash: true });
+}
+
+/** Whether the candidate set asks for the flash preference. */
+function prefersFlash(candidates: Candidate[]): boolean {
+  return (candidates as CandidateSet).preferFlash === true;
+}
+
 export type SelectOptions = {
   profile: ModelProfile;
   candidates: Candidate[];
+  /**
+   * Take the flash variant of the family the role would get, when it
+   * qualifies. The default is quality first, and this is the flag that
+   * trades a rank for the cheaper model of the same family.
+   */
+  preferFlash?: boolean | undefined;
   /** Let a model that trains on prompts through. */
   allowTraining?: boolean | undefined;
   /** Let a model that is not zero data retention through. */
@@ -37,6 +63,18 @@ export type Selection = {
     date: string;
   };
   rejected: Rejection[];
+  /** The flash variant that was taken instead of the model the role would have got. */
+  flashSwap?: FlashSwap;
+};
+
+/** What the flash preference changed, so the report can show what it cost. */
+export type FlashSwap = {
+  /** The model the quality first pick made. */
+  passedOver: ProviderModel;
+  /** The rank of the model that was passed over, on the role's signal. */
+  passedOverRank?: number;
+  /** The rank of the flash variant that was taken instead. */
+  takenRank?: number;
 };
 
 const SURFACE_FOR_SIGNAL: Record<string, Surface | undefined> = {
@@ -105,6 +143,33 @@ function passesPrivacy(candidate: Candidate, options: SelectOptions): string | u
     return `retains data for ${candidate.retention.retentionDays} days`;
   }
   return undefined;
+}
+
+const FLASH_SUFFIX = '-flash';
+
+/** The model id without the tag of a build: deepseek-v4.1-flash:1017 is deepseek-v4.1-flash. */
+function withoutTag(id: string): string {
+  const index = id.indexOf(':');
+  return index === -1 ? id : id.slice(0, index);
+}
+
+/** Whether the model is the flash variant of its family. */
+function isFlashVariant(id: string): boolean {
+  const index = id.indexOf(':');
+  const tag = index === -1 ? undefined : id.slice(index + 1).toLowerCase();
+  if (tag === 'flash') return true;
+  return withoutTag(id).toLowerCase().endsWith(FLASH_SUFFIX);
+}
+
+/**
+ * The family a model belongs to: the same model without the flash marker.
+ *
+ * glm-5.3 and glm-5.3-flash are one family, and so are deepseek-v4.1 and
+ * deepseek-v4.1-flash. The tag of a build is not part of the family.
+ */
+function familyOf(id: string): string {
+  const base = withoutTag(id).toLowerCase();
+  return base.endsWith(FLASH_SUFFIX) ? base.slice(0, -FLASH_SUFFIX.length) : base;
 }
 
 /** The candidates one profile eliminates, with the reason each was cut. */
@@ -231,8 +296,52 @@ function byRank(
   };
 }
 
+/**
+ * The flash variant of the chosen model's family, when it qualifies.
+ *
+ * The variant has to pass what the chosen model passes: the same hard
+ * requirements and the same privacy terms. It does not have to clear the
+ * rank bar, because trading the rank is the point of the preference. The
+ * variant has to come from the same provider, so a switch does not move a
+ * role to a provider the switch did not name.
+ */
+function flashVariantOf(
+  chosen: Candidate,
+  candidates: Candidate[],
+  profile: ModelProfile,
+  surface: Surface | undefined,
+  options: SelectOptions,
+): Candidate | undefined {
+  if (isFlashVariant(chosen.model.id)) return undefined;
+
+  const family = familyOf(chosen.model.id);
+  const excluded = new Set((options.excludeCreators ?? []).map((creator) => creator.toLowerCase()));
+
+  const variants = candidates.filter(
+    (candidate) =>
+      candidate.model.provider === chosen.model.provider &&
+      isFlashVariant(candidate.model.id) &&
+      familyOf(candidate.model.id) === family,
+  );
+
+  const eligible = variants.filter((candidate) => {
+    if (excluded.has(candidate.model.creator?.toLowerCase() ?? '')) return false;
+    return (
+      passesRequirements(candidate, profile) === undefined &&
+      passesPrivacy(candidate, options) === undefined
+    );
+  });
+
+  return eligible.sort(byRank(profile, surface))[0];
+}
+
 /** The reason the choice carries, led by the rank it has. */
-function reasonOf(chosen: Candidate, surface: Surface | undefined, stanceParts: string[]): string {
+function reasonOf(
+  chosen: Candidate,
+  surface: Surface | undefined,
+  stanceParts: string[],
+  flashSwap: FlashSwap | undefined,
+): string {
   const rank = surface ? chosen.ranks[surface]?.rank : undefined;
   const label = surface ? chosen.ranks[surface]?.evidence : undefined;
   const parts = [...stanceParts];
@@ -241,7 +350,78 @@ function reasonOf(chosen: Candidate, surface: Surface | undefined, stanceParts: 
   } else {
     parts.unshift('no ranking, chosen on cost and requirements');
   }
+  if (flashSwap) {
+    parts.push(
+      `flash variant of ${flashSwap.passedOver.id}${rankText(flashSwap.passedOverRank, surface)}`,
+    );
+  }
   return parts.join(', ');
+}
+
+/** The rank of the model that was passed over, in the report. */
+function rankText(rank: number | undefined, surface: Surface | undefined): string {
+  if (rank === undefined) return '';
+  return surface ? ` (${surface} rank ${rank})` : ` (rank ${rank})`;
+}
+
+/** The evidence the lock records for a choice. */
+function evidenceOf(
+  chosen: Candidate,
+  surface: Surface | undefined,
+  date: string | undefined,
+): Selection['evidence'] {
+  const rank = surface ? chosen.ranks[surface]?.rank : undefined;
+  const score = surface ? chosen.ranks[surface]?.score : undefined;
+  const label = surface ? chosen.ranks[surface]?.evidence : undefined;
+  return {
+    source: 'benchlm',
+    ...(label ? { label } : {}),
+    ...(surface ? { surface } : {}),
+    ...(rank !== undefined ? { rank } : {}),
+    ...(score !== undefined ? { score } : {}),
+    date: date ?? new Date().toISOString().slice(0, 10),
+  };
+}
+
+/**
+ * The flash variant of the choice, when the preference takes one.
+ *
+ * The preference runs after the quality first pick, so the report can name
+ * the model the role would have got and the one it took instead.
+ */
+function applyFlashPreference(
+  chosen: Candidate,
+  candidates: Candidate[],
+  profile: ModelProfile,
+  surface: Surface | undefined,
+  options: SelectOptions,
+): { chosen: Candidate; flashSwap?: FlashSwap } {
+  if (options.preferFlash !== true && !prefersFlash(candidates)) return { chosen };
+
+  const flash = flashVariantOf(chosen, candidates, profile, surface, options);
+  if (!flash) return { chosen };
+
+  const passedOverRank = surfaceRank(chosen, surface);
+  const takenRank = surfaceRank(flash, surface);
+  return {
+    chosen: flash,
+    flashSwap: {
+      passedOver: chosen.model,
+      ...(passedOverRank !== undefined ? { passedOverRank } : {}),
+      ...(takenRank !== undefined ? { takenRank } : {}),
+    },
+  };
+}
+
+/** The message when no candidate satisfies the profile. */
+function noCandidateMessage(profile: ModelProfile, rejected: Rejection[]): string {
+  return (
+    `no model satisfies the ${profile.primarySignal} profile for this role. ` +
+    `Rejected ${rejected.length} candidate(s): ${rejected
+      .slice(0, 5)
+      .map((entry) => `${entry.openCodeId} (${entry.reason})`)
+      .join(', ')}`
+  );
 }
 
 /**
@@ -251,6 +431,10 @@ function reasonOf(chosen: Candidate, surface: Surface | undefined, stanceParts: 
  * filter eliminate candidates, the role's signal decides the order, the cost
  * stance decides how far down the order to trade, and a Supported rank beats
  * an Estimated one inside a small margin.
+ *
+ * The flash preference is the one thing that runs after all of that: it
+ * swaps the model for the flash variant of its own family, so the report
+ * carries the rank of the model that was passed over as well.
  */
 export function selectModel(options: SelectOptions): Selection {
   const { profile, candidates } = options;
@@ -260,13 +444,7 @@ export function selectModel(options: SelectOptions): Selection {
 
   const { eligible, rejected } = filterCandidates(candidates, profile, surface, options);
   if (eligible.length === 0) {
-    throw new Error(
-      `no model satisfies the ${profile.primarySignal} profile for this role. ` +
-        `Rejected ${rejected.length} candidate(s): ${rejected
-          .slice(0, 5)
-          .map((entry) => `${entry.openCodeId} (${entry.reason})`)
-          .join(', ')}`,
-    );
+    throw new Error(noCandidateMessage(profile, rejected));
   }
 
   const sorted = [...eligible].sort(byRank(profile, surface));
@@ -284,27 +462,22 @@ export function selectModel(options: SelectOptions): Selection {
     stance.reasonParts.push('estimated evidence did not beat the supported model by enough');
   }
 
+  const flash = applyFlashPreference(chosen, candidates, profile, surface, options);
+  chosen = flash.chosen;
+
   const runnerUp = sorted.find(
     (candidate) => candidate.model.openCodeId !== chosen.model.openCodeId,
   );
 
-  const rank = surface ? chosen.ranks[surface]?.rank : undefined;
-  const score = surface ? chosen.ranks[surface]?.score : undefined;
-  const label = surface ? chosen.ranks[surface]?.evidence : undefined;
-
   return {
     model: chosen.model,
     ...(runnerUp ? { runnerUp: runnerUp.model } : {}),
-    reason: reasonOf(chosen, surface, stance.reasonParts),
-    evidence: {
-      source: 'benchlm',
-      ...(label ? { label } : {}),
-      ...(surface ? { surface } : {}),
-      ...(rank !== undefined ? { rank } : {}),
-      ...(score !== undefined ? { score } : {}),
-      date: options.date ?? new Date().toISOString().slice(0, 10),
-    },
-    rejected: sortRejections(rejected, candidates, surface),
+    reason: reasonOf(chosen, surface, stance.reasonParts, flash.flashSwap),
+    evidence: evidenceOf(chosen, surface, options.date),
+    rejected: sortRejections(rejected, candidates, surface).filter(
+      (entry) => entry.openCodeId !== chosen.model.openCodeId,
+    ),
+    ...(flash.flashSwap ? { flashSwap: flash.flashSwap } : {}),
   };
 }
 
