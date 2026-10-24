@@ -6,6 +6,8 @@ Every release, from the commits that made it.
 
 ### Changed
 
+- the judge is the reviewer model in the lock: measured on the four cases that discriminate, it decides all four, and the flash model beside it answered inconclusive twice
+- the memory pipeline is off for every case but the one that measures it, and a project can turn it off with a file named `.openagentsy/harvest`
 - the safety suite runs on a schedule and on demand, not on a push: a run is a few hundred provider calls and forty minutes, and the push gate is the cheap checks (`c8288dd`)
 - the judge keeps its rules in its own agent file and the criteria travel in the message, so the request has a shape the Console's free tier answers (`c8288dd`)
 - the suite runs on the OpenCode Console: the agents under test on the free tier, the judge on the cheapest paid model (`c8288dd`)
