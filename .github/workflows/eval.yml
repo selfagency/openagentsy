@@ -119,7 +119,12 @@ jobs:
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
           # The trials each case is tried inside one run. A case passes when
           # the majority of them pass, so one unlucky sample is not a verdict.
-          OPENAGENTSY_EVAL_TRIALS: ${{ github.event.inputs.trials || 3 }}
+          #
+          # A push runs one trial per case: it answers "does the case pass at
+          # all", and the nightly run is the one that carries the majority of
+          # three. The suite costs tokens, and every push used to buy three
+          # trials of every case.
+          OPENAGENTSY_EVAL_TRIALS: ${{ github.event_name == 'pull_request' && 1 || (github.event.inputs.trials || 3) }}
         run: |
           set -o pipefail
           rc=0
