@@ -233,13 +233,16 @@ describe('harvest', () => {
 });
 
 /** A client whose lookup is the only part that answers. */
-function fakeClient(get: SessionClient['get']) {
+function fakeClient(get: SessionClient['get'], overrides: Partial<SessionClient> = {}) {
   return {
     session: {
       get,
       create: async () => ({}),
       messages: async () => ({}),
       promptAsync: async () => ({}),
+      list: async () => ({}),
+      delete: async () => ({}),
+      ...overrides,
     },
   };
 }
@@ -282,5 +285,125 @@ describe('the V1 session adapter', () => {
       root,
     );
     await expect(session.exists('ses_1')).rejects.toThrow('BadRequest');
+  });
+});
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** A client whose list and delete are the janitor's only answers. */
+function janitorClient(
+  rows: { id: string; title: string; agent?: string; time?: { created?: number } }[],
+  options: { failDelete?: string; missingDelete?: string } = {},
+) {
+  const deleted: string[] = [];
+  const client = fakeClient(async () => ({ data: { id: 'ses_1' } }), {
+    list: async () => ({ data: rows }),
+    delete: async ({ path }) => {
+      if (options.failDelete === path.id) throw new Error(`delete ${path.id} was refused`);
+      if (options.missingDelete === path.id) return { error: { name: 'NotFoundError' } };
+      deleted.push(path.id);
+      return { data: true };
+    },
+  });
+  return { client, deleted };
+}
+
+describe('the harvest janitor', () => {
+  const now = Date.now();
+
+  it('deletes a harvest child older than seven days and keeps every other session', async () => {
+    const { client, deleted } = janitorClient([
+      {
+        id: 'ses_old',
+        title: 'harvest scout',
+        agent: 'oa-archivist',
+        time: { created: now - 8 * DAY },
+      },
+      {
+        id: 'ses_recent',
+        title: 'harvest scout',
+        agent: 'oa-archivist',
+        time: { created: now - DAY },
+      },
+      {
+        id: 'ses_foreign',
+        title: 'Prune the adapter',
+        agent: 'oa-archivist',
+        time: { created: now - 30 * DAY },
+      },
+      {
+        id: 'ses_other_agent',
+        title: 'harvest scout',
+        agent: 'oa-builder',
+        time: { created: now - 30 * DAY },
+      },
+      {
+        id: 'ses_unreported_agent',
+        title: 'harvest OpenCoder',
+        time: { created: now - 30 * DAY },
+      },
+    ]);
+
+    await sessionAdapter(client, root).prune?.();
+
+    expect(deleted).toEqual(['ses_old']);
+  });
+
+  it('treats a session the server no longer has as already pruned', async () => {
+    const { client, deleted } = janitorClient(
+      [
+        {
+          id: 'ses_gone',
+          title: 'harvest scout',
+          agent: 'oa-archivist',
+          time: { created: now - 8 * DAY },
+        },
+      ],
+      { missingDelete: 'ses_gone' },
+    );
+
+    await expect(sessionAdapter(client, root).prune?.()).resolves.toBeUndefined();
+    expect(deleted).toHaveLength(0);
+    expect(await auditEntries()).toHaveLength(0);
+  });
+
+  it('records a failed delete without breaking the harvest', async () => {
+    const { client } = janitorClient(
+      [
+        {
+          id: 'ses_old',
+          title: 'harvest scout',
+          agent: 'oa-archivist',
+          time: { created: now - 8 * DAY },
+        },
+      ],
+      { failDelete: 'ses_old' },
+    );
+    const adapter = sessionAdapter(client, root);
+    const fake = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
+    let pruning: Promise<void> | undefined;
+    const session: HarvestSession = {
+      ...fake.session,
+      prune: () => {
+        pruning = adapter.prune?.() ?? Promise.resolve();
+        return pruning;
+      },
+    };
+
+    const result = await harvest({
+      session,
+      root,
+      sessionID: 'ses_scout',
+      role: 'scout',
+      agent: 'oa-scout',
+    });
+    await pruning;
+
+    expect(result.harvested).toBe(true);
+    const failure = (await auditEntries()).find(
+      (entry) => entry.policyId === POLICIES.harvestFailed.id,
+    );
+    expect(failure?.detail).toContain('harvest prune failed');
+    expect(failure?.detail).toContain('ses_old');
   });
 });
