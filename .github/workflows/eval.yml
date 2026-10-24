@@ -245,6 +245,19 @@ jobs:
           # them, so a change that cannot affect a case does not spend a
           # provider call on it.
           OPENAGENTSY_EVAL_CHANGED: ${{ steps.changed.outputs.files }}
+          # How many cases run at once. The suite runs the cases side by
+          # side, and a case is not one session: it runs a Lead, the builder
+          # the Lead dispatches and the judge, so a cap of three cases is
+          # about ten concurrent sessions and a cap of five is about
+          # fifteen. Five keeps the provider's patience and takes about a
+          # third off the wall time.
+          #
+          # The number of provider calls does not change with the cap, so
+          # the cost of a run does not change either: only the wall time
+          # does. The number is written here, so the run's cap is in the
+          # workflow and not only in the code, and the environment still
+          # overrides the code's default.
+          OPENAGENTSY_EVAL_CONCURRENCY: "5"
         run: |
           set -o pipefail
           rc=0

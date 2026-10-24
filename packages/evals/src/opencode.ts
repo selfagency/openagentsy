@@ -527,15 +527,60 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   };
 }
 
+/**
+ * The budget of one trial of a case.
+ *
+ * A trial is not one turn: it is the Lead's turn, the builder's turn the
+ * Lead dispatches, the judge's turn and, in a fault case, a second turn
+ * after the fault. Each of those turns may be slow, because the suite runs
+ * several cases at once and a turn waits behind the other cases' streams:
+ * slow is not hung. The budget is the ceiling of a trial and of one turn
+ * inside it, so a turn is never given up before the trial it belongs to
+ * would have been given up.
+ */
+export const TRIAL_BUDGET_MS = 1_800_000;
+
+/**
+ * A provider refusal the harness is about to retry.
+ *
+ * The status is the provider's own answer, the attempt counts the retries
+ * of the turn, and the wait is how long the harness sleeps before it asks
+ * again.
+ */
+export type ProviderRefusal = {
+  /** The status the provider answered with, such as 429. */
+  status: number;
+  /** Which retry this is, counting from one. */
+  attempt: number;
+  /** How long the harness waits before it asks again. */
+  waitMs: number;
+};
+
 export type PromptOptions = {
   harness: OpenCodeHarness;
   directory: string;
   agent: string;
   model?: string;
   text: string;
+  /**
+   * How long one turn may take, in milliseconds.
+   *
+   * The default is the budget of a trial, so a turn is only given up when
+   * the trial it belongs to would have been.
+   */
   timeoutMs?: number;
   /** How many times a rate limited turn is asked again. */
   rateLimitRetries?: number;
+  /**
+   * Called when the provider refused the turn and the harness is about to
+   * ask again.
+   *
+   * A refusal is the provider's answer, not the agent's, and a run that is
+   * slower because the provider refuses looks like a run that is slower
+   * because the model is slow. Nothing else in the log tells the two
+   * apart, so the refusal is written down.
+   */
+  onProviderRefusal?: (refusal: ProviderRefusal) => void;
   /**
    * Wait for the board server before the first turn.
    *
@@ -716,7 +761,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
 
   await ask();
 
-  const timeoutMs = options.timeoutMs ?? 600_000;
+  const timeoutMs = options.timeoutMs ?? TRIAL_BUDGET_MS;
   await waitForIdle(client, sessionID, directory, timeoutMs);
 
   const messages = await client.session.messages({
@@ -736,7 +781,13 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const attempts = options.rateLimitRetries ?? 2;
   let providerError = providerErrorOf(last);
   for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
-    await sleep((attempt + 1) * 30_000);
+    const waitMs = (attempt + 1) * 30_000;
+    // The refusal is written down before the wait, not after it: a run that
+    // is slow because the provider refuses has to say so while it is slow.
+    // The loop is only entered when the turn was refused, so a turn that
+    // answered the first time is never reported.
+    options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
+    await sleep(waitMs);
     await ask();
     await waitForIdle(client, sessionID, directory, timeoutMs);
     const again = await client.session.messages({
