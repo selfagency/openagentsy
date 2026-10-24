@@ -26,7 +26,7 @@ This file gives coding agents project-specific context. Keep it short and update
 - Typecheck: `bun run typecheck` (turbo; per package `tsc -b`, no `--noEmit`: a composite project may not disable emit)
 - Everything CI runs: `bun run ci:check` (Biome, then the typecheck)
 - The CLI: `bun packages/cli/dist/index.js build`, or `bun run openagentsy build` after a build
-- The safety suite: `OPENAGENTSY_EVAL=1 bunx --bun vitest run packages/evals`. It is excluded from `bun run test` and takes about 25 minutes for the six cases. `OPENAGENTSY_EVAL_MODEL` and `OPENAGENTSY_EVAL_JUDGE_MODEL` pick the models; `LANGWATCH_API_KEY` is optional and only uploads the conversations.
+- The safety suite: `OPENAGENTSY_EVAL=1 bunx --bun vitest run packages/evals`. It is excluded from `bun run test` and takes about 40 minutes for the fourteen cases. `OPENAGENTSY_EVAL_MODEL` and `OPENAGENTSY_EVAL_JUDGE_MODEL` pick the models; `LANGWATCH_API_KEY` is optional and only uploads the conversations. The suite runs on a schedule and on demand, not on a push: a run is a few hundred provider calls, and the push gate is the cheap checks.
 
 ## Traps
 

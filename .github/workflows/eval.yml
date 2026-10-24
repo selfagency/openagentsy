@@ -1,26 +1,23 @@
 name: safety suite
 
 # The safety suite runs real agents against seeded repositories, so it costs
-# tokens and takes minutes. It runs on a pull request once the pull request
-# has left draft, on a schedule, and on demand.
+# tokens and takes minutes. It runs on a schedule and on demand.
 #
 # The matrix is the two runtimes. The suite drives a real OpenCode server
 # through the same harness on both, so a change that works on one and breaks
 # on the other shows up here rather than in a session.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    # The suite drives real agents, so it only runs when a change can affect
-    # how an agent behaves. Infra, CI and docs changes do not burn tokens;
-    # those runs happen on demand or on the nightly schedule.
-    paths:
-      - "roles.yaml"
-      - "templates/**"
-      - "packages/core/src/**"
-      - "packages/models/src/**"
-      - "packages/adapter-opencode/**"
-      - "packages/evals/**"
-      - "openagentsy.models.lock.json"
+  # The suite does not run on a push.
+  #
+  # A run is real agents against real sessions: a few hundred provider
+  # calls, and it takes forty minutes. Running it on every push to a
+  # pull request cost a day of a month's budget in one afternoon, and the
+  # verdict it gave on a push was the same verdict the nightly gives: the
+  # push gate is the cheap checks, and the safety suite is the nightly and
+  # the manual run.
+  #
+  # A pull request can ask for it: the "Safety suite" workflow is
+  # dispatchable, and it takes the pull request number as an input.
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -40,7 +37,7 @@ concurrency:
 
 jobs:
   safety:
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     strategy:
       fail-fast: false
       matrix:
@@ -100,18 +97,24 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
-          # The models are paid but cheap, and OpenRouter broadcasts every
-          # request to LangWatch, so the run lands in the project without a
-          # line of instrumentation. The free variants of the same models
-          # cost nothing and the account allows a thousand of them a day;
-          # the variables below swap them without a code change.
-          # The model the agents under test run on. Haiku is the cheapest
-          # model that follows a multi part instruction on the first try, and
-          # the suite measures instruction following.
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'openrouter/anthropic/claude-haiku-5.5' }}
-          # The judge runs on a different family from the model under test.
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'openrouter/qwen/qwen3.8-flash' }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # The models the suite runs on. The agents under test and the judge
+          # run on the OpenCode Console free tier, which costs nothing: the
+          # suite runs real agents, and a run costs tokens, so a paid model
+          # turns the quality gate into a budget line. The free tier is
+          # reachable only from inside OpenCode, which is what the suite is.
+          # The variables below swap the models without a code change.
+          #
+          # The model the agents under test run on. It has to follow a
+          # multi part instruction on the first try, and it has to push back
+          # on a claim that is wrong: the suite measures both.
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode/deepseek-v4.1-flash-free' }}
+          # The judge runs on a different family from the model under test,
+          # so it cannot agree with it out of a shared bias. The judge is one
+          # call per trial over the evidence, so it is cheap: a few cents a
+          # run.
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode/mimo-v2.6-flash' }}
+          # The key for the Console, where the free tier lives.
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # The key for a System One model. The harness uses it to break a tie
           # when the judge cannot decide. The case itself runs without it: the
           # agent under test must not reach a classifier.
@@ -119,12 +122,7 @@ jobs:
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
           # The trials each case is tried inside one run. A case passes when
           # the majority of them pass, so one unlucky sample is not a verdict.
-          #
-          # A push runs one trial per case: it answers "does the case pass at
-          # all", and the nightly run is the one that carries the majority of
-          # three. The suite costs tokens, and every push used to buy three
-          # trials of every case.
-          OPENAGENTSY_EVAL_TRIALS: ${{ github.event_name == 'pull_request' && 1 || (github.event.inputs.trials || 3) }}
+          OPENAGENTSY_EVAL_TRIALS: ${{ github.event.inputs.trials || 3 }}
         run: |
           set -o pipefail
           rc=0

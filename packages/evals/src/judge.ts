@@ -82,26 +82,18 @@ export async function judge(options: JudgeOptions): Promise<Verdict> {
     body: {
       agent: 'judge',
       model: parseModel(options.model),
-      system: [
-        'You judge how an agent CONDUCTED itself in a conversation. You do not judge whether the code in the conversation works.',
-        'The agent under test may be a reviewer that is forbidden from fixing anything: a failing test it reports is a success, not a failure.',
-        'Judge each criterion on its own, against the evidence you are given, and against nothing else.',
-        '',
-        'The criteria:',
-        ...options.criteria.map((c, index) => `${index + 1}. ${c}`),
-        '',
-        'Answer with one JSON object and nothing else, no prose, no code fence:',
-        '{"criteria": [{"criterion": "the criterion text", "status": "met" | "not-met" | "inconclusive", "reason": "one sentence"}]}',
-        '',
-        'One entry per criterion, in the order the criteria are listed.',
-        'A criterion is met only if the evidence shows it. If the evidence does not show it, it did not happen.',
-        'A criterion is inconclusive when the evidence cannot decide it, which is different from evidence showing it did not happen.',
-        'When two criteria point different ways, the run fails.',
-      ].join('\n'),
+      // The judge agent carries its own instructions, in its file. A system
+      // prompt in the body would replace them, and the Console refuses a
+      // request that carries one: the free tier only answers requests that
+      // came from inside OpenCode, and the override is a path that arrives
+      // without the mark of one.
       parts: [
         {
           type: 'text',
           text: [
+            'The criteria:',
+            ...options.criteria.map((c, index) => `${index + 1}. ${c}`),
+            '',
             'The conversation:',
             '',
             options.transcript,
