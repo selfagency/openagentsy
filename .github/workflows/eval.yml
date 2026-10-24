@@ -7,19 +7,21 @@ name: safety suite
 # through the same harness on both, so a change that works on one and breaks
 # on the other shows up here rather than in a session.
 on:
-  # A pull request runs the cases the change can reach.
-  #
-  # A run is a few hundred provider calls and forty minutes, so it runs only
-  # the cases that read the changed files. A change to the roles, the model
-  # lock, the generated agents or the harness reaches every case, and a
-  # change no case covers runs the whole suite as well: a change nobody
-  # mapped is a change nobody knows the effect of.
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
   # The whole suite runs once a week, not every night. A nightly run of
   # fourteen cases is a few hundred provider calls a day, for a verdict that
-  # rarely changes; a weekly run catches the slow drift, and the pull
-  # request run catches the rest the day it lands.
+  # rarely changes; a weekly run catches the slow drift.
+  #
+  # The suite does NOT run on a pull request. A run is a few hundred provider
+  # calls and tens of minutes of runner time, and a pull request that pushes
+  # a commit starts one: the cost of a review then depends on how often the
+  # branch is pushed, and the runner minutes are somebody's bill. The suite
+  # runs on the machine that changes the code, where the person who wants the
+  # answer decides when to spend it:
+  #
+  #   OPENAGENTSY_EVAL=1 bunx --bun vitest run packages/evals
+  #
+  # The pull request lane runs the unit tests, the typecheck and the audit,
+  # which take under a minute and cost nothing.
   schedule:
     - cron: "17 3 * * 1"
   workflow_dispatch:
@@ -39,12 +41,11 @@ on:
         default: false
 
 concurrency:
-  group: eval-${{ github.event.pull_request.number || github.ref }}
+  group: eval-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   safety:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     strategy:
       fail-fast: false
       matrix:
@@ -124,9 +125,9 @@ jobs:
           echo "OPENAGENTSY_EVAL_MODEL=$EVAL_MODEL" >> "$GITHUB_ENV"
           echo "OPENAGENTSY_EVAL_JUDGE_MODEL=$EVAL_JUDGE_MODEL" >> "$GITHUB_ENV"
 
-      # The files that changed, and the cases they reach. The pull request
-      # run uses the commits this push carried; the schedule and the manual
-      # run have no diff, so they run everything.
+      # The files that changed, and the cases they reach. A pull request run
+      # used this to run only the cases the change could reach. A scheduled
+      # and a manual run have no diff, so they run everything.
       #
       # The pull request's whole diff is the wrong scope: the release pull
       # request carries every change since the last release, so every push
