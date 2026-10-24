@@ -31,6 +31,21 @@ const V2_ACTION_NAMES: Record<string, string> = {
 /** V2 has no action for these, so the rules are dropped rather than renamed. */
 const V2_DROPPED_ACTIONS = new Set(['list', 'lsp']);
 
+/**
+ * The catch-all of the V1 spawn-tool map is written with two asterisks.
+ *
+ * The magic-context plugin rewrites an agent's own `permission.task` map: a
+ * literal `*` key with effect deny is dropped and re-appended last. OpenCode
+ * takes the last matching rule, so the catch-all then beats the named allows
+ * and the Task tool leaves the toolset. Measured on 2026-10-24 with two probe
+ * agents: an asterisk catch-all deny plus one named allow produced no task
+ * tool at all, and the same map with a double asterisk catch-all dispatched
+ * the named agent and refused an unlisted one. An OpenCode permission pattern
+ * is a wildcard where a single asterisk matches zero or more of any
+ * character, so a double asterisk matches every agent id as well.
+ */
+const V1_TASK_CATCH_ALL = '**';
+
 export type V1PermissionValue = PermissionEffect | Record<string, PermissionEffect>;
 
 export type V1PermissionBlock = Record<string, V1PermissionValue>;
@@ -78,6 +93,24 @@ function collapsedValue(rules: ActionPermissions): V1PermissionValue | undefined
   return map;
 }
 
+/**
+ * Write the catch-all of a spawn-tool map so the plugin leaves it in place.
+ *
+ * Only a map of several rules is rewritten: the shorthand form of a single
+ * rule is the effect alone and carries no catch-all to move. The order of the
+ * rules is kept, so a catch-all written first stays first and the named
+ * allows still win the last-match-wins comparison.
+ */
+function withTaskCatchAll(value: V1PermissionValue): V1PermissionValue {
+  if (typeof value === 'string') return value;
+  if (!('*' in value)) return value;
+  const out: Record<string, PermissionEffect> = {};
+  for (const [resource, effect] of Object.entries(value)) {
+    out[resource === '*' ? V1_TASK_CATCH_ALL : resource] = effect;
+  }
+  return out;
+}
+
 export function toV1Permissions(permissions: Record<string, ActionPermissions>): V1PermissionBlock {
   const out: V1PermissionBlock = {};
   for (const [action, rules] of Object.entries(permissions)) {
@@ -87,7 +120,9 @@ export function toV1Permissions(permissions: Record<string, ActionPermissions>):
     // A key that is not an action names a tool, and a tool keeps its name in
     // both versions. The renamed actions stay renamed.
     const key = V1_ACTION_NAMES[action] ?? action;
-    out[key] = value;
+    // The spawn tool is the one the plugin rewrites, so its catch-all is the
+    // one written with two asterisks. Every other action keeps a single one.
+    out[key] = key === 'task' ? withTaskCatchAll(value) : value;
   }
   return out;
 }

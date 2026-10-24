@@ -135,7 +135,7 @@ describe('renderAgent for V1', () => {
     const file = roles();
     const meta = frontmatter(renderAgent(role(file, 'lead'), file, { target: 'v1' }));
     const permission = meta.permission as Record<string, unknown>;
-    expect(permission.task).toEqual({ '*': 'deny', 'oa-scout': 'allow' });
+    expect(permission.task).toEqual({ '**': 'deny', 'oa-scout': 'allow' });
   });
 
   it('asks for the protected paths of a write-capable role', () => {
