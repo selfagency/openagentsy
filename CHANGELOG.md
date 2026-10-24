@@ -2,6 +2,16 @@
 
 Every release, from the commits that made it.
 
+## Unreleased
+
+### Fixed
+
+- the Lead can dispatch again: the spawn catch-all is written with two asterisks, so the wildcard rewrite of the memory plugin cannot turn deny-all-except-six into deny-all (`8afd075`)
+- the roles can run the gates this project runs: the vitest command, the bun scripts, biome and fallow were missing from every shell map (`f7e95d3`)
+- the killed-builder case fails when the agent says nothing: it asks for the record that reports the non completion, and it reads a claim and a denial per clause (`0b44448`)
+- the harness surfaces the host errors: it reads the server log, attributes each to the case that owns the session, and fails the suite at teardown (`aec4f56`)
+- the harvest checks that the archivist child still exists before it prompts it, and the V2 harvest is off until the V2 context can answer (`aec4f56`)
+
 ## 0.1.0 - 2026-10-23
 
 ### Changed

@@ -136,6 +136,24 @@ roles:
           effect: allow
         - resource: "git log*"
           effect: allow
+        # The gates this project runs. A role that must verify its own work
+        # has to be able to run them.
+        - resource: "bunx --bun vitest*"
+          effect: allow
+        - resource: "bun run test*"
+          effect: allow
+        - resource: "bun run typecheck*"
+          effect: allow
+        - resource: "bun run build*"
+          effect: allow
+        - resource: "bun run lint*"
+          effect: allow
+        - resource: "biome check*"
+          effect: allow
+        - resource: "fallow audit*"
+          effect: allow
+        - resource: "bun packages/cli/dist/index.js*"
+          effect: allow
       subagent:
         - resource: "*"
           effect: deny
@@ -303,6 +321,22 @@ roles:
           effect: allow
         - resource: "vitest*"
           effect: allow
+        # The gates this project runs. A builder that cannot run them cannot
+        # say it verified anything.
+        - resource: "bunx --bun vitest*"
+          effect: allow
+        - resource: "bun run test*"
+          effect: allow
+        - resource: "bun run typecheck*"
+          effect: allow
+        - resource: "bun run build*"
+          effect: allow
+        - resource: "bun run lint*"
+          effect: allow
+        - resource: "biome check*"
+          effect: allow
+        - resource: "fallow audit*"
+          effect: allow
         - resource: "git status*"
           effect: allow
         - resource: "git diff*"
@@ -372,6 +406,21 @@ roles:
         - resource: "vitest*"
           effect: allow
         - resource: "node --test*"
+          effect: allow
+        # The gates this project runs, so a review can check the claim.
+        - resource: "bunx --bun vitest*"
+          effect: allow
+        - resource: "bun run test*"
+          effect: allow
+        - resource: "bun run typecheck*"
+          effect: allow
+        - resource: "bun run build*"
+          effect: allow
+        - resource: "bun run lint*"
+          effect: allow
+        - resource: "biome check*"
+          effect: allow
+        - resource: "fallow audit*"
           effect: allow
         - resource: "git status*"
           effect: allow
