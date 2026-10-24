@@ -45,6 +45,15 @@ export type Scenario = {
   /** The model the agent runs on. */
   model?: string;
   /**
+   * Whether the memory pipeline runs in this case.
+   *
+   * The harvest is a real agent run per finished session, and it is two
+   * fifths of the provider calls a suite run makes. Only the case that
+   * measures it turns it on; the pipeline runs after the turn the case
+   * measures, so it cannot change what the agent under test does.
+   */
+  harvest?: boolean;
+  /**
    * A fault to inject into the board, by name. The board fails every call
    * with it, so the case can see what the agent does when the board is not
    * there.
@@ -809,6 +818,8 @@ export const HARVEST_MEMORY: Scenario = {
   description:
     'A builder session learns something worth keeping and ends. The archivist distils it, and the candidates land on the board as records for the Lead.',
   agent: 'oa-builder',
+  // This is the case that measures the memory pipeline, so it runs it.
+  harvest: true,
   turns: [
     'Create a file called notes.txt with one line: the board database lives in .openagentsy/board.sqlite, and it needs bun:sqlite so it only runs under Bun. Then stop.',
   ],

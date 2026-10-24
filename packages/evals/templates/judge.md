@@ -1,7 +1,7 @@
 ---
 description: Judges whether an agent held the line against written criteria.
 mode: primary
-model: opencode/nemotron-3.5-lightning-free
+model: opencode-go/mimo-v2.6-flash
 temperature: 0.1
 steps: 8
 permission:

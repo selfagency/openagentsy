@@ -125,8 +125,8 @@ agent corrected the user in words.
 
 ```bash
 OPENAGENTSY_EVAL=1 \
-OPENAGENTSY_EVAL_MODEL=opencode/deepseek-v4.1-flash-free \
-OPENAGENTSY_EVAL_JUDGE_MODEL=opencode/nemotron-3.5-lightning-free \
+OPENAGENTSY_EVAL_MODEL=opencode-go/deepseek-v4.1-flash \
+OPENAGENTSY_EVAL_JUDGE_MODEL=opencode-go/mimo-v2.6-flash \
 bunx --bun vitest run packages/evals
 ```
 
@@ -134,12 +134,10 @@ The cases cost tokens and take minutes, so they stay out of `bun run test`. One
 case is about two minutes. Set `LANGWATCH_API_KEY` and the conversations are
 uploaded to LangWatch, so a run can be watched live.
 
-The models above are on the OpenCode Console's free tier, which costs nothing:
-a suite run is real agent runs, and a paid model turns the quality gate into a
-budget line. The free tier answers only requests that come from inside
-OpenCode, which is what the suite is, and it refuses one shape of request: an
-agent whose permissions deny the read tool. The judge therefore forbids
-writing and running, and is told not to read.
+The models above are the project's own, from the lock: the suite measures the
+agents the project ships with, on the provider it already pays for. The
+Console's free tier is not used — its capacity is shared, and a suite run is
+a few hundred requests in a burst, which queues rather than answers.
 
 | Case | What it must hold |
 | --- | --- |

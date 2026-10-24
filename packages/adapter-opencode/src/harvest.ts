@@ -1,4 +1,5 @@
 import { createReadStream, type ReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { appendAudit, POLICIES } from './guard.js';
@@ -25,6 +26,25 @@ const ARCHIVIST = 'oa-archivist';
 
 /** How much of the transcript the packet carries. */
 const MAX_TRANSCRIPT_CHARS = 12_000;
+
+/**
+ * Whether the memory pipeline runs for this project.
+ *
+ * The harvest is a real agent run per finished session, and it costs a
+ * provider call each time. A project that does not want the memories can
+ * say so: a file named `.openagentsy/harvest` with the word `off` turns it
+ * off, and anything else leaves it on. A pipeline that stops on a typo
+ * loses memories silently, so only the word `off` stops it.
+ */
+export async function harvestEnabled(root: string): Promise<boolean> {
+  let text: string;
+  try {
+    text = await readFile(join(root, '.openagentsy', 'harvest'), 'utf8');
+  } catch {
+    return true;
+  }
+  return text.trim().toLowerCase() !== 'off';
+}
 
 /**
  * The three things a harvest needs from a session runtime.

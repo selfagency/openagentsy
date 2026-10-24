@@ -97,23 +97,23 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
-          # The models the suite runs on. The agents under test and the judge
-          # run on the OpenCode Console free tier, which costs nothing: the
-          # suite runs real agents, and a run costs tokens, so a paid model
-          # turns the quality gate into a budget line. The free tier is
-          # reachable only from inside OpenCode, which is what the suite is.
-          # The variables below swap the models without a code change.
+          # The models the suite runs on: the project's own, from the lock.
           #
-          # The model the agents under test run on. It has to follow a
-          # multi part instruction on the first try, and it has to push back
-          # on a claim that is wrong: the suite measures both.
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode/deepseek-v4.1-flash-free' }}
+          # The suite measures the agents the project ships with, so it runs
+          # them on the models the lock names. That is the point of the
+          # suite: a verdict on a model nobody uses is a verdict on nothing.
+          # It also costs nothing against a monthly budget, because the
+          # provider is the one the project already pays for.
+          #
+          # The free tier of the Console is not used: its capacity is
+          # shared, and a suite run is a few hundred requests in a burst,
+          # which queues rather than answers.
+          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
           # The judge runs on a different family from the model under test,
-          # so it cannot agree with it out of a shared bias. The judge is one
-          # call per trial over the evidence, so it is cheap: a few cents a
-          # run.
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode/mimo-v2.6-flash' }}
-          # The key for the Console, where the free tier lives.
+          # so it cannot agree with it out of a shared bias. It is one call
+          # per trial over the evidence.
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/mimo-v2.6-flash' }}
+          # The key for the provider, which is the Console's Go plan.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # The key for a System One model. The harness uses it to break a tie
           # when the judge cannot decide. The case itself runs without it: the

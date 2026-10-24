@@ -9,7 +9,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { harvest, recordHarvestFailure } from './harvest.js';
+import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
 import { checkWrite } from './write-guard.js';
 
 /**
@@ -331,32 +331,50 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       sessionAgents.delete(sessionID);
       switched.delete(sessionID);
       if (!agent) continue;
-      const role = await roleKeyForAgent(root, agent);
-      // A failure here must not kill the subscription: the rungs would stop
-      // being given back and the failure would be a silence, which is the
-      // one thing the fault cases exist to catch.
-      try {
-        const rungs = await readRungs(root);
-        if (rungs[sessionID]) {
-          delete rungs[sessionID];
-          await writeRungs(root, rungs);
-        }
-        await harvestV2(ctx, root, sessionID, role, agent);
-      } catch (error) {
-        await appendAudit(root, {
-          policyId: POLICIES.eventsFailed.id,
-          policyVersion: POLICIES.eventsFailed.version,
-          actor: agent,
-          action: 'idle',
-          resource: sessionID,
-          effect: 'deny',
-          detail: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await onIdle(ctx, root, sessionID, agent);
     }
   })();
 
   return () => controller.abort();
+}
+
+/**
+ * A session went idle on the V2 path.
+ *
+ * The rungs go back, so the next task in that session starts on the rung the
+ * role was given, and the archivist takes what the session learned.
+ *
+ * A failure here must not kill the subscription: the rungs would stop being
+ * given back and the failure would be a silence, which is the one thing the
+ * fault cases exist to catch.
+ */
+async function onIdle(
+  ctx: V2Context,
+  root: string,
+  sessionID: string,
+  agent: string,
+): Promise<void> {
+  const role = await roleKeyForAgent(root, agent);
+  try {
+    const rungs = await readRungs(root);
+    if (rungs[sessionID]) {
+      delete rungs[sessionID];
+      await writeRungs(root, rungs);
+    }
+    if (await harvestEnabled(root)) {
+      await harvestV2(ctx, root, sessionID, role, agent);
+    }
+  } catch (error) {
+    await appendAudit(root, {
+      policyId: POLICIES.eventsFailed.id,
+      policyVersion: POLICIES.eventsFailed.version,
+      actor: agent,
+      action: 'idle',
+      resource: sessionID,
+      effect: 'deny',
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**

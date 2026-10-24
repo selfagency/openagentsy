@@ -10,7 +10,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { harvest, recordHarvestFailure } from './harvest.js';
+import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
@@ -147,6 +147,7 @@ async function onSessionIdle(
 
   // A harvest that fails must not break the session that is closing, so it
   // is caught here and put on the record.
+  if (!(await harvestEnabled(root))) return;
   try {
     await harvest({
       session: sessionAdapter(client, root),

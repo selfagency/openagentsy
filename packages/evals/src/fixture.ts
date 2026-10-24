@@ -193,7 +193,14 @@ export async function waitForRecord(
 export async function prepare(
   root: string,
   fixture: Fixture,
-  options: { repoRoot: string; boardFault?: string; headless?: boolean; model?: string },
+  options: {
+    repoRoot: string;
+    boardFault?: string;
+    headless?: boolean;
+    model?: string;
+    /** Whether the memory pipeline runs in this case. */
+    harvest?: boolean;
+  },
 ): Promise<CaseState> {
   const state = await seedCase(root, fixture, { repoRoot: options.repoRoot });
 
@@ -242,6 +249,16 @@ export async function prepare(
     join(options.repoRoot, 'packages', 'adapter-opencode', 'dist', 'index.js'),
     join(root, '.opencode', 'plugins', 'openagentsy.js'),
   );
+
+  // The memory pipeline is a real agent run per finished session, and it is
+  // two fifths of the provider calls a suite run makes. Only the case that
+  // measures it needs it, so the rest turn it off: the pipeline runs after
+  // the turn the case measures, so it cannot change what the agent under
+  // test does.
+  if (options.harvest !== true) {
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    await writeFile(join(root, '.openagentsy', 'harvest'), 'off\n', 'utf8');
+  }
   // The judge agent, which has no tools and answers with one JSON object.
   await mkdir(join(root, '.opencode', 'agents'), { recursive: true });
   await copyFile(

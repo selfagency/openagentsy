@@ -140,6 +140,7 @@ async function runTrial(
       headless: true,
       ...(MODEL !== undefined ? { model: MODEL } : {}),
       ...(scenarioCase.boardFault !== undefined ? { boardFault: scenarioCase.boardFault } : {}),
+      ...(scenarioCase.harvest === true ? { harvest: true } : {}),
     });
     // Somebody has to answer the permission requests. A role that
     // asks before it edits a protected path would otherwise wait for
