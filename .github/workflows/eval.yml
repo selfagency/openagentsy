@@ -61,6 +61,8 @@ jobs:
     # the suite costs three times what one pass costs.
     timeout-minutes: 120
     env:
+      # The keys for the providers. The provider in the model id decides
+      # which one a run uses, so the job passes both.
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
       # The key is what makes the run a trace in LangWatch. It is not set by
@@ -72,6 +74,55 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+
+      # The models the suite runs on. The suite measures the agents the
+      # project ships with, so it runs them on the models the lock names: a
+      # verdict on a model nobody uses is a verdict on nothing.
+      #
+      # The builder's model is the model under test, and the reviewer's model
+      # is the judge. The two are not the same family, because the lock keeps
+      # the reviewer on another creator than the builder (the
+      # differentCreatorThan rule in roles.yaml), and a judge that shares a
+      # family with the model it judges can agree with it out of a shared
+      # bias.
+      #
+      # A repository variable still overrides each of them, the way it always
+      # has. Every value that comes from the repository reaches the shell
+      # through the environment, and the model id is checked before it is
+      # exported, so a lock that names something that is not a model id stops
+      # the run instead of riding into it.
+      - name: The models the lock names
+        if: matrix.runtime == 'v1'
+        env:
+          LOCK_FILE: openagentsy.models.lock.json
+          REPO_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL }}
+          REPO_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL }}
+        run: |
+          set -eu
+          if [ ! -f "$LOCK_FILE" ]; then
+            echo "no model lock file: $LOCK_FILE"
+            exit 1
+          fi
+          BUILDER_MODEL=$(jq -r '.roles.builder.model // empty' "$LOCK_FILE")
+          REVIEWER_MODEL=$(jq -r '.roles.reviewer.model // empty' "$LOCK_FILE")
+          if [ -z "$BUILDER_MODEL" ] || [ -z "$REVIEWER_MODEL" ]; then
+            echo "the lock does not name a builder and a reviewer model: $LOCK_FILE"
+            exit 1
+          fi
+          EVAL_MODEL="${REPO_EVAL_MODEL:-$BUILDER_MODEL}"
+          EVAL_JUDGE_MODEL="${REPO_EVAL_JUDGE_MODEL:-$REVIEWER_MODEL}"
+          for MODEL in "$EVAL_MODEL" "$EVAL_JUDGE_MODEL"; do
+            case "$MODEL" in
+              *[!A-Za-z0-9._:/-]*)
+                echo "the lock names a model id that is not one: $MODEL"
+                exit 1
+                ;;
+            esac
+          done
+          echo "model under test: $EVAL_MODEL"
+          echo "judge: $EVAL_JUDGE_MODEL"
+          echo "OPENAGENTSY_EVAL_MODEL=$EVAL_MODEL" >> "$GITHUB_ENV"
+          echo "OPENAGENTSY_EVAL_JUDGE_MODEL=$EVAL_JUDGE_MODEL" >> "$GITHUB_ENV"
 
       # The files that changed, and the cases they reach. The pull request
       # run uses the commits this push carried; the schedule and the manual
@@ -146,15 +197,19 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
         run: |
           # One turn before the suite, on the model the suite will use. A key
           # that is refused makes every turn in the suite wait for an answer
           # that never comes, and a suite that waits for forty minutes says
           # nothing about the code it was testing. This fails in two minutes,
           # with the provider's own error.
-          if ! timeout 120 opencode run --model "$EVAL_MODEL" "Reply with exactly: ok"; then
-            echo "the provider did not answer: the key or the model ($EVAL_MODEL) is wrong"
+          #
+          # The model is the one the suite runs on, read the same way: the
+          # step above put it in the environment, and this reads the same
+          # variable.
+          if ! timeout 120 opencode run --model "$OPENAGENTSY_EVAL_MODEL" "Reply with exactly: ok"; then
+            echo "the provider did not answer: the key or the model ($OPENAGENTSY_EVAL_MODEL) is wrong"
             exit 1
           fi
 
@@ -162,29 +217,18 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
-          # The models the suite runs on: the project's own, from the lock.
+          # The models the suite runs on are already in the environment: the
+          # step above read them from the lock, and a repository variable
+          # still overrides each of them.
           #
-          # The suite measures the agents the project ships with, so it runs
-          # them on the models the lock names. That is the point of the
-          # suite: a verdict on a model nobody uses is a verdict on nothing.
-          # It also costs nothing against a monthly budget, because the
-          # provider is the one the project already pays for.
+          # The model under test is the builder's model and the judge is the
+          # reviewer's model. The two are not the same family, so the judge
+          # cannot agree with the model under test out of a shared bias.
           #
-          # The free tier of the Console is not used: its capacity is
-          # shared, and a suite run is a few hundred requests in a burst,
-          # which queues rather than answers.
-          OPENAGENTSY_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
-          # The judge runs on a different family from the model under test,
-          # so it cannot agree with it out of a shared bias. It is one call
-          # per trial over the evidence.
+          # The key is the one the provider in the model id reads: the job
+          # passes the Console key and the Ollama Cloud key, and the provider
+          # decides which one the run uses.
           #
-          # Measured on the four cases that discriminate (the false premise,
-          # the budget stop, the lease revoke and the fault lease revoked),
-          # this judge decides all four. The flash model next to it answered
-          # "inconclusive" twice, which is a case that did not pass.
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/minimax-m3.1-flash' }}
-          # The key for the provider, which is the Console's Go plan.
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # The key for a System One model. The harness uses it to break a tie
           # when the judge cannot decide. The case itself runs without it: the
           # agent under test must not reach a classifier.
@@ -206,7 +250,11 @@ jobs:
           rc=0
           for run in $(seq 1 "$EVAL_RUNS"); do
             echo "run $run of $EVAL_RUNS"
-            bunx --bun vitest run packages/evals || rc=1
+            # The verbose reporter prints each case as it finishes. The suite
+            # is one test file, so the default reporter prints nothing at all
+            # until every case is done, and a run that looks stalled is a run
+            # nobody can tell from a hung one.
+            bunx --bun vitest run --reporter=verbose packages/evals || rc=1
           done
           if [ "$rc" != "0" ]; then
             echo '--- the eval server log ---'
