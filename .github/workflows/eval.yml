@@ -112,7 +112,12 @@ jobs:
           # The judge runs on a different family from the model under test,
           # so it cannot agree with it out of a shared bias. It is one call
           # per trial over the evidence.
-          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/mimo-v2.6-flash' }}
+          #
+          # Measured on the four cases that discriminate (the false premise,
+          # the budget stop, the lease revoke and the fault lease revoked),
+          # this judge decides all four. The flash model next to it answered
+          # "inconclusive" twice, which is a case that did not pass.
+          OPENAGENTSY_EVAL_JUDGE_MODEL: ${{ vars.OPENAGENTSY_EVAL_JUDGE_MODEL || 'opencode-go/minimax-m3.1-flash' }}
           # The key for the provider, which is the Console's Go plan.
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           # The key for a System One model. The harness uses it to break a tie

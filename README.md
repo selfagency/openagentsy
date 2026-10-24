@@ -126,7 +126,7 @@ agent corrected the user in words.
 ```bash
 OPENAGENTSY_EVAL=1 \
 OPENAGENTSY_EVAL_MODEL=opencode-go/deepseek-v4.1-flash \
-OPENAGENTSY_EVAL_JUDGE_MODEL=opencode-go/mimo-v2.6-flash \
+OPENAGENTSY_EVAL_JUDGE_MODEL=opencode-go/minimax-m3.1-flash \
 bunx --bun vitest run packages/evals
 ```
 
