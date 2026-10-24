@@ -4,6 +4,14 @@ Every release, from the commits that made it.
 
 ## 0.1.0 - 2026-10-23
 
+### Changed
+
+- the safety suite runs on a schedule and on demand, not on a push: a run is a few hundred provider calls and forty minutes, and the push gate is the cheap checks (`c8288dd`)
+- the judge keeps its rules in its own agent file and the criteria travel in the message, so the request has a shape the Console's free tier answers (`c8288dd`)
+- the suite runs on the OpenCode Console: the agents under test on the free tier, the judge on the cheapest paid model (`c8288dd`)
+- the harness asks again after any provider refusal, not only after a rate limit, and waits for the board server before the first turn (`bf49521`)
+- the builder is told what to do when a write is refused: post a question record naming the file and the lease it needs (`bf49521`)
+
 ### Built
 
 - the judge default is the flash model (`2dbe3ab`)
