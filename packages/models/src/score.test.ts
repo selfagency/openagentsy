@@ -310,3 +310,92 @@ describe('selectModel', () => {
     expect(result.rejected[0]?.openCodeId).toBe('rank-2');
   });
 });
+
+describe('the flash preference', () => {
+  const GLM = model({ openCodeId: 'glm-5.3', id: 'glm-5.3' });
+  const GLM_FLASH = model({ openCodeId: 'glm-5.3-flash', id: 'glm-5.3-flash' });
+
+  it('takes the flash variant of the family the role would have got', () => {
+    const result = selectModel({
+      profile: PROFILE,
+      preferFlash: true,
+      candidates: [
+        candidate({ model: GLM, ranks: { coding: rank('coding', 8) } }),
+        candidate({ model: GLM_FLASH, ranks: { coding: rank('coding', 12) } }),
+      ],
+    });
+    expect(result.model.openCodeId).toBe('glm-5.3-flash');
+    expect(result.flashSwap?.passedOver.openCodeId).toBe('glm-5.3');
+    expect(result.flashSwap?.passedOverRank).toBe(8);
+    expect(result.flashSwap?.takenRank).toBe(12);
+  });
+
+  it('leaves a role with no flash variant alone', () => {
+    const result = selectModel({
+      profile: PROFILE,
+      preferFlash: true,
+      candidates: [
+        candidate({
+          model: model({ openCodeId: 'kimi-k3', id: 'kimi-k3' }),
+          ranks: { coding: rank('coding', 4) },
+        }),
+      ],
+    });
+    expect(result.model.openCodeId).toBe('kimi-k3');
+    expect(result.flashSwap).toBeUndefined();
+  });
+
+  it('keeps the model when the flash variant cannot call tools', () => {
+    const result = selectModel({
+      profile: PROFILE,
+      preferFlash: true,
+      candidates: [
+        candidate({ model: GLM, ranks: { coding: rank('coding', 8) } }),
+        candidate({
+          model: model({ openCodeId: 'glm-5.3-flash', id: 'glm-5.3-flash', tools: false }),
+          ranks: { coding: rank('coding', 12) },
+        }),
+      ],
+    });
+    expect(result.model.openCodeId).toBe('glm-5.3');
+    expect(result.flashSwap).toBeUndefined();
+  });
+
+  it('takes a flash variant that does not clear the rank bar', () => {
+    const result = selectModel({
+      profile: { ...PROFILE, minimumRank: 40 },
+      preferFlash: true,
+      candidates: [
+        candidate({ model: GLM, ranks: { coding: rank('coding', 8) } }),
+        candidate({ model: GLM_FLASH, ranks: { coding: rank('coding', 60) } }),
+      ],
+    });
+    expect(result.model.openCodeId).toBe('glm-5.3-flash');
+    expect(result.rejected.map((entry) => entry.openCodeId)).not.toContain('glm-5.3-flash');
+  });
+
+  it('keeps the quality first pick when the preference is not asked for', () => {
+    const result = selectModel({
+      profile: PROFILE,
+      candidates: [
+        candidate({ model: GLM, ranks: { coding: rank('coding', 8) } }),
+        candidate({ model: GLM_FLASH, ranks: { coding: rank('coding', 12) } }),
+      ],
+    });
+    expect(result.model.openCodeId).toBe('glm-5.3');
+    expect(result.flashSwap).toBeUndefined();
+  });
+
+  it('names the model it passed over and the rank of both', () => {
+    const result = selectModel({
+      profile: PROFILE,
+      preferFlash: true,
+      candidates: [
+        candidate({ model: GLM, ranks: { coding: rank('coding', 8) } }),
+        candidate({ model: GLM_FLASH, ranks: { coding: rank('coding', 12) } }),
+      ],
+    });
+    expect(result.reason).toContain('coding rank 12');
+    expect(result.reason).toContain('flash variant of glm-5.3 (coding rank 8)');
+  });
+});
