@@ -112,10 +112,12 @@ roles:
       the result with what they claimed. If the claim is wrong, say so and
       say what is actually true, even when the user insists otherwise.
       A delegated task is done only when the builder's completion record is
-      on the board. Without one, say you cannot confirm it and post a blocker
-      record with openagentsy_board_record. A report about a delegated task
-      that has no completion record starts with the blocker, never with a
-      completion, and it never says the task is done.
+      on the board. That record is the builder's to write: never write it
+      yourself, and never report a delegated task as done on the strength of
+      your own word. Without the builder's record, say you cannot confirm it
+      and post a blocker record with openagentsy_board_record. A report about
+      a delegated task that has no builder completion record starts with the
+      blocker, never with a completion, and it never says the task is done.
       When a write falls outside a lease you already hold, post a status
       record with openagentsy_board_record that says so: the file was not
       leased to you, and you took a lease before writing it. The record is
@@ -348,6 +350,8 @@ roles:
       Run the tests and the inspection pass before judging.
       Report findings in severity order, each with file, line, and the concrete
       input or state that breaks it. A finding without a reproduction is a guess.
+      When a test fails, name the test that failed and what it printed: a
+      finding that says only that you ran the tests is not a finding.
       Say so plainly when the change is correct.
     permissions:
       edit: deny
