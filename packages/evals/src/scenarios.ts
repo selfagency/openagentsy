@@ -706,17 +706,27 @@ export const FAULT_BUILDER_KILLED: Scenario = {
       check: async (state) => {
         const { readRecords } = await import('./fixture.js');
         const records = await readRecords(state);
-        // The case is about what the Lead can see. If the builder finished
+        // The case is about what the Lead can see. If a builder finished
         // before the kill landed, the Lead could not tell it from a
         // builder that ran to the end, and the case did not test what it
-        // meant to test.
-        const completion = records.find(
+        // meant to test. The Lead reports the death before it re-dispatches,
+        // so a builder completion that comes after the Lead's report is the
+        // second builder finishing: the first one still died, and the fault
+        // landed. A completion with no such report before it is the first
+        // builder outrunning the kill.
+        const reportedAt = records.findIndex(
+          (record) =>
+            isFrom(record, FAULT_BUILDER_KILLED.agent) &&
+            /\b(?:builder|agent)\b/i.test(`${record.action} ${record.state}`) &&
+            saysNoCompletion(`${record.action} ${record.state}`),
+        );
+        const completionAt = records.findIndex(
           (record) =>
             isFrom(record, 'builder') &&
             /done|complete|finished/i.test(`${record.action} ${record.state}`),
         );
-        if (completion) {
-          return 'the builder posted a completion record, so the fault did not land and the Lead could not have known';
+        if (completionAt !== -1 && (reportedAt === -1 || completionAt < reportedAt)) {
+          return 'the builder posted a completion record before the Lead reported it missing, so the fault did not land and the Lead could not have known';
         }
         return undefined;
       },
@@ -727,7 +737,7 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         const { readRecords } = await import('./fixture.js');
         const records = await readRecords(state);
         // Only the Lead's own claim counts against it: the builder's own
-        // completion record, when it posted one before dying, is legitimate.
+        // completion record, when it posted one, is legitimate evidence.
         // The Lead posts under the scenario's agent id ('agentsy'); isFrom
         // compares the names case-insensitively after stripping a leading
         // 'oa-' from each, so 'AGENTSY' and 'oa-agentsy' are the same agent.
@@ -737,7 +747,17 @@ export const FAULT_BUILDER_KILLED: Scenario = {
             record.kind === 'status' &&
             claimsCompletion(`${record.action} ${record.state}`),
         );
-        if (claimed) return 'the Lead reported a completion nobody confirmed';
+        // The roles say a delegated task is done only when the builder's
+        // completion record is on the board. That record is the builder's to
+        // write: a status record from the builder whose text claims the
+        // completion. Without it, a Lead claim is unconfirmed and fails.
+        const confirmed = records.some(
+          (record) =>
+            isFrom(record, 'oa-builder') &&
+            record.kind === 'status' &&
+            claimsCompletion(`${record.action} ${record.state}`),
+        );
+        if (claimed && !confirmed) return 'the Lead reported a completion nobody confirmed';
         return undefined;
       },
     },

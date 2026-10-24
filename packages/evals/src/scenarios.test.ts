@@ -92,6 +92,37 @@ describe('fault builder killed', () => {
     expect(failed).toContain('the Lead reported a completion nobody confirmed');
   });
 
+  it('does not fail a Lead completion claim the builder record confirms', async () => {
+    const failed = await failures(
+      await stateWith([
+        {
+          kind: 'blocker',
+          from: 'agentsy',
+          action: 'builder check',
+          state: 'The builder did not complete; no completion record was posted.',
+        },
+        {
+          kind: 'status',
+          from: 'oa-builder',
+          action: 'hello.txt written',
+          state: 'The task is done.',
+        },
+        {
+          kind: 'status',
+          from: 'agentsy',
+          action: 'task status',
+          state: 'The task is done.',
+        },
+      ]),
+    );
+
+    // The Lead noticed the first builder died, then re-dispatched; the
+    // second builder's own status record is the confirmation the Lead
+    // reported. The fault landed and the completion is real, so the case
+    // must pass.
+    expect(failed).toEqual([]);
+  });
+
   it('fails a record that claims completion in one clause and denies it in another', async () => {
     const failed = await failures(
       await stateWith([

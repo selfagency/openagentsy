@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { closeSync, fstatSync, openSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
@@ -30,8 +30,11 @@ export type OpenCodeHarness = {
   /**
    * The host errors the server wrote since it started, each with the case it
    * belongs to. `stop` reads the same list and throws when it is not empty.
+   *
+   * The sessions the harness killed are excluded: their abort is the fault
+   * the case injected, not a host failure.
    */
-  hostErrors: () => Promise<HostError[]>;
+  hostErrors: (killedSessions?: ReadonlySet<string>) => Promise<HostError[]>;
   /**
    * Say which case a session belongs to, so a host error that names it is
    * attributed instead of falling back to the suite as a whole.
@@ -204,16 +207,41 @@ export function attributeHostErrors(
 }
 
 /**
+ * The host errors that are faults of the run.
+ *
+ * One error is expected: the case that kills a builder on purpose
+ * (`fault builder killed`) aborts the builder's session mid-turn, and the
+ * server writes `level=ERROR ... error=Aborted` against that session. That
+ * line is the case proving the fault landed, not the host failing, so it must
+ * not fail the suite. Every other ERROR or FATAL block is still a fault: the
+ * case did not ask the server to abort it. A block that names no session
+ * cannot be tied to a kill and is kept.
+ *
+ * The killed sessions are the ones the watches resolved to: a watch that gave
+ * up resolves undefined and contributes nothing.
+ */
+export function hostFaults(
+  blocks: readonly HostErrorBlock[],
+  killedSessions: ReadonlySet<string>,
+): HostErrorBlock[] {
+  return blocks.filter(
+    (block) => block.sessionID === undefined || !killedSessions.has(block.sessionID),
+  );
+}
+
+/**
  * Read the host errors appended to a log file after a byte offset.
  *
  * The offset is what makes this testable without a server: the caller passes
  * the size the file had when the run started, and only what was appended
- * afterwards is read.
+ * afterwards is read. A block naming a session the harness killed is the
+ * injected fault, not a host error, so it is dropped here.
  */
 export async function readHostErrors(
   logFile: string,
   fromOffset = 0,
   sessions: ReadonlyMap<string, string> = new Map(),
+  killedSessions: ReadonlySet<string> = new Set(),
 ): Promise<HostError[]> {
   let bytes: Buffer;
   try {
@@ -232,7 +260,10 @@ export async function readHostErrors(
     if (newline === -1) return [];
     start = newline + 1;
   }
-  return attributeHostErrors(hostErrorsIn(bytes.subarray(start).toString('utf8')), sessions);
+  return attributeHostErrors(
+    hostFaults(hostErrorsIn(bytes.subarray(start).toString('utf8')), killedSessions),
+    sessions,
+  );
 }
 
 /**
@@ -278,6 +309,90 @@ async function waitForServer(
 }
 
 /**
+ * How old a leftover harness file must be before a new run sweeps it.
+ *
+ * A run holds its database and log while the server is serving. A suite can
+ * be re-run back to back, and a slow case can outlive the run before it, so a
+ * file that is younger than a day may still belong to a run in progress.
+ * Twenty four hours is far longer than any suite run, so a file this old
+ * belongs to a run that is over; a fresh one is left strictly alone.
+ */
+export const HARNESS_SWEEP_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** The prefix every file a harness run names carries, so a sweep can find them. */
+const HARNESS_FILE_PREFIX = 'openagentsy-eval-';
+
+/** What the harness creates: the server database and its sidecars, and the log. */
+const HARNESS_FILE_SUFFIXES = ['.db', '.db-shm', '.db-wal', '.log'];
+
+/**
+ * The files one run owns: its database, the SQLite sidecars beside it, and
+ * (when the harness named it) its log.
+ */
+function harnessFiles(database: string, logFile?: string): string[] {
+  const files = [database, `${database}-shm`, `${database}-wal`];
+  return logFile === undefined ? files : [...files, logFile];
+}
+
+/**
+ * Delete the files one run owns, and nothing else.
+ *
+ * Only paths the harness itself named are passed here: the board database,
+ * its records, its leases, and every file outside the harness are never in
+ * the list. A file another process still holds is left for a later sweep
+ * rather than failing the teardown.
+ */
+export async function removeHarnessFiles(database: string, logFile?: string): Promise<string[]> {
+  const removed: string[] = [];
+  for (const file of harnessFiles(database, logFile)) {
+    try {
+      await rm(file, { force: true });
+      removed.push(file);
+    } catch {
+      // Held by a process that has not exited yet; a later sweep takes it.
+    }
+  }
+  return removed;
+}
+
+/**
+ * Remove the files earlier runs left in the temp directory.
+ *
+ * A run killed before `stop` leaves its database and log behind, and the
+ * suite starts a fresh one each time. Only a file this harness named and that
+ * is older than `HARNESS_SWEEP_AGE_MS` is removed: a file that is not ours, or
+ * one a live run is still using, is never touched. A sweep is best effort and
+ * never fails the run that starts.
+ */
+export async function sweepStaleHarnessFiles(
+  dir: string = tmpdir(),
+  now: number = Date.now(),
+): Promise<string[]> {
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!name.startsWith(HARNESS_FILE_PREFIX)) continue;
+    if (!HARNESS_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
+    const file = join(dir, name);
+    try {
+      const info = await stat(file);
+      if (!info.isFile()) continue;
+      if (now - info.mtimeMs <= HARNESS_SWEEP_AGE_MS) continue;
+      await rm(file, { force: true });
+      removed.push(file);
+    } catch {
+      // A file that vanished or is held by a live run is not ours to remove.
+    }
+  }
+  return removed;
+}
+
+/**
  * Start one OpenCode server for the whole suite.
  *
  * The server serves any directory it is asked for, so one process can drive
@@ -292,9 +407,18 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // started with `--print-logs`, so its structured lines go to stderr and
   // land in this file; without the flag they go to the app log in the user's
   // home directory and this file holds only the plain output.
+  // A run that was killed leaves its database and log behind. Sweep the
+  // leftovers of earlier runs before naming this run's files, so a stale file
+  // with this run's port is gone before it is reused. Only files older than
+  // `HARNESS_SWEEP_AGE_MS` are swept, so a live run keeps its own.
+  await sweepStaleHarnessFiles();
+
   const logFile =
     process.env.OPENAGENTSY_EVAL_SERVER_LOG ??
     join(tmpdir(), `openagentsy-eval-server-${port}.log`);
+  // A log path from the environment belongs to the caller. The harness only
+  // removes a log whose name it chose itself.
+  const ownsLogFile = process.env.OPENAGENTSY_EVAL_SERVER_LOG === undefined;
   const logFd = openSync(logFile, 'a');
   // Only what this run appends is this run's fault. A log path that already
   // exists would otherwise carry an earlier run's errors into this suite.
@@ -324,6 +448,9 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   } catch (error) {
     child.kill('SIGTERM');
     closeSync(logFd);
+    // The database is this run's and is dead weight once the server is gone.
+    // The log stays: it is the only record of why the server never answered.
+    await removeHarnessFiles(database);
     throw error;
   }
 
@@ -334,7 +461,8 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
 
   const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
   const sessions = new Map<string, string>();
-  const hostErrors = (): Promise<HostError[]> => readHostErrors(logFile, logStart, sessions);
+  const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostError[]> =>
+    readHostErrors(logFile, logStart, sessions, killedSessions);
 
   return {
     client,
@@ -348,6 +476,16 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // A watcher that is still looking for a session stops looking: a
       // pending timer keeps the process alive.
       for (const watch of watches) watch.stop();
+      // The sessions the harness killed on purpose are the case's fault, not
+      // the host's: the server logs each abort at ERROR. The watches resolve
+      // to the id they killed (or undefined when they gave up), so they are
+      // the list of errors the cases asked for. Collect it before the server
+      // goes away, while an abort that is still in flight can still land.
+      const killedSessions = new Set(
+        (await Promise.all(watches.map((watch) => watch.killed))).filter(
+          (id): id is string => id !== undefined,
+        ),
+      );
       child.kill('SIGTERM');
       // The server writes to the log file it was given, and it may still be
       // writing when the process is asked to stop. Waiting for the exit
@@ -366,8 +504,17 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // The policy from `hostErrorsIn`: a host fault is a failure of the run.
       // Throwing here fails the suite at teardown, so no green case result
       // can hide an error the server wrote while it was serving them. It reads
-      // through `hostErrors`, the same view a caller asking mid-run gets.
-      const faults = await hostErrors();
+      // through `hostErrors`, the same view a caller asking mid-run gets, so
+      // the log is read before it is removed.
+      let faults: HostError[] = [];
+      try {
+        faults = await hostErrors(killedSessions);
+      } finally {
+        // This run's database, sidecars and (when it named it) log are garbage
+        // once the server is gone. Nothing else is in the list: not the board
+        // database, not its records or leases, and no file that is not ours.
+        await removeHarnessFiles(database, ownsLogFile ? logFile : undefined);
+      }
       if (faults.length > 0) {
         const detail = faults
           .map((fault) => `[${fault.case}] ${fault.line.replace(/\n/g, '\n  ')}`)

@@ -1,13 +1,20 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { OpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it } from 'vitest';
+
 import {
   attributeHostErrors,
+  HARNESS_SWEEP_AGE_MS,
   hostErrorsIn,
+  hostFaults,
+  killSessionWhenItAppears,
   readHostErrors,
+  removeHarnessFiles,
   replyPartsOf,
   serveArgs,
+  sweepStaleHarnessFiles,
 } from './opencode.js';
 
 describe('replyPartsOf', () => {
@@ -78,6 +85,20 @@ const ERROR_BLOCK = [
 ].join('\n');
 
 /**
+ * The ERROR the server wrote when the harness aborted a session on purpose.
+ *
+ * Measured on 2026-10-24 in `fault builder killed`: the case kills the
+ * builder mid-turn, and the abort is the fault the case injected.
+ */
+const KILLED_ERROR_BLOCK =
+  'timestamp=2026-10-24T17:28:21.450Z level=ERROR run=c09f37f0 message=process session.id=ses_e910b2c07ffepW3IvLHGdkxrnz messageID=msg_16ef4d406001j75YtQzFodz84w error=Aborted stack=undefined';
+
+/** The same abort line, against any session. */
+function abortBlock(sessionID: string): string {
+  return `timestamp=2026-10-24T17:28:21.450Z level=ERROR run=c09f37f0 message=process session.id=${sessionID} messageID=msg_16ef4d406001j75YtQzFodz84w error=Aborted stack=undefined`;
+}
+
+/**
  * The line shape measured in a real server log.
  *
  * The server names the session `sessionID=`, not `session.id=`, and that is
@@ -101,6 +122,71 @@ describe('serveArgs', () => {
       '127.0.0.1',
       '--print-logs',
     ]);
+  });
+});
+
+describe('harness files', () => {
+  it('deletes the database, its sidecars and the log it named on stop', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'openagentsy-harness-files-'));
+    const database = join(dir, 'openagentsy-eval-40123.db');
+    const log = join(dir, 'openagentsy-eval-server-40123.log');
+    try {
+      for (const file of [database, `${database}-shm`, `${database}-wal`, log]) {
+        await writeFile(file, 'x', 'utf8');
+      }
+
+      const removed = await removeHarnessFiles(database, log);
+
+      expect(removed).toHaveLength(4);
+      for (const file of [database, `${database}-shm`, `${database}-wal`, log]) {
+        await expect(stat(file)).rejects.toThrow();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves a log the caller named', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'openagentsy-harness-files-'));
+    const database = join(dir, 'openagentsy-eval-40124.db');
+    const log = join(dir, 'caller.log');
+    try {
+      await writeFile(database, 'x', 'utf8');
+      await writeFile(log, 'x', 'utf8');
+
+      // No log argument: the path was not the harness's to remove.
+      await removeHarnessFiles(database);
+
+      await expect(stat(database)).rejects.toThrow();
+      expect((await stat(log)).isFile()).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('sweeps a stale file and leaves a fresh one', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'openagentsy-harness-sweep-'));
+    const stale = join(dir, 'openagentsy-eval-40001.db');
+    const fresh = join(dir, 'openagentsy-eval-40002.log');
+    const foreign = join(dir, 'notes.txt');
+    try {
+      for (const file of [stale, fresh, foreign]) await writeFile(file, 'x', 'utf8');
+      const now = Date.now();
+      const old = new Date(now - HARNESS_SWEEP_AGE_MS - 60_000);
+      await utimes(stale, old, old);
+      await utimes(foreign, old, old);
+
+      const removed = await sweepStaleHarnessFiles(dir, now);
+
+      expect(removed).toContain(stale);
+      await expect(stat(stale)).rejects.toThrow();
+      // A run that is still going on keeps its file, and a file that is not
+      // ours is never in the list.
+      expect((await stat(fresh)).isFile()).toBe(true);
+      expect((await stat(foreign)).isFile()).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -197,5 +283,49 @@ describe('host errors', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('host errors the case injected', () => {
+  const killed = 'ses_e910b2c07ffepW3IvLHGdkxrnz';
+
+  it('does not treat an error naming a killed session as a host fault', () => {
+    const faults = hostFaults(hostErrorsIn(KILLED_ERROR_BLOCK), new Set([killed]));
+    expect(faults).toEqual([]);
+  });
+
+  it('keeps an error naming a session the harness did not kill', () => {
+    const faults = hostFaults(hostErrorsIn(abortBlock('ses_other')), new Set([killed]));
+    expect(faults).toHaveLength(1);
+    expect(faults[0]?.sessionID).toBe('ses_other');
+  });
+
+  it('excludes the session the watch resolved', async () => {
+    const aborted: string[] = [];
+    const client = {
+      session: {
+        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
+        abort: async ({ path }: { path: { id: string } }) => {
+          aborted.push(path.id);
+          return {};
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+    });
+    const killedSession = await watch.killed;
+    watch.stop();
+
+    expect(killedSession).toBe('ses_killed');
+    expect(aborted).toEqual(['ses_killed']);
+    const faults = hostFaults(
+      hostErrorsIn(`${abortBlock('ses_killed')}\n${abortBlock('ses_other')}`),
+      new Set(killedSession === undefined ? [] : [killedSession]),
+    );
+    expect(faults).toHaveLength(1);
+    expect(faults[0]?.sessionID).toBe('ses_other');
   });
 });
