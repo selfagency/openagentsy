@@ -7,6 +7,7 @@
  */
 
 import type { HarvestSession } from './harvest.js';
+import { type PruneSessionRow, pruneHarvestChildren } from './harvest.js';
 
 export type ProviderModelInfo = {
   variants?: Record<string, Record<string, unknown>>;
@@ -29,6 +30,25 @@ export type SessionClient = {
     path: { id: string };
     query?: { directory?: string };
   }) => Promise<{ data?: { id?: string }; error?: { name?: string } }>;
+  /**
+   * List the sessions of a directory.
+   *
+   * The V1 SDK type omits `agent`, but the server row carries it (the V2
+   * type keeps it), so the row is typed with it optional: a runtime that
+   * does not send it leaves the janitor with nothing to identify.
+   */
+  list: (options: { query?: { directory?: string } }) => Promise<{ data?: PruneSessionRow[] }>;
+  /**
+   * Delete a session and all its data.
+   *
+   * A row that is already gone answers with the typed `NotFoundError`, or
+   * with the wrapped form under `throwOnError`. That is the same end state
+   * as a delete that succeeded, so the adapter treats it as a no-op.
+   */
+  delete: (options: {
+    path: { id: string };
+    query?: { directory?: string };
+  }) => Promise<{ data?: boolean; error?: { name?: string } }>;
   messages: (options: {
     path: { id: string };
     query?: { directory?: string };
@@ -113,6 +133,36 @@ export function sessionAdapter(
         body: { agent, parts: [{ type: 'text', text }] },
         query: { directory },
       });
+    },
+    prune: async () => {
+      await pruneHarvestChildren(
+        {
+          list: async () => {
+            const listed = await client.session.list({ query: { directory } });
+            return listed.data ?? [];
+          },
+          delete: async (sessionID) => {
+            let removed: { data?: boolean; error?: { name?: string } };
+            try {
+              removed = await client.session.delete({
+                path: { id: sessionID },
+                query: { directory },
+              });
+            } catch (error) {
+              // Deleting a row that is already gone asks for the same end
+              // state, so it is not a failure.
+              if (isNotFound(error)) return;
+              throw error;
+            }
+            if (removed.error !== undefined && !isNotFound(removed.error)) {
+              throw new Error(
+                `the session delete for ${sessionID} failed: ${removed.error.name ?? 'unknown error'}`,
+              );
+            }
+          },
+        },
+        directory,
+      );
     },
   };
 }

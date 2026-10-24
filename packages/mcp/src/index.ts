@@ -24,6 +24,7 @@ import {
   recordUsage,
   releaseLease,
   revokeLease,
+  rotateAudit,
   setBudget,
 } from '@openagentsy/core';
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
@@ -673,3 +674,32 @@ server.registerTool(
 );
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+/** Report on stderr: stdout belongs to the MCP transport. */
+function reportRotation(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
+// The audit log is appended by every decision and has no other owner, so it
+// grows without a bound. Rotation runs after the server is serving: nothing
+// waits for it, and a rotation that fails is reported and swallowed, never
+// taking the board down. Only the audit log and its numbered archives under
+// `.openagentsy` are touched; the board database, the records, the leases,
+// and every file outside that directory are never touched.
+void rotateAudit(auditPath)
+  .then((result) => {
+    if (result.error !== undefined) {
+      reportRotation(`audit rotation skipped: ${result.error}`);
+      return;
+    }
+    if (!result.rotated) return;
+    const dropped = result.dropped === undefined ? '' : `, dropped ${result.dropped}`;
+    reportRotation(
+      `audit rotated: ${result.movedLines} lines (${result.movedBytes} bytes) to ${result.archive}${dropped}`,
+    );
+  })
+  .catch((error: unknown) => {
+    reportRotation(
+      `audit rotation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
