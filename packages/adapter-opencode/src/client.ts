@@ -18,6 +18,17 @@ export type SessionClient = {
     body: { title: string; parentID?: string };
     query?: { directory?: string };
   }) => Promise<{ data?: { id?: string } }>;
+  /**
+   * Look a session up.
+   *
+   * The SDK answers with `data` when the row exists and with the typed
+   * `NotFoundError` when it does not. It returns the error rather than
+   * throwing unless the client was built with `throwOnError`.
+   */
+  get: (options: {
+    path: { id: string };
+    query?: { directory?: string };
+  }) => Promise<{ data?: { id?: string }; error?: { name?: string } }>;
   messages: (options: {
     path: { id: string };
     query?: { directory?: string };
@@ -71,6 +82,31 @@ export function sessionAdapter(
       });
       return created.data?.id;
     },
+    exists: async (sessionID) => {
+      let found: { data?: { id?: string }; error?: { name?: string } };
+      try {
+        found = await client.session.get({
+          path: { id: sessionID },
+          query: { directory },
+        });
+      } catch (error) {
+        // A client built with throwOnError reports the typed error as a throw.
+        if (isNotFound(error)) return false;
+        throw error;
+      }
+      if (found.error !== undefined) {
+        if (isNotFound(found.error)) return false;
+        // Any other error is the server not answering the question. It must
+        // not be read as "present": the session is left unprompted.
+        throw new Error(
+          `the session lookup for ${sessionID} failed: ${found.error.name ?? 'unknown error'}`,
+        );
+      }
+      if (found.data === undefined) {
+        throw new Error(`the session lookup for ${sessionID} answered with no session`);
+      }
+      return true;
+    },
     prompt: async ({ sessionID, agent, text }) => {
       await client.session.promptAsync({
         path: { id: sessionID },
@@ -79,4 +115,29 @@ export function sessionAdapter(
       });
     },
   };
+}
+
+/**
+ * Whether an error is the SDK's typed "not found".
+ *
+ * Two shapes are accepted:
+ *
+ * - the typed error itself, `{ name: 'NotFoundError' }`, which the SDK
+ *   returns on the response and throws when `throwOnError` is set;
+ * - the plain `Error` the SDK's error interceptor builds under
+ *   `throwOnError`: its own `name` is `Error`, and the parsed body sits at
+ *   `cause.body`, so `{ cause: { body: { name: 'NotFoundError' } } }` is
+ *   the same answer as the typed error.
+ */
+function isNotFound(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  if ((value as { name?: unknown }).name === 'NotFoundError') return true;
+  const cause = (value as { cause?: unknown }).cause;
+  if (typeof cause !== 'object' || cause === null) return false;
+  const body = (cause as { body?: unknown }).body;
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    (body as { name?: unknown }).name === 'NotFoundError'
+  );
 }

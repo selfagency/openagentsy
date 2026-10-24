@@ -66,6 +66,18 @@ export type HarvestSession = {
   create: (input: { title: string; parentID: string }) => Promise<string | undefined>;
   /** Hand the archivist its packet. */
   prompt: (input: { sessionID: string; agent: string; text: string }) => Promise<void>;
+  /**
+   * Whether a session still exists, asked of the server.
+   *
+   * It is required, not optional: a runtime that cannot answer must say so
+   * rather than leave the harvest to guess. A message list cannot answer
+   * this: a session that exists and has not been spoken in yet and a session
+   * that was deleted both answer with no messages, so an empty list proves
+   * neither. The archivist is created as a child of the session that is
+   * ending; when that session is deleted the child goes with it, and the
+   * server's own lookup is the only answer that can tell the two apart.
+   */
+  exists: (sessionID: string) => Promise<boolean>;
 };
 
 export type HarvestInput = {
@@ -110,6 +122,32 @@ export async function harvest(
   });
   if (archivistSession === undefined) {
     return { harvested: false, reason: 'the server created no session for the archivist' };
+  }
+
+  // The child was just created, but the session it hangs from can be deleted
+  // while the archivist works: the delete cascades to the child, and the next
+  // message insert fails the foreign key instead of reaching the archivist.
+  // An empty message list is not proof the child is gone (a fresh session has
+  // none either), so the server is asked for the row itself.
+  //
+  // A runtime that cannot answer is never guessed at: prompting a session
+  // that may be gone is the failure this check exists to prevent. A lookup
+  // that throws is a failure on the record, not a prompt.
+  let present: boolean;
+  try {
+    present = await session.exists(archivistSession);
+  } catch (error) {
+    const failure =
+      error instanceof Error
+        ? error
+        : new Error('the runtime cannot confirm that a session still exists');
+    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    return { harvested: false, reason: failure.message };
+  }
+  if (!present) {
+    const error = new Error(`the archivist session ${archivistSession} no longer exists`);
+    await recordHarvestFailure(root, { agent, sessionID, error });
+    return { harvested: false, reason: error.message };
   }
 
   await session.prompt({ sessionID: archivistSession, agent: ARCHIVIST, text: packet });
