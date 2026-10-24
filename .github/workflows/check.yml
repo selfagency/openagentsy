@@ -43,7 +43,7 @@ jobs:
           GATE_BEFORE: ${{ github.event.before }}
         run: |
           if [ -n "$GATE_BASE_REF" ]; then
-            bunx fallow audit --health-baseline .fallow/health-baseline.json --base origin/$GATE_BASE_REF --format human --quiet
+            bunx fallow audit --health-baseline .fallow/health-baseline.json --base "origin/$GATE_BASE_REF" --format human --quiet
           else
             bunx fallow audit --health-baseline .fallow/health-baseline.json --base "$GATE_BEFORE" --format human --quiet
           fi

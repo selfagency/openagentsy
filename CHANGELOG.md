@@ -57,6 +57,7 @@ Every release, from the commits that made it.
 
 ### Fixed
 
+- the event data reaches the shell through the environment, never through the script: a value the workflow interpolates into a run block is a value a pull request can write
 - every role in a case runs on the model under test; the archivist ran on the lock's model, so a free provider's failure showed up as a case that failed for the wrong reason (`42abf58`)
 - the reporting section showed a bare JSON block, and an agent that read "post one board record" wrote the JSON to a file; it names the tool now (`42abf58`)
 - a climb leaves a synthetic message at the end of the session, and the harness took it as the reply, so a case where the agent climbed had no reply at all (`7295453`)

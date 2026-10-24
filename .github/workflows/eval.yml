@@ -80,18 +80,27 @@ jobs:
       # The pull request's whole diff is the wrong scope: the release pull
       # request carries every change since the last release, so every push
       # to it would run every case, over and over, for the same code.
+      #
+      # The event data comes in through the environment, never through the
+      # script: a value the workflow interpolates into a run block is a
+      # value a pull request can write.
       - name: The files that changed
         id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          EVENT_SHA: ${{ github.event.sha }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
+          if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "files=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          BEFORE="${{ github.event.before }}"
+          BEFORE="$EVENT_BEFORE"
           if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
-            FILES=$(git diff --name-only "$BEFORE" "${{ github.event.sha }}" | paste -sd, -)
+            FILES=$(git diff --name-only "$BEFORE" "$EVENT_SHA" | paste -sd, -)
           else
-            BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+            BASE=$(git merge-base "origin/$BASE_REF" HEAD)
             FILES=$(git diff --name-only "$BASE" HEAD | paste -sd, -)
           fi
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
@@ -109,8 +118,13 @@ jobs:
         env:
           TURBO_TELEMETRY_DISABLED: "1"
 
-      - name: Install OpenCode (${{ matrix.runtime }})
-        run: npm install -g '${{ matrix.package }}'
+      - name: Install OpenCode
+        env:
+          RUNTIME: ${{ matrix.runtime }}
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          echo "installing OpenCode ($RUNTIME)"
+          npm install -g "$PACKAGE"
 
       - name: The version under test
         run: opencode --version
