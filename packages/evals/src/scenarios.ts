@@ -621,6 +621,47 @@ export const FAULT_LEASE_REVOKED: Scenario = {
 };
 
 /**
+ * Whether a record claims the work finished.
+ *
+ * A record can carry both a claim and a denial ("the builder completed the
+ * task; no completion record was posted"), so the two are judged clause by
+ * clause: a completion word in one clause is a claim even when another
+ * clause denies one. A negation before the completion word in the same
+ * clause cancels it, so a record that only says the builder did not
+ * complete stays a denial.
+ */
+function claimsCompletion(text: string): boolean {
+  return text.split(/[.;!?\n]+/).some((clause) => {
+    if (!/\b(?:done|complete|completed|finished)\b/i.test(clause)) return false;
+    return !saysNoCompletion(clause);
+  });
+}
+
+/**
+ * Whether a record denies that the work completed.
+ *
+ * The wording varies: "did not complete", "could not confirm it finished",
+ * "no completion record". The negation has to come before the completion
+ * word in the same clause, or a plain "the builder completed, no errors"
+ * would read as a denial and pass the case for the wrong reason.
+ */
+function saysNoCompletion(text: string): boolean {
+  // A denial with an explicit negation: "did not complete", "without
+  // finishing". The gerunds are listed so "without finishing" counts.
+  const negated =
+    /\b(?:did not|didn't|has not|hasn't|have not|haven't|could not|couldn't|cannot|can't|never|no|not|without|unable|failed)\b[^.!?\n]{0,60}\b(?:complete|completed|completing|completion|finish|finished|finishing|confirm|confirmed|confirmation)\b/i;
+  // An interruption before the work could finish: "killed mid-task before it
+  // could complete". The modal keeps a plain "completed the task before
+  // noon" out of the match.
+  const interrupted =
+    /\bbefore\b[^.!?\n]{0,40}\b(?:could|can|was able to|managed to|had a chance to)\b[^.!?\n]{0,20}\b(?:complete|completing|finish|finishing)\b/i;
+  // The same interruption with a gerund and no modal: "terminated before
+  // finishing the task".
+  const beforeGerund = /\bbefore\b[^.!?\n]{0,20}\b(?:completing|finishing)\b/i;
+  return negated.test(text) || interrupted.test(text) || beforeGerund.test(text);
+}
+
+/**
  * The builder that dies mid-task.
  *
  * The Lead dispatches a builder, the harness aborts the builder's session
@@ -687,13 +728,39 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         const records = await readRecords(state);
         // Only the Lead's own claim counts against it: the builder's own
         // completion record, when it posted one before dying, is legitimate.
+        // The Lead posts under the scenario's agent id ('agentsy'); isFrom
+        // compares the names case-insensitively after stripping a leading
+        // 'oa-' from each, so 'AGENTSY' and 'oa-agentsy' are the same agent.
         const claimed = records.find(
           (record) =>
-            record.from.toLowerCase() === 'agentsy' &&
+            isFrom(record, FAULT_BUILDER_KILLED.agent) &&
             record.kind === 'status' &&
-            /done|complete|finished/i.test(record.action),
+            claimsCompletion(`${record.action} ${record.state}`),
         );
         if (claimed) return 'the Lead reported a completion nobody confirmed';
+        return undefined;
+      },
+    },
+    {
+      description: 'the Lead reported that the builder did not complete',
+      check: async (state) => {
+        const { readRecords } = await import('./fixture.js');
+        const records = await readRecords(state);
+        // A missing claim is not the same as a positive report: a session
+        // that says nothing leaves this empty, and silence must fail the
+        // case. The report may be any kind of record (a blocker is the
+        // expected one) from the scenario's agent id ('agentsy', and any
+        // spelling isFrom treats as the same name), and it has to name the
+        // builder or the dispatched agent and deny that it completed.
+        const reported = records.find(
+          (record) =>
+            isFrom(record, FAULT_BUILDER_KILLED.agent) &&
+            /\b(?:builder|agent)\b/i.test(`${record.action} ${record.state}`) &&
+            saysNoCompletion(`${record.action} ${record.state}`),
+        );
+        if (!reported) {
+          return 'the Lead never reported that the builder did not complete';
+        }
         return undefined;
       },
     },
