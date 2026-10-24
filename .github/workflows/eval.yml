@@ -7,19 +7,21 @@ name: safety suite
 # through the same harness on both, so a change that works on one and breaks
 # on the other shows up here rather than in a session.
 on:
-  # The suite does not run on a push.
+  # A pull request runs the cases the change can reach.
   #
-  # A run is real agents against real sessions: a few hundred provider
-  # calls, and it takes forty minutes. Running it on every push to a
-  # pull request cost a day of a month's budget in one afternoon, and the
-  # verdict it gave on a push was the same verdict the nightly gives: the
-  # push gate is the cheap checks, and the safety suite is the nightly and
-  # the manual run.
-  #
-  # A pull request can ask for it: the "Safety suite" workflow is
-  # dispatchable, and it takes the pull request number as an input.
+  # A run is a few hundred provider calls and forty minutes, so it runs only
+  # the cases that read the changed files. A change to the roles, the model
+  # lock, the generated agents or the harness reaches every case, and a
+  # change no case covers runs the whole suite as well: a change nobody
+  # mapped is a change nobody knows the effect of.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  # The whole suite runs once a week, not every night. A nightly run of
+  # fourteen cases is a few hundred provider calls a day, for a verdict that
+  # rarely changes; a weekly run catches the slow drift, and the pull
+  # request run catches the rest the day it lands.
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 * * 1"
   workflow_dispatch:
     inputs:
       runs:
@@ -30,6 +32,11 @@ on:
         description: "How many times each case is tried. A case passes when the majority of its trials pass."
         required: false
         default: "3"
+      traces:
+        description: "Upload the conversations to LangWatch. The traces are for reading a run, and they cost the workspace's monthly usage."
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: eval-${{ github.event.pull_request.number || github.ref }}
@@ -56,11 +63,30 @@ jobs:
     env:
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-      # The key is what makes the run a trace in LangWatch. Without it the
-      # cases still run, and the conversations stay on the machine.
-      LANGWATCH_API_KEY: ${{ secrets.LANGWATCH_API_KEY }}
+      # The key is what makes the run a trace in LangWatch. It is not set by
+      # default: the traces are for reading a run, and every run that
+      # uploads is a run that spends the workspace's monthly usage. The
+      # manual run asks for them.
+      LANGWATCH_API_KEY: ${{ (inputs.traces || false) && secrets.LANGWATCH_API_KEY || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      # The files that changed, and the cases they reach. The pull request
+      # run uses the diff against the base; the schedule and the manual run
+      # have no diff, so they run everything.
+      - name: The files that changed
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "files=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+          FILES=$(git diff --name-only "$BASE" HEAD | paste -sd, -)
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "changed: $FILES"
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -127,7 +153,15 @@ jobs:
           EVAL_RUNS: ${{ github.event.inputs.runs || 1 }}
           # The trials each case is tried inside one run. A case passes when
           # the majority of them pass, so one unlucky sample is not a verdict.
-          OPENAGENTSY_EVAL_TRIALS: ${{ github.event.inputs.trials || 3 }}
+          #
+          # A pull request runs one trial: the question there is whether the
+          # change broke a case, and the weekly and the manual runs are the
+          # ones that carry the majority.
+          OPENAGENTSY_EVAL_TRIALS: ${{ github.event_name == 'pull_request' && 1 || (github.event.inputs.trials || 3) }}
+          # The files that changed. The suite runs only the cases that read
+          # them, so a change that cannot affect a case does not spend a
+          # provider call on it.
+          OPENAGENTSY_EVAL_CHANGED: ${{ steps.changed.outputs.files }}
         run: |
           set -o pipefail
           rc=0

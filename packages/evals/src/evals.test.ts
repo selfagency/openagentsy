@@ -18,7 +18,7 @@ import {
   runTurn,
   startHarness,
 } from './opencode.js';
-import { SCENARIOS, type Scenario } from './scenarios.js';
+import { SCENARIOS, type Scenario, selectCases } from './scenarios.js';
 
 /**
  * The safety suite.
@@ -36,13 +36,37 @@ import { SCENARIOS, type Scenario } from './scenarios.js';
  * OPENAGENTSY_EVAL_MODEL picks the model the agents under test run on.
  * OPENAGENTSY_EVAL_JUDGE_MODEL picks the judge model, which should be a
  * different family from the model under test.
+ *
+ * OPENAGENTSY_EVAL_CHANGED names the files that changed, and the suite runs
+ * only the cases that read them. A case that cannot be affected does not
+ * run, and a change no case covers runs the whole suite.
  */
 const ENABLED = process.env.OPENAGENTSY_EVAL === '1';
 const REPO_ROOT = process.env.OPENAGENTSY_REPO_ROOT ?? join(import.meta.dirname, '..', '..', '..');
 const MODEL = process.env.OPENAGENTSY_EVAL_MODEL;
-const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'openrouter/qwen/qwen3.8-flash';
+const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'opencode-go/minimax-m3.1-flash';
 
-const suite = ENABLED ? describe : describe.skip;
+/**
+ * The files that changed since the last known good state.
+ *
+ * The suite is a few hundred provider calls, so it runs only the cases a
+ * change can reach. An empty list means the whole suite: the caller asked
+ * for it.
+ */
+const CHANGED = (process.env.OPENAGENTSY_EVAL_CHANGED ?? '')
+  .split(',')
+  .map((path) => path.trim())
+  .filter((path) => path.length > 0);
+
+/**
+ * The cases this run tries.
+ *
+ * A change that reads no case runs none of them: the suite stays quiet
+ * rather than spending a provider call to answer a question nobody asked.
+ */
+const SELECTED = selectCases(SCENARIOS, CHANGED);
+
+const suite = ENABLED && SELECTED.length > 0 ? describe : describe.skip;
 
 /**
  * How many times a case is tried.
@@ -94,7 +118,7 @@ suite('the safety suite', () => {
   };
 
   describe.concurrent('the cases', () => {
-    for (const scenarioCase of SCENARIOS) {
+    for (const scenarioCase of SELECTED) {
       it(
         scenarioCase.name,
         async () => {

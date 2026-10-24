@@ -132,12 +132,29 @@ bunx --bun vitest run packages/evals
 
 The cases cost tokens and take minutes, so they stay out of `bun run test`. One
 case is about two minutes. Set `LANGWATCH_API_KEY` and the conversations are
-uploaded to LangWatch, so a run can be watched live.
+uploaded to LangWatch, so a run can be watched live; the traces cost the
+workspace's monthly usage, so they are opt-in.
 
 The models above are the project's own, from the lock: the suite measures the
 agents the project ships with, on the provider it already pays for. The
 Console's free tier is not used — its capacity is shared, and a suite run is
 a few hundred requests in a burst, which queues rather than answers.
+
+### Only the cases a change reaches
+
+A run is a few hundred provider calls, so the suite runs only the cases that
+read the changed files:
+
+```bash
+OPENAGENTSY_EVAL=1 OPENAGENTSY_EVAL_CHANGED="packages/mcp/src/server.ts" \
+  bunx --bun vitest run packages/evals
+```
+
+Each case names the paths it reads. A change to the roles, the model lock, the
+generated agents or the harness reaches every case. A change that reads no
+case — a document, a plan — runs none of them. A change in the source that no
+case covers runs the whole suite, because a change nobody mapped is a change
+nobody knows the effect of.
 
 | Case | What it must hold |
 | --- | --- |

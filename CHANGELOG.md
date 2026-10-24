@@ -6,6 +6,9 @@ Every release, from the commits that made it.
 
 ### Changed
 
+- the suite runs only the cases a change can reach: each case names the paths it reads, a change that reads no case runs none, and a change nobody mapped runs everything
+- a pull request runs the suite again, with the cases its diff reaches; the whole suite runs weekly and on demand, not every night
+- the conversations are not uploaded to LangWatch unless the run asks for it: the traces cost the workspace's monthly usage
 - the judge is the reviewer model in the lock: measured on the four cases that discriminate, it decides all four, and the flash model beside it answered inconclusive twice
 - the memory pipeline is off for every case but the one that measures it, and a project can turn it off with a file named `.openagentsy/harvest`
 - the safety suite runs on a schedule and on demand, not on a push: a run is a few hundred provider calls and forty minutes, and the push gate is the cheap checks (`c8288dd`)
