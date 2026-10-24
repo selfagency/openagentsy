@@ -99,10 +99,16 @@ export async function seedCase(
 }
 
 /** The files a case may write, so the assertions can tell what changed. */
-export async function readAudit(
-  state: CaseState,
-): Promise<
-  { policyId: string; actor: string; action: string; resource: string; effect: string }[]
+export async function readAudit(state: CaseState): Promise<
+  {
+    policyId: string;
+    actor: string;
+    action: string;
+    resource: string;
+    effect: string;
+    /** Why the decision was taken. A refusal says what was wrong. */
+    detail?: string;
+  }[]
 > {
   const { readFile } = await import('node:fs/promises');
   let text: string;
@@ -430,8 +436,14 @@ async function headlessRoles(repoRoot: string): Promise<string> {
  * The lock names a model per role, and a case measures the model under
  * test. The archivist is a role, and with the lock's own model the
  * harvest ran on a different model than the case was about.
+ *
+ * The ladder keeps its rungs. A ladder of one rung is a role that does not
+ * climb, and the case about the climb would then fail for a reason that
+ * has nothing to do with the plugin. The rungs lose their variant: the
+ * model under test has none, and a variant that does not exist is a
+ * switch to nothing.
  */
-async function rewriteLockModels(path: string, model: string): Promise<void> {
+export async function rewriteLockModels(path: string, model: string): Promise<void> {
   let lock: unknown;
   try {
     lock = JSON.parse(await readFile(path, 'utf8'));
@@ -442,7 +454,12 @@ async function rewriteLockModels(path: string, model: string): Promise<void> {
   const roles = (lock as { roles?: Record<string, { model?: string; ladder?: unknown }> }).roles;
   if (roles === undefined) return;
   for (const [name, entry] of Object.entries(roles)) {
-    roles[name] = { ...entry, model, ladder: [{ model }] };
+    const rungs = Array.isArray(entry.ladder) ? entry.ladder.length : 0;
+    roles[name] = {
+      ...entry,
+      model,
+      ladder: Array.from({ length: rungs }, () => ({ model })),
+    };
   }
   await writeFile(path, `${JSON.stringify(lock, null, 2)}\n`, 'utf8');
 }

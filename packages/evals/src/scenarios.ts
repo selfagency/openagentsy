@@ -817,7 +817,16 @@ export const LEAD_EFFORT_CLIMB: Scenario = {
         const { readAudit } = await import('./fixture.js');
         const entries = await readAudit(state);
         const climb = entries.find((entry) => entry.policyId === 'oa.effort.climb');
-        if (!climb) return 'the climb was not audited';
+        if (!climb) {
+          // A refusal is on the record too, and it says why the climb did
+          // not happen. A case that cannot say that is a case that sends
+          // the reader looking.
+          const refused = entries.find((entry) => entry.policyId === 'oa.effort.refused');
+          if (refused) {
+            return `the climb was refused: ${refused.detail}`;
+          }
+          return 'the climb was not audited, and nothing refused it either';
+        }
         // The actor is the role, so the audit says the Lead climbed and
         // not some agent called 'agentsy'.
         if (climb.actor !== 'lead') return `the climb was recorded against ${climb.actor}`;
