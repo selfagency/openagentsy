@@ -77,6 +77,11 @@ export function listBudgets(db: BoardDatabase): Budget[] {
  * Decide whether a bean has to stop. A bean with no budget is not limited,
  * which is reported as `configured: false` so the caller can tell the
  * difference between unlimited and exactly at the limit.
+ *
+ * The caller reports what it has spent, and the board holds the last
+ * report. The higher of the two counts: a caller that does not know what
+ * it spent reports zero, and a bean that is over its budget is over it
+ * whoever asks.
  */
 export function checkBudget(db: BoardDatabase, bean: string, tokensUsed: number): BudgetDecision {
   const row = db.select().from(budgets).where(eq(budgets.bean, bean)).get();
@@ -93,12 +98,13 @@ export function checkBudget(db: BoardDatabase, bean: string, tokensUsed: number)
   }
 
   const budget = toBudget(row);
+  const spent = Math.max(budget.tokensUsed, tokensUsed);
   return {
     bean,
     tokenLimit: budget.tokenLimit,
     stopAt: budget.stopAt,
-    tokensUsed,
-    stop: tokensUsed >= budget.stopAt,
+    tokensUsed: spent,
+    stop: spent >= budget.stopAt,
     configured: true,
   };
 }

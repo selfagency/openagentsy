@@ -55,6 +55,26 @@ describe('checkBudget', () => {
     expect(decision.configured).toBe(false);
     expect(decision.stop).toBe(false);
   });
+
+  it('stops on what the board already recorded', () => {
+    // The board holds the last report of what the bean spent. The caller
+    // reports what it thinks it spent, and a caller that does not know
+    // reports zero. The board's own number is the one that counts: a bean
+    // that is over its budget is over it, whoever asks.
+    setBudget(db, { bean: 'proj-42', tokenLimit: 1000 });
+    recordUsage(db, 'proj-42', 2000);
+    const decision = checkBudget(db, 'proj-42', 0);
+    expect(decision.stop).toBe(true);
+    expect(decision.tokensUsed).toBe(2000);
+  });
+
+  it('keeps the higher of the two numbers', () => {
+    setBudget(db, { bean: 'proj-42', tokenLimit: 1000 });
+    recordUsage(db, 'proj-42', 400);
+    const decision = checkBudget(db, 'proj-42', 900);
+    expect(decision.tokensUsed).toBe(900);
+    expect(decision.stop).toBe(true);
+  });
 });
 
 describe('recordUsage', () => {

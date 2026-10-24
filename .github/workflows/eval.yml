@@ -74,8 +74,12 @@ jobs:
           fetch-depth: 0
 
       # The files that changed, and the cases they reach. The pull request
-      # run uses the diff against the base; the schedule and the manual run
-      # have no diff, so they run everything.
+      # run uses the commits this push carried; the schedule and the manual
+      # run have no diff, so they run everything.
+      #
+      # The pull request's whole diff is the wrong scope: the release pull
+      # request carries every change since the last release, so every push
+      # to it would run every case, over and over, for the same code.
       - name: The files that changed
         id: changed
         run: |
@@ -83,8 +87,13 @@ jobs:
             echo "files=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
-          FILES=$(git diff --name-only "$BASE" HEAD | paste -sd, -)
+          BEFORE="${{ github.event.before }}"
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            FILES=$(git diff --name-only "$BEFORE" "${{ github.event.sha }}" | paste -sd, -)
+          else
+            BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+            FILES=$(git diff --name-only "$BASE" HEAD | paste -sd, -)
+          fi
           echo "files=$FILES" >> "$GITHUB_OUTPUT"
           echo "changed: $FILES"
 

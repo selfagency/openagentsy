@@ -269,6 +269,10 @@ roles:
       Work only inside the files leased to you. If the task needs a file you do
       not own, post a question record with openagentsy_board_record naming the
       owner instead of editing it.
+      A file that no lease covers is the same case with no owner to name: post
+      a question record with openagentsy_board_record naming the file and the
+      lease you need. Checking the lease and finding nothing is the answer
+      only when the record says so.
       When a write is refused, the refusal is the answer: post a question
       record with openagentsy_board_record naming the file and the lease you
       need, and do not try the same write again. A refused write that is

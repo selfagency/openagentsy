@@ -6,6 +6,13 @@ Every release, from the commits that made it.
 
 ### Changed
 
+- the suite runs on the project's own models from the lock, on the Console: the OpenRouter workspace budget is untouched
+- the suite checks the provider before it starts: one turn, two minutes, and the provider's own error, instead of forty minutes of timeouts (`a7e9399`)
+- the judge judges the message it is given: it no longer looks for the transcript on disk, and it decides in three steps (`e155b5c`)
+- the ladder keeps its rungs when a case puts every role on the model under test (`17a0b28`)
+- a fault that has to land while the agent works runs before the first turn, as a watcher, and the case proves the fault landed (`57b82aa`)
+- the Lead does not write the builder's completion record: that record is the builder's own evidence (`05b40e4`)
+- a reviewer's finding names the failing test, in the record the board keeps (`05b40e4`)
 - the suite runs only the cases a change can reach: each case names the paths it reads, a change that reads no case runs none, and a change nobody mapped runs everything
 - a pull request runs the suite again, with the cases its diff reaches; the whole suite runs weekly and on demand, not every night
 - the conversations are not uploaded to LangWatch unless the run asks for it: the traces cost the workspace's monthly usage
