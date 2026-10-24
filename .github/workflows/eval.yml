@@ -123,14 +123,15 @@ jobs:
         if: matrix.runtime == 'v1'
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
         run: |
-          # One turn before the suite. A key that is refused makes every
-          # turn in the suite wait for an answer that never comes, and a
-          # suite that waits for forty minutes says nothing about the code
-          # it was testing. This fails in two minutes, with the provider's
-          # own error.
-          if ! timeout 120 opencode run --model opencode-go/deepseek-v4.1-flash "Reply with exactly: ok"; then
-            echo 'the provider did not answer: the key or the model is wrong'
+          # One turn before the suite, on the model the suite will use. A key
+          # that is refused makes every turn in the suite wait for an answer
+          # that never comes, and a suite that waits for forty minutes says
+          # nothing about the code it was testing. This fails in two minutes,
+          # with the provider's own error.
+          if ! timeout 120 opencode run --model "$EVAL_MODEL" "Reply with exactly: ok"; then
+            echo "the provider did not answer: the key or the model ($EVAL_MODEL) is wrong"
             exit 1
           fi
 
