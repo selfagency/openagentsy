@@ -119,6 +119,21 @@ jobs:
         if: matrix.runtime == 'v2'
         run: bun packages/adapter-opencode/scripts/probe-v2.mjs
 
+      - name: The provider answers
+        if: matrix.runtime == 'v1'
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+        run: |
+          # One turn before the suite. A key that is refused makes every
+          # turn in the suite wait for an answer that never comes, and a
+          # suite that waits for forty minutes says nothing about the code
+          # it was testing. This fails in two minutes, with the provider's
+          # own error.
+          if ! timeout 120 opencode run --model opencode-go/deepseek-v4.1-flash "Reply with exactly: ok"; then
+            echo 'the provider did not answer: the key or the model is wrong'
+            exit 1
+          fi
+
       - name: Safety suite
         if: matrix.runtime == 'v1'
         env:
