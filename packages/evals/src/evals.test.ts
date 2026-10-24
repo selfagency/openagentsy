@@ -290,6 +290,13 @@ async function runScenario(
   const toolCalls: { tool: string; input: unknown }[] = [];
   let turnIndex = 0;
 
+  // A fault that has to land while the agent works starts before the first
+  // turn: a watcher runs alongside the turn, and a hook between the turns
+  // fires after the work is done.
+  for (const hook of scenarioCase.beforeTurns ?? []) {
+    await hook(state, root, harness);
+  }
+
   const agent: AgentAdapter = {
     name: 'OpenAgentsy',
     role: AgentRole.AGENT,

@@ -352,6 +352,9 @@ roles:
       input or state that breaks it. A finding without a reproduction is a guess.
       When a test fails, name the test that failed and what it printed: a
       finding that says only that you ran the tests is not a finding.
+      The record you post on the board is the finding: the reader sees it
+      there and not in your reply, so it has to carry the test, the line and
+      the output on its own.
       Say so plainly when the change is correct.
     permissions:
       edit: deny

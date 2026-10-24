@@ -18,6 +18,14 @@ export type OpenCodeHarness = {
   client: OpencodeClient;
   root: string;
   stop: () => Promise<void>;
+  /**
+   * The faults that are still watching.
+   *
+   * A watcher outlives the turn that started it, so the harness keeps it
+   * here and waits for it when the case ends. A watcher that is dropped
+   * keeps polling after the case is gone.
+   */
+  watches: { killed: Promise<string | undefined>; stop: () => void }[];
 };
 
 /**
@@ -176,10 +184,16 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
   });
 
+  const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
+
   return {
     client,
     root: baseUrl,
+    watches,
     stop: async () => {
+      // A watcher that is still looking for a session stops looking: a
+      // pending timer keeps the process alive.
+      for (const watch of watches) watch.stop();
       child.kill('SIGTERM');
       // The server writes to the log file it was given, and it may still be
       // writing when the process is asked to stop. Waiting for the exit
@@ -555,4 +569,52 @@ export async function abortSession(
   directory: string,
 ): Promise<void> {
   await client.session.abort({ path: { id: sessionID }, query: { directory } });
+}
+
+/**
+ * Kill a session the moment it appears, and keep watching until it does.
+ *
+ * A fault that fires between two turns fires after the work is done: the
+ * builder had already written its file and posted its completion record
+ * before the harness got a turn to kill it, and the agent under test
+ * could not tell the difference. A watcher runs while the turn runs, so
+ * the kill lands in the middle of the work.
+ *
+ * The promise settles when the session was killed, or when the watch gave
+ * up. It never rejects: a fault that cannot fire is a case that says so,
+ * not a run that crashes.
+ */
+export function killSessionWhenItAppears(
+  client: OpencodeClient,
+  directory: string,
+  matches: (title: string) => boolean,
+  options: { attempts?: number; intervalMs?: number } = {},
+): { killed: Promise<string | undefined>; stop: () => void } {
+  const attempts = options.attempts ?? 120;
+  const intervalMs = options.intervalMs ?? 500;
+  let stopped = false;
+  const killed = (async (): Promise<string | undefined> => {
+    for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
+      try {
+        const listed = await client.session.list({ query: { directory } });
+        const hit = (listed.data ?? []).find(
+          (session) => session.title !== undefined && matches(session.title),
+        );
+        if (hit?.id !== undefined) {
+          await client.session.abort({ path: { id: hit.id }, query: { directory } });
+          return hit.id;
+        }
+      } catch {
+        // A server that is not up yet is not a reason to stop watching.
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return undefined;
+  })();
+  return {
+    killed,
+    stop: () => {
+      stopped = true;
+    },
+  };
 }
