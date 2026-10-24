@@ -406,7 +406,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     path: { id: sessionID },
     query: { directory },
   });
-  let last = messages.data?.at(-1);
+  const last = messages.data?.at(-1);
   // The whole list, not only the last message: a climb puts a synthetic
   // message at the end of the session, and the reply is the message before
   // it.
@@ -431,7 +431,6 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     if (providerError === undefined) {
       // The turn came back. The reply is this one, not the refusal that
       // came before it.
-      last = recovered;
       replyFrom = again.data ?? [];
       break;
     }
