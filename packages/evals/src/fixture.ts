@@ -14,6 +14,7 @@ import {
   recordUsage,
   setBudget,
 } from '@openagentsy/core';
+import { parse as parseJsonc } from 'jsonc-parser';
 
 const execFileAsync = promisify(execFile);
 
@@ -307,15 +308,54 @@ export async function prepare(
  * A session sends the tool schemas of every MCP server it can reach, and the
  * global ones are large. Seven of them, the GitHub one alone has sixty
  * tools, is most of the prompt of a case. The case only needs the board.
+ *
+ * The entry is the global one with the switch off, not a fresh one: the
+ * server rejects an entry it cannot read ("Ignoring MCP config entry
+ * without type"), and a case that leaves an error in the server's log is a
+ * case whose green says nothing about the agent.
  */
-function disabledGlobalServers(): Record<string, { enabled: false }> {
-  const disabled: Record<string, { enabled: false }> = {};
+function disabledGlobalServers(): Record<string, unknown> {
+  const disabled: Record<string, unknown> = {};
   for (const path of globalConfigPaths()) {
-    for (const name of mcpServerNames(path)) {
-      if (name !== 'openagentsy') disabled[name] = { enabled: false };
+    for (const [name, entry] of Object.entries(globalMcpServers(path))) {
+      if (name === 'openagentsy') continue;
+      disabled[name] = { ...entry, enabled: false };
     }
   }
   return disabled;
+}
+
+/**
+ * The MCP servers one global config file declares, as the server reads them.
+ *
+ * The config is JSON with comments, so it is read as JSONC. The entry keeps
+ * its type and its command or url, because the server rejects an entry it
+ * cannot read, and it loses its environment, because a server that is
+ * switched off needs no key and a case directory is a place a key should
+ * not be written.
+ */
+export function globalMcpServers(path: string): Record<string, Record<string, unknown>> {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return {};
+  }
+  let parsed: unknown;
+  try {
+    parsed = parseJsonc(text);
+  } catch {
+    return {};
+  }
+  const mcp = (parsed as { mcp?: unknown } | undefined)?.mcp;
+  if (mcp === undefined || mcp === null || typeof mcp !== 'object') return {};
+  const servers: Record<string, Record<string, unknown>> = {};
+  for (const [name, entry] of Object.entries(mcp as Record<string, unknown>)) {
+    if (entry === null || typeof entry !== 'object') continue;
+    const { environment: _environment, ...rest } = entry as Record<string, unknown>;
+    servers[name] = rest;
+  }
+  return servers;
 }
 
 function globalConfigPaths(): string[] {
@@ -326,28 +366,6 @@ function globalConfigPaths(): string[] {
     join(home, '.config', 'opencode', 'opencode.jsonc'),
     join(home, '.config', 'opencode', 'opencode.json'),
   ];
-}
-
-/** The names of the MCP servers in one config file, without a full parse. */
-function mcpServerNames(path: string): string[] {
-  let text: string;
-  try {
-    text = readFileSync(path, 'utf8');
-  } catch {
-    return [];
-  }
-  const block = text.match(/"mcp"\s*:\s*\{/);
-  if (!block) return [];
-
-  const names: string[] = [];
-  const body = text.slice(block.index ?? 0);
-  const pattern = /"([A-Za-z0-9_-]+)"\s*:\s*\{/g;
-  for (let match = pattern.exec(body); match !== null; match = pattern.exec(body)) {
-    const name = match[1];
-    if (name !== undefined) names.push(name);
-    if (names.length > 64) break;
-  }
-  return names;
 }
 
 /**
