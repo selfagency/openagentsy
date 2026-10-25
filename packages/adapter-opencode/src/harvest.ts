@@ -128,10 +128,25 @@ export async function harvest(
 
   const packet = buildPacket({ sessionID, role, agent, transcript, decisions });
 
-  const archivistSession = await session.create({
-    title: `harvest ${role}`,
-    parentID: sessionID,
-  });
+  // Both calls below can fail on the server side: a create, because the
+  // server refuses a new session, and a prompt, because the runtime is
+  // gone or the provider is. Either way the candidate is lost this run.
+  // The failure goes on the record and the session that is closing is not
+  // broken, the same way the existence check reports.
+  let archivistSession: string | undefined;
+  try {
+    archivistSession = await session.create({
+      title: `harvest ${role}`,
+      parentID: sessionID,
+    });
+  } catch (error) {
+    const failure =
+      error instanceof Error
+        ? error
+        : new Error('the server refused to create the archivist session');
+    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    return { harvested: false, reason: failure.message };
+  }
   if (archivistSession === undefined) {
     return { harvested: false, reason: 'the server created no session for the archivist' };
   }
@@ -162,7 +177,14 @@ export async function harvest(
     return { harvested: false, reason: error.message };
   }
 
-  await session.prompt({ sessionID: archivistSession, agent: ARCHIVIST, text: packet });
+  try {
+    await session.prompt({ sessionID: archivistSession, agent: ARCHIVIST, text: packet });
+  } catch (error) {
+    const failure =
+      error instanceof Error ? error : new Error('the archivist could not be prompted');
+    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    return { harvested: false, reason: failure.message };
+  }
 
   // The janitor runs beside the harvest, not inside it: it is started here
   // and never awaited, so the session that is closing is not held while the

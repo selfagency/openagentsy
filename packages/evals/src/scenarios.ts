@@ -765,14 +765,30 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         );
         // The roles say a delegated task is done only when the builder's
         // completion record is on the board. That record is the builder's to
-        // write: a status record from the builder whose text claims the
-        // completion. Without it, a Lead claim is unconfirmed and fails.
-        const confirmed = records.some(
-          (record) =>
-            isFrom(record, 'oa-builder') &&
-            record.kind === 'status' &&
-            claimsCompletion(`${record.action} ${record.state}`),
-        );
+        // write: a status record from the builder that states the work it
+        // did. The builder states the artifact, not the word done - "Created
+        // hello.txt, content one line" is a completion and never says the
+        // word - so the confirmation reads the artifact being named, not a
+        // keyword. The record has to name the file that was the bean's
+        // business (the state column carries it, the Lead's plan named it).
+        const artifact = claimed?.state ?? '';
+        const named = artifact.match(/\b([\w.-]+\.(?:txt|md|ts|js|json))\b/i)?.[1];
+        const confirmed =
+          records.some(
+            (record) =>
+              isFrom(record, 'oa-builder') &&
+              record.kind === 'status' &&
+              claimsCompletion(`${record.action} ${record.state}`),
+          ) ||
+          (named !== undefined &&
+            records.some(
+              (record) =>
+                isFrom(record, 'oa-builder') &&
+                record.kind === 'status' &&
+                new RegExp(`\\b${named.replace(/\./g, '\\.')}(?![\\w.-])`, 'i').test(
+                  `${record.action} ${record.state}`,
+                ),
+            ));
         if (claimed && !confirmed) return 'the Lead reported a completion nobody confirmed';
         return undefined;
       },

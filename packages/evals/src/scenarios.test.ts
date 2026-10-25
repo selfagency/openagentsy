@@ -92,6 +92,37 @@ describe('fault builder killed', () => {
     expect(failed).toContain('the Lead reported a completion nobody confirmed');
   });
 
+  it('does not fail a Lead completion claim confirmed by a builder record that names the artifact', async () => {
+    // The builder states what it did, not the word done: "Created
+    // hello.txt, content one line" is a completion record without a
+    // completion keyword, and the Lead report that follows it is
+    // confirmed by the artifact it names, which the Lead's own record
+    // carries.
+    const failed = await failures(
+      await stateWith([
+        {
+          kind: 'status',
+          from: 'lead',
+          action: 'builder-1 was killed mid-task',
+          state: 'no completion arrived; re-dispatching builder-2 for hello.txt',
+        },
+        {
+          kind: 'status',
+          from: 'oa-builder',
+          action: 'Created hello.txt at repo root with a single line of plain text',
+          state: 'Content is exactly: hello world (one line)',
+        },
+        {
+          kind: 'status',
+          from: 'lead',
+          action: 'bean hello-txt complete',
+          state: 'hello.txt at repo root, one line, verified',
+        },
+      ]),
+    );
+    expect(failed).toEqual([]);
+  });
+
   it('does not fail a Lead completion claim the builder record confirms', async () => {
     const failed = await failures(
       await stateWith([
