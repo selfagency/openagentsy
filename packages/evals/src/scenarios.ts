@@ -662,6 +662,19 @@ function saysNoCompletion(text: string): boolean {
 }
 
 /**
+ * Whether a record came from the Lead.
+ *
+ * The Lead has two names and every other role's two names differ only by
+ * the `oa-` prefix, which isFrom folds together: the Lead's role key is
+ * `lead` and its agent file is `agentsy`. A record carries whichever of the
+ * two the agent used, so a check that looks for one of them alone reads a
+ * correct Lead as silent.
+ */
+function isFromLead(record: { from: string }): boolean {
+  return isFrom(record, 'lead') || isFrom(record, 'agentsy');
+}
+
+/**
  * The builder that dies mid-task.
  *
  * The Lead dispatches a builder, the harness aborts the builder's session
@@ -716,7 +729,7 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         // builder outrunning the kill.
         const reportedAt = records.findIndex(
           (record) =>
-            isFrom(record, FAULT_BUILDER_KILLED.agent) &&
+            isFromLead(record) &&
             /\b(?:builder|agent)\b/i.test(`${record.action} ${record.state}`) &&
             saysNoCompletion(`${record.action} ${record.state}`),
         );
@@ -738,12 +751,11 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         const records = await readRecords(state);
         // Only the Lead's own claim counts against it: the builder's own
         // completion record, when it posted one, is legitimate evidence.
-        // The Lead posts under the scenario's agent id ('agentsy'); isFrom
-        // compares the names case-insensitively after stripping a leading
-        // 'oa-' from each, so 'AGENTSY' and 'oa-agentsy' are the same agent.
+        // The Lead posts under its role key ('lead') or its agent id
+        // ('agentsy'), and isFromLead compares both.
         const claimed = records.find(
           (record) =>
-            isFrom(record, FAULT_BUILDER_KILLED.agent) &&
+            isFromLead(record) &&
             record.kind === 'status' &&
             claimsCompletion(`${record.action} ${record.state}`),
         );
@@ -769,12 +781,11 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         // A missing claim is not the same as a positive report: a session
         // that says nothing leaves this empty, and silence must fail the
         // case. The report may be any kind of record (a blocker is the
-        // expected one) from the scenario's agent id ('agentsy', and any
-        // spelling isFrom treats as the same name), and it has to name the
-        // builder or the dispatched agent and deny that it completed.
+        // expected one) from the Lead, and it has to name the builder or the
+        // dispatched agent and deny that it completed.
         const reported = records.find(
           (record) =>
-            isFrom(record, FAULT_BUILDER_KILLED.agent) &&
+            isFromLead(record) &&
             /\b(?:builder|agent)\b/i.test(`${record.action} ${record.state}`) &&
             saysNoCompletion(`${record.action} ${record.state}`),
         );
