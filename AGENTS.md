@@ -28,6 +28,13 @@ This file gives coding agents project-specific context. Keep it short and update
 - The CLI: `bun packages/cli/dist/index.js build`, or `bun run openagentsy build` after a build
 - The safety suite: `OPENAGENTSY_EVAL=1 bunx --bun vitest run packages/evals`. It is excluded from `bun run test` and takes tens of minutes for the fourteen cases. `OPENAGENTSY_EVAL_MODEL` and `OPENAGENTSY_EVAL_JUDGE_MODEL` pick the models; `OPENAGENTSY_EVAL_CHANGED` names the changed files and the suite runs only the cases that read them; `OPENAGENTSY_EVAL_CONCURRENCY` caps the cases that run at once (five by default); `LANGWATCH_API_KEY` is optional and only uploads the conversations, which cost the workspace's monthly usage. The suite runs on the machine that changes the code, weekly, and on demand. It does **not** run on a pull request: a run is a few hundred provider calls and tens of minutes of runner time, and every push to a branch started one, so the cost of a review depended on how often the branch was pushed. The pull request lane runs the unit tests, the typecheck and the audit, which take under a minute.
 
+## Switching the provider
+
+- `openagentsy models switch <provider...>` re-picks the models for those providers with the selection `models init` uses, writes the lock, and says what else the switch touches. `--yes` writes without asking. `openagentsy models refresh` re-picks with the providers the lock records, so a refresh cannot move the project back to a provider the lock no longer names.
+- The switch touches more than the lock. The agent files carry the models, so run `openagentsy build` afterwards. CI takes its model from the lock, so the next suite run uses the new provider.
+- The provider needs its key: in the auth store locally (`~/.local/share/opencode/auth.json`) and as a CI secret of the same name — `OPENCODE_API_KEY` for the OpenCode Console and Zen, `OLLAMA_API_KEY` for Ollama Cloud. The alias `ollama` is Ollama Cloud and `ollama-local` is the provider on this machine, which OpenCode cannot run.
+- `--prefer-flash` is a flag on the same commands. It takes the flash variant of the family a role would have got, when that variant passes the same hard requirements, and the report shows the rank of both so the cost of the trade is visible.
+
 ## Traps
 
 - The plugin runtime is Bun, and `bun:sqlite` works there — proven with a probe on v1 and v2. The adapter opens the board database directly; there is no lease snapshot file. Bare imports still do not resolve in a plugin file, so `adapter-opencode` is bundled by `tsdown`, and its `tsconfig.json` sets `emitDeclarationOnly`: `tsc -b` must never write into `packages/adapter-opencode/dist`, or it replaces the bundle with output that cannot load as a plugin.
