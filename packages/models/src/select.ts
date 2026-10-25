@@ -31,26 +31,27 @@ type ProviderAlias = {
  * `ollama` for the provider on this machine and `ollama-cloud` for the cloud
  * one, and the lock records ids and not names.
  */
-const PROVIDER_ALIASES: Record<string, ProviderAlias> = {
-  opencode: { provider: 'opencode', means: 'the OpenCode Zen models' },
-  zen: { provider: 'opencode', means: 'the OpenCode Zen models' },
-  'opencode-go': { provider: 'opencode-go', means: 'the OpenCode Console Go plan' },
-  go: { provider: 'opencode-go', means: 'the OpenCode Console Go plan' },
-  ollama: { provider: 'ollama-cloud', means: 'the Ollama Cloud models' },
-  'ollama-cloud': { provider: 'ollama-cloud', means: 'the Ollama Cloud models' },
-  'ollama-local': { provider: 'ollama', means: 'the Ollama models on this machine' },
-};
+const PROVIDER_ALIASES = new Map<string, ProviderAlias>([
+  ['opencode', { provider: 'opencode', means: 'the OpenCode Zen models' }],
+  ['zen', { provider: 'opencode', means: 'the OpenCode Zen models' }],
+  ['opencode-go', { provider: 'opencode-go', means: 'the OpenCode Console Go plan' }],
+  ['go', { provider: 'opencode-go', means: 'the OpenCode Console Go plan' }],
+  ['ollama', { provider: 'ollama-cloud', means: 'the Ollama Cloud models' }],
+  ['ollama-cloud', { provider: 'ollama-cloud', means: 'the Ollama Cloud models' }],
+  ['ollama-local', { provider: 'ollama', means: 'the Ollama models on this machine' }],
+]);
 
 /** The provider an alias names, or nothing when the name is not one. */
 export function resolveProviderAlias(name: string): ProviderId | undefined {
-  return PROVIDER_ALIASES[name.toLowerCase()]?.provider;
+  // A map, not an object: the name is what a person typed, and a lookup by
+  // it in an object can land on the prototype's own property instead of on
+  // nothing.
+  return PROVIDER_ALIASES.get(name.toLowerCase())?.provider;
 }
 
 /** The aliases and what each one means, for the error message. */
 export function providerAliasSummary(): string {
-  return Object.entries(PROVIDER_ALIASES)
-    .map(([alias, entry]) => `${alias} = ${entry.means}`)
-    .join(', ');
+  return [...PROVIDER_ALIASES].map(([alias, entry]) => `${alias} = ${entry.means}`).join(', ');
 }
 
 /**

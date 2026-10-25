@@ -19,6 +19,15 @@ describe('the provider names', () => {
     expect(resolveProviderAlias('ollama-local')).toBe('ollama');
   });
 
+  it('finds nothing for a name that is on the prototype', () => {
+    // The name is what a person typed. A lookup by it in an object can land
+    // on the prototype's own property, so the table is a map and these two
+    // names find nothing.
+    expect(resolveProviderAlias('__proto__')).toBeUndefined();
+    expect(resolveProviderAlias('constructor')).toBeUndefined();
+    expect(resolveProviderAlias('toString')).toBeUndefined();
+  });
+
   it('names what each alias means', () => {
     const summary = providerAliasSummary();
     expect(summary).toContain('ollama = the Ollama Cloud models');
