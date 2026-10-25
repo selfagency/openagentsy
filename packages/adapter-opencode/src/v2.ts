@@ -9,7 +9,6 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
 import { checkWrite } from './write-guard.js';
 
 /**
@@ -331,7 +330,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       sessionAgents.delete(sessionID);
       switched.delete(sessionID);
       if (!agent) continue;
-      await onIdle(ctx, root, sessionID, agent);
+      await onIdle(root, sessionID, agent);
     }
   })();
 
@@ -342,27 +341,30 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
  * A session went idle on the V2 path.
  *
  * The rungs go back, so the next task in that session starts on the rung the
- * role was given, and the archivist takes what the session learned.
+ * role was given.
+ *
+ * The V2 harvest is off. The context this plugin is given has no way to ask
+ * whether a session still exists: `session` carries hook, switchModel,
+ * create, context, prompt and switchAgent, and a message list cannot tell a
+ * fresh session from a deleted one. The archivist child is created and then
+ * prompted, and a parent delete cascades the child away in between, which is
+ * the failure the V1 path now checks for. Prompting anyway would claim a
+ * check that did not happen; recording a failure would say so once per
+ * session. The probe script (scripts/probe-v2.mjs) is what can show what the
+ * context answers for a missing session, but it needs a live V2 server and
+ * this path is not verified against one yet, so the harvest stays off until
+ * the context has a lookup.
  *
  * A failure here must not kill the subscription: the rungs would stop being
  * given back and the failure would be a silence, which is the one thing the
  * fault cases exist to catch.
  */
-async function onIdle(
-  ctx: V2Context,
-  root: string,
-  sessionID: string,
-  agent: string,
-): Promise<void> {
-  const role = await roleKeyForAgent(root, agent);
+async function onIdle(root: string, sessionID: string, agent: string): Promise<void> {
   try {
     const rungs = await readRungs(root);
     if (rungs[sessionID]) {
       delete rungs[sessionID];
       await writeRungs(root, rungs);
-    }
-    if (await harvestEnabled(root)) {
-      await harvestV2(ctx, root, sessionID, role, agent);
     }
   } catch (error) {
     await appendAudit(root, {
@@ -374,43 +376,5 @@ async function onIdle(
       effect: 'deny',
       detail: error instanceof Error ? error.message : String(error),
     });
-  }
-}
-
-/**
- * The harvest, on the V2 path.
- *
- * A harvest that fails must not break the session that is closing, so it is
- * caught here and put on the record, the same way the V1 path does it.
- */
-async function harvestV2(
-  ctx: V2Context,
-  root: string,
-  sessionID: string,
-  role: string,
-  agent: string,
-): Promise<void> {
-  try {
-    await harvest({
-      session: {
-        messages: async (id) => [...(await ctx.session.context({ sessionID: id }))],
-        create: async ({ title, parentID }) => {
-          const created = await ctx.session.create({ title, parentID });
-          return created.id;
-        },
-        prompt: async ({ sessionID: id, agent: promptAgent, text }) => {
-          // A V2 prompt carries no agent, so the session is switched to the
-          // archivist before it is given the packet.
-          await ctx.session.switchAgent({ sessionID: id, agent: promptAgent });
-          await ctx.session.prompt({ sessionID: id, text });
-        },
-      },
-      root,
-      sessionID,
-      role,
-      agent,
-    });
-  } catch (error) {
-    await recordHarvestFailure(root, { agent, sessionID, error });
   }
 }

@@ -1,7 +1,8 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { closeSync, fstatSync, openSync } from 'node:fs';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 export type SessionTurn = {
   /** The text the agent under test produced. */
@@ -26,6 +27,19 @@ export type OpenCodeHarness = {
    * keeps polling after the case is gone.
    */
   watches: { killed: Promise<string | undefined>; stop: () => void }[];
+  /**
+   * The host errors the server wrote since it started, each with the case it
+   * belongs to. `stop` reads the same list and throws when it is not empty.
+   *
+   * The sessions the harness killed are excluded: their abort is the fault
+   * the case injected, not a host failure.
+   */
+  hostErrors: (killedSessions?: ReadonlySet<string>) => Promise<HostError[]>;
+  /**
+   * Say which case a session belongs to, so a host error that names it is
+   * attributed instead of falling back to the suite as a whole.
+   */
+  trackSession: (sessionID: string, caseLabel: string) => void;
 };
 
 /**
@@ -85,6 +99,9 @@ export async function answerPermissions(
         type: properties.type ?? '',
         patterns: properties.patterns ?? [],
       });
+      // The subscription is scoped to the case directory, so a session that
+      // asks here belongs to this case; a host error naming it is attributed.
+      harness.trackSession(properties.sessionID, basename(directory));
       await harness.client.postSessionIdPermissionsPermissionId({
         path: { id: properties.sessionID, permissionID: properties.id },
         body: { response },
@@ -100,6 +117,165 @@ export async function answerPermissions(
   return () => {
     stopped = true;
   };
+}
+
+/**
+ * The errors the host wrote, and the policy for them.
+ *
+ * Policy: every ERROR or FATAL line the server writes is a fault of the run,
+ * not of the case. A host fault that lands while a case runs can make that
+ * case pass for the wrong reason, so it is never discarded because the case
+ * went green. The harness keeps every one from the byte offset the server
+ * started at, attributes it to the case that owns the session it names, and
+ * falls back to `the suite` when the line names a session it never tracked
+ * (a plugin-created child session, for example): an unplaceable fault is
+ * still a fault and is never dropped. `stop` throws when there is any, which
+ * fails the suite at teardown: a green case result cannot hide a host fault.
+ *
+ * The structured `timestamp=… level=…` lines only reach the file `stop`
+ * reads because `serve` is started with `--print-logs`, which sends them to
+ * stderr and stderr is redirected to that file. Without the flag the server
+ * writes them to the app log under `~/.local/share/opencode/log/`, the file
+ * stays empty of structured lines, and this check would silently see nothing.
+ *
+ * An ERROR line is the server's own report of something that went wrong; a
+ * multi-line error keeps its continuation lines, or the stack that says why
+ * is lost. Lines at INFO or below are the server working normally.
+ */
+export type HostError = {
+  /** The case the error belongs to, or `the suite` when no session named one. */
+  case: string;
+  /** The log block, continuation lines included. */
+  line: string;
+  /** The session the log line named, when it named one. */
+  sessionID?: string;
+};
+
+/** One error block, before it is attributed to a case. */
+export type HostErrorBlock = { line: string; sessionID?: string };
+
+/** A line the server wrote, with its level. Continuation lines have none. */
+const LOG_HEADER = /^timestamp=\S+ level=(\S+) /;
+
+/** The host errors in a block of log text, before attribution to a case. */
+export function hostErrorsIn(text: string): HostErrorBlock[] {
+  const blocks: HostErrorBlock[] = [];
+  let block: string[] | undefined;
+  let level: string | undefined;
+
+  const flush = (): void => {
+    if (block === undefined) return;
+    if (level === 'ERROR' || level === 'FATAL') {
+      const line = block.join('\n').trim();
+      // The server has written both shapes: `session.id=` and the plain
+      // `sessionID=` the measured query error carried. Either one names the
+      // session; matching only one lost the attribution.
+      const session = /session(?:\.id|ID)=(\S+)/.exec(line);
+      blocks.push(session?.[1] !== undefined ? { line, sessionID: session[1] } : { line });
+    }
+    block = undefined;
+    level = undefined;
+  };
+
+  for (const line of text.split('\n')) {
+    const header = LOG_HEADER.exec(line);
+    if (header !== null) {
+      flush();
+      block = [line];
+      level = header[1];
+    } else if (block !== undefined) {
+      block.push(line);
+    }
+  }
+  flush();
+  return blocks;
+}
+
+/** Put each host error on the case whose session it names, or on the suite. */
+export function attributeHostErrors(
+  blocks: readonly HostErrorBlock[],
+  sessions: ReadonlyMap<string, string>,
+): HostError[] {
+  return blocks.map((block) => {
+    const owner = block.sessionID !== undefined ? sessions.get(block.sessionID) : undefined;
+    return {
+      case: owner ?? 'the suite',
+      line: block.line,
+      ...(block.sessionID !== undefined ? { sessionID: block.sessionID } : {}),
+    };
+  });
+}
+
+/**
+ * The host errors that are faults of the run.
+ *
+ * One error is expected: the case that kills a builder on purpose
+ * (`fault builder killed`) aborts the builder's session mid-turn, and the
+ * server writes `level=ERROR ... error=Aborted` against that session. That
+ * line is the case proving the fault landed, not the host failing, so it must
+ * not fail the suite. Every other ERROR or FATAL block is still a fault: the
+ * case did not ask the server to abort it. A block that names no session
+ * cannot be tied to a kill and is kept.
+ *
+ * The killed sessions are the ones the watches resolved to: a watch that gave
+ * up resolves undefined and contributes nothing.
+ */
+export function hostFaults(
+  blocks: readonly HostErrorBlock[],
+  killedSessions: ReadonlySet<string>,
+): HostErrorBlock[] {
+  return blocks.filter(
+    (block) => block.sessionID === undefined || !killedSessions.has(block.sessionID),
+  );
+}
+
+/**
+ * Read the host errors appended to a log file after a byte offset.
+ *
+ * The offset is what makes this testable without a server: the caller passes
+ * the size the file had when the run started, and only what was appended
+ * afterwards is read. A block naming a session the harness killed is the
+ * injected fault, not a host error, so it is dropped here.
+ */
+export async function readHostErrors(
+  logFile: string,
+  fromOffset = 0,
+  sessions: ReadonlyMap<string, string> = new Map(),
+  killedSessions: ReadonlySet<string> = new Set(),
+): Promise<HostError[]> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(logFile);
+  } catch {
+    // No log yet is no error: a server that has not started has written none.
+    return [];
+  }
+  // The offset is the size the file had when the run started, and a log that
+  // already ended in a partial line leaves it mid-line. Start at the first
+  // line boundary after it, so the partial tail is not read as a block and
+  // the first complete error of the run is kept.
+  let start = Math.max(0, fromOffset);
+  if (start > 0 && start < bytes.length && bytes[start - 1] !== 0x0a) {
+    const newline = bytes.indexOf(0x0a, start);
+    if (newline === -1) return [];
+    start = newline + 1;
+  }
+  return attributeHostErrors(
+    hostFaults(hostErrorsIn(bytes.subarray(start).toString('utf8')), killedSessions),
+    sessions,
+  );
+}
+
+/**
+ * The `serve` command the harness starts.
+ *
+ * `--print-logs` is not decoration: without it the server writes its
+ * structured `timestamp=… level=…` lines to the app log in the user's home
+ * directory, and the file `stop` reads never receives the ERROR line that
+ * would fail the suite.
+ */
+export function serveArgs(port: number): string[] {
+  return ['serve', '--port', String(port), '--hostname', '127.0.0.1', '--print-logs'];
 }
 
 async function waitForServer(
@@ -133,6 +309,90 @@ async function waitForServer(
 }
 
 /**
+ * How old a leftover harness file must be before a new run sweeps it.
+ *
+ * A run holds its database and log while the server is serving. A suite can
+ * be re-run back to back, and a slow case can outlive the run before it, so a
+ * file that is younger than a day may still belong to a run in progress.
+ * Twenty four hours is far longer than any suite run, so a file this old
+ * belongs to a run that is over; a fresh one is left strictly alone.
+ */
+export const HARNESS_SWEEP_AGE_MS = 24 * 60 * 60 * 1000;
+
+/** The prefix every file a harness run names carries, so a sweep can find them. */
+const HARNESS_FILE_PREFIX = 'openagentsy-eval-';
+
+/** What the harness creates: the server database and its sidecars, and the log. */
+const HARNESS_FILE_SUFFIXES = ['.db', '.db-shm', '.db-wal', '.log'];
+
+/**
+ * The files one run owns: its database, the SQLite sidecars beside it, and
+ * (when the harness named it) its log.
+ */
+function harnessFiles(database: string, logFile?: string): string[] {
+  const files = [database, `${database}-shm`, `${database}-wal`];
+  return logFile === undefined ? files : [...files, logFile];
+}
+
+/**
+ * Delete the files one run owns, and nothing else.
+ *
+ * Only paths the harness itself named are passed here: the board database,
+ * its records, its leases, and every file outside the harness are never in
+ * the list. A file another process still holds is left for a later sweep
+ * rather than failing the teardown.
+ */
+export async function removeHarnessFiles(database: string, logFile?: string): Promise<string[]> {
+  const removed: string[] = [];
+  for (const file of harnessFiles(database, logFile)) {
+    try {
+      await rm(file, { force: true });
+      removed.push(file);
+    } catch {
+      // Held by a process that has not exited yet; a later sweep takes it.
+    }
+  }
+  return removed;
+}
+
+/**
+ * Remove the files earlier runs left in the temp directory.
+ *
+ * A run killed before `stop` leaves its database and log behind, and the
+ * suite starts a fresh one each time. Only a file this harness named and that
+ * is older than `HARNESS_SWEEP_AGE_MS` is removed: a file that is not ours, or
+ * one a live run is still using, is never touched. A sweep is best effort and
+ * never fails the run that starts.
+ */
+export async function sweepStaleHarnessFiles(
+  dir: string = tmpdir(),
+  now: number = Date.now(),
+): Promise<string[]> {
+  const removed: string[] = [];
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return removed;
+  }
+  for (const name of names) {
+    if (!name.startsWith(HARNESS_FILE_PREFIX)) continue;
+    if (!HARNESS_FILE_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
+    const file = join(dir, name);
+    try {
+      const info = await stat(file);
+      if (!info.isFile()) continue;
+      if (now - info.mtimeMs <= HARNESS_SWEEP_AGE_MS) continue;
+      await rm(file, { force: true });
+      removed.push(file);
+    } catch {
+      // A file that vanished or is held by a live run is not ours to remove.
+    }
+  }
+  return removed;
+}
+
+/**
  * Start one OpenCode server for the whole suite.
  *
  * The server serves any directory it is asked for, so one process can drive
@@ -143,11 +403,26 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   const baseUrl = `http://127.0.0.1:${port}`;
 
   // The server's output goes to a file even when no log path is given, so a
-  // CI run shows why a server that never answered did not answer.
+  // CI run shows why a server that never answered did not answer. `serve` is
+  // started with `--print-logs`, so its structured lines go to stderr and
+  // land in this file; without the flag they go to the app log in the user's
+  // home directory and this file holds only the plain output.
+  // A run that was killed leaves its database and log behind. Sweep the
+  // leftovers of earlier runs before naming this run's files, so a stale file
+  // with this run's port is gone before it is reused. Only files older than
+  // `HARNESS_SWEEP_AGE_MS` are swept, so a live run keeps its own.
+  await sweepStaleHarnessFiles();
+
   const logFile =
     process.env.OPENAGENTSY_EVAL_SERVER_LOG ??
     join(tmpdir(), `openagentsy-eval-server-${port}.log`);
-  const logFd = (await import('node:fs')).openSync(logFile, 'a');
+  // A log path from the environment belongs to the caller. The harness only
+  // removes a log whose name it chose itself.
+  const ownsLogFile = process.env.OPENAGENTSY_EVAL_SERVER_LOG === undefined;
+  const logFd = openSync(logFile, 'a');
+  // Only what this run appends is this run's fault. A log path that already
+  // exists would otherwise carry an earlier run's errors into this suite.
+  const logStart = fstatSync(logFd).size;
 
   // OpenCode 2 serves with a password and OpenCode 1 does not, so the
   // password is set for both and sent with every request. The harness talks
@@ -161,14 +436,10 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // the caller's OpenCode 1 unable to read it.
   const database = join(tmpdir(), `openagentsy-eval-${port}.db`);
 
-  const child: ChildProcess = spawn(
-    'opencode',
-    ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
-    {
-      stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
-      env: { ...childEnv(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
-    },
-  );
+  const child: ChildProcess = spawn('opencode', serveArgs(port), {
+    stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+    env: { ...childEnv(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
+  });
 
   try {
     // A cold start under load can take longer than a warm one. 90 seconds
@@ -176,6 +447,10 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     await waitForServer(baseUrl, 90_000, { user: 'opencode', password });
   } catch (error) {
     child.kill('SIGTERM');
+    closeSync(logFd);
+    // The database is this run's and is dead weight once the server is gone.
+    // The log stays: it is the only record of why the server never answered.
+    await removeHarnessFiles(database);
     throw error;
   }
 
@@ -185,15 +460,32 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   });
 
   const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
+  const sessions = new Map<string, string>();
+  const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostError[]> =>
+    readHostErrors(logFile, logStart, sessions, killedSessions);
 
   return {
     client,
     root: baseUrl,
     watches,
+    hostErrors,
+    trackSession: (sessionID, caseLabel) => {
+      sessions.set(sessionID, caseLabel);
+    },
     stop: async () => {
       // A watcher that is still looking for a session stops looking: a
       // pending timer keeps the process alive.
       for (const watch of watches) watch.stop();
+      // The sessions the harness killed on purpose are the case's fault, not
+      // the host's: the server logs each abort at ERROR. The watches resolve
+      // to the id they killed (or undefined when they gave up), so they are
+      // the list of errors the cases asked for. Collect it before the server
+      // goes away, while an abort that is still in flight can still land.
+      const killedSessions = new Set(
+        (await Promise.all(watches.map((watch) => watch.killed))).filter(
+          (id): id is string => id !== undefined,
+        ),
+      );
       child.kill('SIGTERM');
       // The server writes to the log file it was given, and it may still be
       // writing when the process is asked to stop. Waiting for the exit
@@ -208,10 +500,61 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
         setTimeout(() => resolve(undefined), 5_000).unref?.();
       });
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      (await import('node:fs')).closeSync(logFd);
+      closeSync(logFd);
+      // The policy from `hostErrorsIn`: a host fault is a failure of the run.
+      // Throwing here fails the suite at teardown, so no green case result
+      // can hide an error the server wrote while it was serving them. It reads
+      // through `hostErrors`, the same view a caller asking mid-run gets, so
+      // the log is read before it is removed.
+      let faults: HostError[] = [];
+      try {
+        faults = await hostErrors(killedSessions);
+      } finally {
+        // This run's database, sidecars and (when it named it) log are garbage
+        // once the server is gone. Nothing else is in the list: not the board
+        // database, not its records or leases, and no file that is not ours.
+        await removeHarnessFiles(database, ownsLogFile ? logFile : undefined);
+      }
+      if (faults.length > 0) {
+        const detail = faults
+          .map((fault) => `[${fault.case}] ${fault.line.replace(/\n/g, '\n  ')}`)
+          .join('\n');
+        throw new Error(
+          `the opencode server wrote ${faults.length} host error(s); a case that passed while the host failed did not measure the agent:\n${detail}`,
+        );
+      }
     },
   };
 }
+
+/**
+ * The budget of one trial of a case.
+ *
+ * A trial is not one turn: it is the Lead's turn, the builder's turn the
+ * Lead dispatches, the judge's turn and, in a fault case, a second turn
+ * after the fault. Each of those turns may be slow, because the suite runs
+ * several cases at once and a turn waits behind the other cases' streams:
+ * slow is not hung. The budget is the ceiling of a trial and of one turn
+ * inside it, so a turn is never given up before the trial it belongs to
+ * would have been given up.
+ */
+export const TRIAL_BUDGET_MS = 1_800_000;
+
+/**
+ * A provider refusal the harness is about to retry.
+ *
+ * The status is the provider's own answer, the attempt counts the retries
+ * of the turn, and the wait is how long the harness sleeps before it asks
+ * again.
+ */
+export type ProviderRefusal = {
+  /** The status the provider answered with, such as 429. */
+  status: number;
+  /** Which retry this is, counting from one. */
+  attempt: number;
+  /** How long the harness waits before it asks again. */
+  waitMs: number;
+};
 
 export type PromptOptions = {
   harness: OpenCodeHarness;
@@ -219,9 +562,25 @@ export type PromptOptions = {
   agent: string;
   model?: string;
   text: string;
+  /**
+   * How long one turn may take, in milliseconds.
+   *
+   * The default is the budget of a trial, so a turn is only given up when
+   * the trial it belongs to would have been.
+   */
   timeoutMs?: number;
   /** How many times a rate limited turn is asked again. */
   rateLimitRetries?: number;
+  /**
+   * Called when the provider refused the turn and the harness is about to
+   * ask again.
+   *
+   * A refusal is the provider's answer, not the agent's, and a run that is
+   * slower because the provider refuses looks like a run that is slower
+   * because the model is slow. Nothing else in the log tells the two
+   * apart, so the refusal is written down.
+   */
+  onProviderRefusal?: (refusal: ProviderRefusal) => void;
   /**
    * Wait for the board server before the first turn.
    *
@@ -372,6 +731,9 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   if (sessionID === undefined) {
     throw new Error('the server created a session without an id');
   }
+  // A host error that names this session belongs to this case. The case is
+  // its throwaway directory; the directory is what the suite gives it.
+  harness.trackSession(sessionID, basename(directory));
 
   // The board is an MCP server, and the server starts it when a session in
   // that directory begins. A tool call that arrives before the server is up
@@ -399,7 +761,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
 
   await ask();
 
-  const timeoutMs = options.timeoutMs ?? 600_000;
+  const timeoutMs = options.timeoutMs ?? TRIAL_BUDGET_MS;
   await waitForIdle(client, sessionID, directory, timeoutMs);
 
   const messages = await client.session.messages({
@@ -419,7 +781,13 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const attempts = options.rateLimitRetries ?? 2;
   let providerError = providerErrorOf(last);
   for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
-    await sleep((attempt + 1) * 30_000);
+    const waitMs = (attempt + 1) * 30_000;
+    // The refusal is written down before the wait, not after it: a run that
+    // is slow because the provider refuses has to say so while it is slow.
+    // The loop is only entered when the turn was refused, so a turn that
+    // answered the first time is never reported.
+    options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
+    await sleep(waitMs);
     await ask();
     await waitForIdle(client, sessionID, directory, timeoutMs);
     const again = await client.session.messages({

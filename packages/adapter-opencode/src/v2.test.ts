@@ -96,7 +96,12 @@ function fakeContext(
 }
 
 describe('the OpenCode 2 path', () => {
-  it('harvests a session that goes idle', async () => {
+  it('does not harvest a session that goes idle, because the context has no lookup', async () => {
+    // The V2 harvest is off: V2Context.session offers no way to ask whether
+    // the archivist child still exists, and a message list cannot tell a
+    // fresh session from a deleted one (v2.ts states the reason). Prompting
+    // anyway would claim a check that did not happen, so nothing is created
+    // and nothing is prompted.
     const { ctx, created, prompts, contextHooks, done } = fakeContext([
       { type: 'session.idle', properties: { sessionID: 'ses_1' } },
     ]);
@@ -109,13 +114,10 @@ describe('the OpenCode 2 path', () => {
     }
     await done;
 
-    expect(created).toHaveLength(1);
-    // The archivist session is a child of the session it harvests.
-    expect(created[0]?.parentID).toBe('ses_1');
-    expect(created[0]?.title).toBe('harvest builder');
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]?.sessionID).toBe('ses_archivist');
-    expect(prompts[0]?.text).toContain('what the session said');
+    // The reason: the context the plugin is given has no session lookup.
+    expect('get' in ctx.session).toBe(false);
+    expect(created).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
   });
 
   it('leaves a session it does not know alone', async () => {
