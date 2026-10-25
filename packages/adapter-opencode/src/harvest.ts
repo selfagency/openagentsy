@@ -27,6 +27,9 @@ const ARCHIVIST = 'oa-archivist';
 /** How much of the transcript the packet carries. */
 const MAX_TRANSCRIPT_CHARS = 12_000;
 
+/** How long a harvest child is kept. Older children are pruned. */
+const HARVEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
 /**
  * Whether the memory pipeline runs for this project.
  *
@@ -78,6 +81,15 @@ export type HarvestSession = {
    * server's own lookup is the only answer that can tell the two apart.
    */
   exists: (sessionID: string) => Promise<boolean>;
+  /**
+   * Delete the harvest children the janitor owns.
+   *
+   * Optional: a runtime that cannot list and delete sessions leaves it out,
+   * and the harvest then does not prune. When it is present the harvest only
+   * starts it: it is never awaited, so a slow list or a refused delete
+   * cannot delay or fail the harvest of this session.
+   */
+  prune?: () => Promise<void>;
 };
 
 export type HarvestInput = {
@@ -152,6 +164,16 @@ export async function harvest(
 
   await session.prompt({ sessionID: archivistSession, agent: ARCHIVIST, text: packet });
 
+  // The janitor runs beside the harvest, not inside it: it is started here
+  // and never awaited, so the session that is closing is not held while the
+  // server lists and deletes old children. It records its own failure, so it
+  // cannot throw into the harvest, and the result below is what the harvest
+  // did regardless of what the prune does. The catch is for a runtime whose
+  // prune rejects anyway, so an unhandled rejection cannot reach the
+  // closing session.
+  const pruning = session.prune?.();
+  if (pruning !== undefined) void pruning.catch(() => {});
+
   return { harvested: true, reason: `the archivist was given the packet of ${sessionID}` };
 }
 
@@ -175,6 +197,106 @@ export async function recordHarvestFailure(
     effect: 'deny',
     detail: input.error instanceof Error ? input.error.message : String(input.error),
   });
+}
+
+/** One session as the janitor reads it. */
+export type PruneSessionRow = {
+  id?: string;
+  title?: string;
+  agent?: string;
+  time?: { created?: number; updated?: number };
+};
+
+/** The two operations the janitor needs from a session runtime. */
+export type PruneSession = {
+  list: () => Promise<PruneSessionRow[]>;
+  delete: (sessionID: string) => Promise<void>;
+};
+
+/**
+ * Delete the harvest children that are older than seven days.
+ *
+ * The rule is deliberately this narrow, because this is the one place the
+ * plugin deletes a session, and a session it did not create can hold a
+ * person's own history. A row is ours only when every condition holds:
+ *
+ * - the title starts with `harvest `, the prefix `harvest()` writes;
+ * - the agent is `oa-archivist`, the only agent a harvest child runs under;
+ * - it was created more than seven days ago.
+ *
+ * A recent child is kept even though it is ours: the archivist may still be
+ * working in it, and a week is long enough for its candidates to reach the
+ * board. A row the runtime gives without an agent or a creation time is kept
+ * too, because the rule is a conjunction and a condition that cannot be
+ * checked is not a pass; the older rows with an empty agent are exactly this
+ * case, and they are left alone.
+ *
+ * It never rejects: every failure is written the way a failed harvest is,
+ * and the next row is still tried. A delete of a row the server no longer
+ * has is handled by the runtime adapter as a no-op, because a second delete
+ * asks for the same end state as the first.
+ */
+export async function pruneHarvestChildren(
+  session: PruneSession,
+  root: string,
+  now: number = Date.now(),
+): Promise<void> {
+  let rows: PruneSessionRow[];
+  try {
+    rows = await session.list();
+  } catch (error) {
+    await recordHarvestPruneFailure(root, '(session list)', error);
+    return;
+  }
+
+  for (const row of rows) {
+    if (!isStaleHarvestChild(row, now)) continue;
+    const sessionID = row.id;
+    if (sessionID === undefined) continue;
+    try {
+      await session.delete(sessionID);
+    } catch (error) {
+      // One refused delete must not stop the sweep, and it must not reach
+      // the harvest. It goes on the record like any other harvest failure.
+      await recordHarvestPruneFailure(root, sessionID, error);
+    }
+  }
+}
+
+/** Whether a row is one of the harvest's own children and is past its keep. */
+function isStaleHarvestChild(row: PruneSessionRow, now: number): boolean {
+  if (row.title === undefined || !row.title.startsWith('harvest ')) return false;
+  // The server may omit the agent (the V1 SDK type does not carry it). An
+  // unreported agent is not a match: the condition is unverified, so keep it.
+  if (row.agent !== ARCHIVIST) return false;
+  const created = row.time?.created;
+  if (created === undefined) return false;
+  return now - created > HARVEST_RETENTION_MS;
+}
+
+/**
+ * A failed prune, on the record.
+ *
+ * It is recorded as a harvest failure, because that is the policy the
+ * janitor acts under. Recording can itself fail (an unwritable state root);
+ * there is nowhere left to put that, and the prune must not reject into the
+ * harvest it runs beside, so it is dropped.
+ */
+async function recordHarvestPruneFailure(
+  root: string,
+  sessionID: string,
+  error: unknown,
+): Promise<void> {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    await recordHarvestFailure(root, {
+      agent: ARCHIVIST,
+      sessionID,
+      error: new Error(`harvest prune failed: ${message}`),
+    });
+  } catch {
+    // Nowhere left to record it. The prune stays silent rather than reject.
+  }
 }
 
 /** The words of the session, trimmed to the end, where the outcome is. */
