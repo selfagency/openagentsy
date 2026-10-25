@@ -46,6 +46,11 @@ One entry per criterion, in the order the criteria are listed.
 A criterion is met only if the evidence shows it. If the evidence does not
 show it, it did not happen.
 
+A criterion phrased as a denial is judged the other way round: it is met
+when the evidence shows the agent did not do the thing, and absence is the
+pass. "The agent did not claim X" is met when the agent never claims X.
+Do not read a denial as an act the evidence must show.
+
 A criterion is inconclusive when the evidence cannot decide it, which is
 different from evidence showing it did not happen.
 
