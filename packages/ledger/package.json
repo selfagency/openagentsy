@@ -1,0 +1,53 @@
+{
+  "name": "@openagentsy/ledger",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "pricing:snapshot": "bun scripts/fetch-pricing.mjs"
+  },
+  "dependencies": {
+    "@openagentsy/core": "workspace:^",
+    "@openagentsy/footprint": "workspace:^",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "bun-types": "^1.4.4",
+    "typescript": "^5.9.2"
+  },
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/selfagency/openagentsy.git"
+  },
+  "homepage": "https://github.com/selfagency/openagentsy#readme",
+  "bugs": {
+    "url": "https://github.com/selfagency/openagentsy/issues"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "The OpenAgentsy usage ledger: tokens, cost, waste and outcomes, and nothing else.",
+  "keywords": [
+    "agents",
+    "ledger",
+    "tokens",
+    "cost",
+    "opencode",
+    "usage"
+  ],
+  "files": [
+    "dist",
+    "data"
+  ]
+}

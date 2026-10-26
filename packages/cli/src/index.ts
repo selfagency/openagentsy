@@ -5,6 +5,7 @@ import type { Target } from '@openagentsy/core';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
 import { formatDoctorReport, runDoctor } from './commands/doctor.js';
+import { formatLedgerReport, runLedger } from './commands/ledger.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
 import { runSetup } from './commands/setup.js';
 import { detectOpenCode, targetForVersion } from './opencode.js';
@@ -15,6 +16,8 @@ Commands:
   board              Show the records, leases and budgets, for a human to read
   build              Generate the agent, command and skill files for a target OpenCode version
   doctor             Report what is installed, where it came from, and what is missing
+  ledger             Show the tokens, the cost and the waste of the work
+  ledger export      Write the counters of the ledger as JSON
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
@@ -33,6 +36,7 @@ Options:
   --allow-retention   Allow models that are not zero data retention
   --key <key>         BenchLM key, for the keyed REST API
   --yes               Write the lock file without asking
+  --json              Write the output as JSON (ledger)
   --dry-run           Print what setup would write without writing it
   --magic-context     Turn OpenCode's compaction off, for a project with a
                       memory integration that shrinks the context itself
@@ -55,6 +59,7 @@ export type Values = {
   'allow-training'?: boolean | undefined;
   'allow-retention'?: boolean | undefined;
   yes?: boolean | undefined;
+  json?: boolean | undefined;
   help?: boolean | undefined;
 };
 
@@ -92,6 +97,22 @@ async function boardCommand(root: string): Promise<number> {
 async function doctorCommand(root: string): Promise<number> {
   const report = await runDoctor(root);
   process.stdout.write(formatDoctorReport(report));
+  return 0;
+}
+
+async function ledgerCommand(root: string, values: Values, positionals: string[]): Promise<number> {
+  const sub = positionals[1];
+  if (sub !== undefined && sub !== 'export') {
+    process.stderr.write(`unknown ledger subcommand: ${sub}\n`);
+    return 1;
+  }
+
+  const report = await runLedger(root);
+  if (sub === 'export' || values.json === true) {
+    process.stdout.write(`${JSON.stringify(report.counters, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(formatLedgerReport(report));
   return 0;
 }
 
@@ -215,6 +236,7 @@ const COMMANDS: Record<
   build: buildCommand,
   board: boardCommand,
   doctor: doctorCommand,
+  ledger: ledgerCommand,
   setup: setupCommand,
   models: modelsCommand,
 };
@@ -254,6 +276,7 @@ export async function main(argv: string[]): Promise<number> {
       'allow-retention': { type: 'boolean' },
       key: { type: 'string' },
       yes: { type: 'boolean' },
+      json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
