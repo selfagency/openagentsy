@@ -151,7 +151,7 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_lease: the leases, which agent may write which file. op=check asks whether you may write a path. op=release gives a lease back, and only the holder may release it. op=list lists the leases.
 - board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
 - board_lease_revoke: take a lease back from an agent that is not using it, for example a session that died holding it. The Lead only.
-- board_budget: the token budgets. op=check reports whether a bean is over its budget, measured from the ledger; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.
+- board_budget: the token budgets. op=check reports whether a bean is over its budget, measured from the ledger; at 85 percent the builder stops and posts a blocker. op=list lists the budgets. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.
 - board_budget_set: set a token budget for a bean. The Lead only.
 - board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
