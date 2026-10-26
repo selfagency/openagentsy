@@ -132,6 +132,19 @@ export function normalizeOcMessage(raw: unknown): AssistantMessage {
   };
 }
 
+/**
+ * The output tokens of a message, with the reasoning counted once.
+ *
+ * The live path and the backfill both go through here, so a message that
+ * was counted once cannot be counted twice by the other path.
+ */
+function outputTokens(provider: string, tokens: MessageTokens): number {
+  const reasoning = n(tokens.reasoning);
+  return REASONING_IN_OUTPUT.has(provider.toLowerCase())
+    ? Math.max(0, n(tokens.output) - reasoning)
+    : n(tokens.output);
+}
+
 const USAGE_INSERT = `INSERT OR IGNORE INTO usage
   (message_id, session_id, root_session_id, role, provider, model, input, output, reasoning,
    cache_read, cache_write, cost_reported, latency_ms, task_id, ts)
@@ -157,9 +170,7 @@ export function recordAssistantMessage(
   const context = ingestCtxSchema.parse(ctx);
   const tokens = m.tokens ?? {};
   const reasoning = n(tokens.reasoning);
-  const output = REASONING_IN_OUTPUT.has(m.providerID.toLowerCase())
-    ? Math.max(0, n(tokens.output) - reasoning)
-    : n(tokens.output);
+  const output = outputTokens(m.providerID, tokens);
 
   withBusyRetry(() => {
     db.query(USAGE_INSERT).run(
@@ -402,7 +413,7 @@ function importFile(db: Database, path: string, limit: number): number {
             message.providerID,
             message.modelID,
             n(message.tokens?.input),
-            n(message.tokens?.output),
+            outputTokens(message.providerID, message.tokens ?? {}),
             n(message.tokens?.reasoning),
             n(message.tokens?.cache?.read),
             n(message.tokens?.cache?.write),

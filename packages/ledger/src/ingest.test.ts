@@ -185,6 +185,19 @@ describe('the backfill', () => {
         cost: 0.5,
       }),
     );
+    // A provider of the Codex family folds the reasoning into the output.
+    source.query('INSERT INTO message (id, session_id, time_created, data) VALUES (?,?,?,?)').run(
+      'msg_codex',
+      'ses_child',
+      1_600_000_000_000,
+      JSON.stringify({
+        role: 'assistant',
+        agent: 'oa-builder',
+        providerID: 'codex',
+        modelID: 'gpt-codex',
+        tokens: { input: 5, output: 40, reasoning: 10, cache: { read: 0, write: 0 } },
+      }),
+    );
     source.close();
   }
 
@@ -210,7 +223,7 @@ describe('the backfill', () => {
     try {
       const result = backfillFromOpencode(db, { enabled: true, dataDir });
       expect(result.errors).toEqual([]);
-      expect(result.imported).toBe(1);
+      expect(result.imported).toBe(2);
 
       const row = db.query('SELECT role, role_raw, root_session_id, input FROM usage').get() as {
         role: string | null;
@@ -222,6 +235,22 @@ describe('the backfill', () => {
       expect(row.role_raw).toBe('oa-builder');
       expect(row.root_session_id).toBe('ses_root');
       expect(row.input).toBe(10);
+    } finally {
+      closeLedger(db);
+    }
+  });
+
+  it('counts the reasoning once for a backfilled codex message', async () => {
+    const dataDir = join(root, 'opencode');
+    await fixture(dataDir);
+    const db = openLedger(root);
+    try {
+      backfillFromOpencode(db, { enabled: true, dataDir });
+      const row = db
+        .query('SELECT output, reasoning FROM usage WHERE message_id = ?')
+        .get('msg_codex') as { output: number; reasoning: number };
+      expect(row.reasoning).toBe(10);
+      expect(row.output).toBe(30);
     } finally {
       closeLedger(db);
     }

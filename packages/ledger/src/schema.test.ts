@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BUSY_RETRIES, closeLedger, openLedger, withBusyRetry } from './db.js';
+import { BUSY_RETRIES, closeLedger, isBusyError, openLedger, withBusyRetry } from './db.js';
 import { applySchema } from './schema.js';
 
 let root: string;
@@ -108,9 +108,34 @@ describe('the busy retry', () => {
     try {
       other.exec('PRAGMA busy_timeout = 0');
       writer.exec('BEGIN EXCLUSIVE');
-      expect(() => withBusyRetry(() => other.query(INSERT).run())).toThrow();
+
+      // The error has to be the busy one, and the loop has to have tried
+      // again: a retry that never retries would pass a plain toThrow.
+      let caught: unknown;
+      let attempts = 0;
+      try {
+        withBusyRetry(() => {
+          attempts += 1;
+          return other.query(INSERT).run();
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeDefined();
+      expect(isBusyError(caught)).toBe(true);
+      expect(String((caught as Error).message)).toMatch(/locked|SQLITE_BUSY/);
+      expect(attempts).toBeGreaterThan(1);
+      expect(attempts).toBe(BUSY_RETRIES + 1);
+
       writer.exec('COMMIT');
-      expect(() => withBusyRetry(() => other.query(INSERT).run())).not.toThrow();
+      let written = 0;
+      expect(() =>
+        withBusyRetry(() => {
+          written += 1;
+          return other.query(INSERT).run();
+        }),
+      ).not.toThrow();
+      expect(written).toBe(1);
     } finally {
       closeLedger(writer);
       closeLedger(other);
