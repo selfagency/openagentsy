@@ -10,9 +10,11 @@ This repository incorporates or adapts code from these projects, under
 the terms noted:
 
 - hmans/beans (Apache-2.0): the fractional-order algorithm in
-  packages/tasks/src/fractional.ts is a port of pkg/bean/fractional.go.
-  Apache-2.0 code may be included in GPL-3 works; this NOTICE records the
-  origin and the license.
+  packages/tasks/src/fractional.ts is a port of pkg/bean/fractional.go, and
+  the task files in packages/tasks/fixtures/beans-corpus/ are copies of
+  files from its .beans/ directory, used as test data. Apache-2.0 code may
+  be included in GPL-3 works; this NOTICE records the origin and the
+  license.
 - zhaono1/agent-playbook (MIT): the lesson lifecycle states, the start
   packet and the eval-artifact contract in packages/hooks/src/lessons/,
   and the host-conformance states in packages/adapters/src/conformance.ts,

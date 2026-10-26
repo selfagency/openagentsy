@@ -9,6 +9,7 @@
     { "path": "packages/footprint" },
     { "path": "packages/memory" },
     { "path": "packages/adapter-opencode" },
-    { "path": "packages/evals" }
+    { "path": "packages/evals" },
+    { "path": "packages/tasks" }
   ]
 }
