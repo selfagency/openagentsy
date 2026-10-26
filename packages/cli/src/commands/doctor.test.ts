@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runDoctor } from './doctor.js';
+import { formatDoctorReport, runDoctor } from './doctor.js';
 
 let root: string;
 
@@ -56,6 +56,26 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+/** The Phase 2 keys, written the way a person writes them: with comments. */
+const AGENTSY_CONFIG = `{
+  // the Phase 2 keys
+  "tasks": { "path": ".work", "prefix": "x-", "idLength": 6 },
+  "memory": { "maxTextChars": 120, "inboxLimit": 10 },
+  "footprint": {
+    "showWarming": false,
+    "prefill": true,
+    "gridRegion": "FR",
+    "localDeviceWatts": [10, 30],
+    "models": { "ollama/qwen3:8b": { "totalParamsB": [8, 8], "activeParamsB": [8, 8] } }
+  }
+}`;
+
+const BEANS_CONFIG = `beans:
+  path: .beans-tasks
+  prefix: b-
+  id_length: 8
+`;
+
 describe('the doctor', () => {
   it('names the Lead by the agent a person picks', async () => {
     // The agent id is 'agentsy' and the role key is 'lead'. The doctor used
@@ -98,5 +118,77 @@ describe('the doctor', () => {
     const report = await runDoctor(root);
     expect(report.config.paths).toHaveLength(2);
     expect(report.config.paths.some((path) => path.includes('.opencode'))).toBe(true);
+  });
+});
+
+describe('the config map', () => {
+  it('prints the five authorities when they are all there', async () => {
+    await writeFile(join(root, 'opencode.json'), JSON.stringify({}), 'utf8');
+    await writeFile(join(root, 'openagentsy.jsonc'), AGENTSY_CONFIG, 'utf8');
+    await writeFile(join(root, '.beans.yml'), BEANS_CONFIG, 'utf8');
+    await writeFile(join(root, 'openagentsy.models.lock.json'), JSON.stringify({}), 'utf8');
+
+    const report = await runDoctor(root);
+    expect(report.configMap.authorities).toHaveLength(5);
+    expect(report.configMap.authorities.every((authority) => authority.exists)).toBe(true);
+    const paths = report.configMap.authorities.map((authority) => authority.path);
+    expect(paths).toContain('roles.yaml');
+    expect(paths).toContain('openagentsy.jsonc');
+    expect(paths).toContain('.beans.yml');
+    expect(paths).toContain('openagentsy.models.lock.json');
+    expect(paths.some((path) => path.includes('opencode.json'))).toBe(true);
+
+    const printed = formatDoctorReport(report);
+    expect(printed).toContain('Config map');
+    expect(printed).toContain('roles.yaml');
+    expect(printed).toContain('written by a person');
+  });
+
+  it('says a file is missing and falls back to the defaults', async () => {
+    const report = await runDoctor(root);
+
+    const missing = report.configMap.authorities.filter((authority) => !authority.exists);
+    expect(missing.map((authority) => authority.path)).toEqual([
+      'opencode.json',
+      'openagentsy.jsonc',
+      '.beans.yml',
+      'openagentsy.models.lock.json',
+    ]);
+
+    const effective = report.configMap.effective;
+    expect(effective.tasks).toEqual({ path: '.beans', prefix: 'oa-', idLength: 4 });
+    expect(effective.memory).toEqual({ maxTextChars: 280, inboxLimit: 50 });
+    expect(effective.footprint.showWarming).toBe(true);
+    expect(effective.footprint.prefill).toBe(false);
+    expect(effective.footprint.gridRegion).toBe('auto');
+    expect(effective.footprint.localDeviceWatts).toEqual([25, 60]);
+    expect(effective.footprint.models).toEqual([]);
+  });
+
+  it('reads the Phase 2 keys out of the openagentsy file', async () => {
+    await writeFile(join(root, 'openagentsy.jsonc'), AGENTSY_CONFIG, 'utf8');
+
+    const effective = (await runDoctor(root)).configMap.effective;
+    expect(effective.tasks.path).toBe('.work');
+    expect(effective.tasks.prefix).toBe('x-');
+    expect(effective.tasks.idLength).toBe(6);
+    expect(effective.memory.maxTextChars).toBe(120);
+    expect(effective.memory.inboxLimit).toBe(10);
+    expect(effective.footprint.showWarming).toBe(false);
+    expect(effective.footprint.prefill).toBe(true);
+    expect(effective.footprint.gridRegion).toBe('FR');
+    expect(effective.footprint.localDeviceWatts).toEqual([10, 30]);
+    expect(effective.footprint.models).toEqual(['ollama/qwen3:8b']);
+  });
+
+  it('lets the beans file outrank the tasks keys, and says so', async () => {
+    await writeFile(join(root, 'openagentsy.jsonc'), AGENTSY_CONFIG, 'utf8');
+    await writeFile(join(root, '.beans.yml'), BEANS_CONFIG, 'utf8');
+
+    const report = await runDoctor(root);
+    expect(report.configMap.effective.tasks.path).toBe('.beans-tasks');
+    expect(report.configMap.effective.tasks.prefix).toBe('b-');
+    expect(report.configMap.effective.tasks.idLength).toBe(8);
+    expect(report.configMap.overlaps.some((overlap) => overlap.includes('.beans.yml'))).toBe(true);
   });
 });

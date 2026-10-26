@@ -10,6 +10,7 @@ import {
   type Target,
 } from '@openagentsy/core';
 import { parse as parseJsonc } from 'jsonc-parser';
+import { parse as parseYaml } from 'yaml';
 import { lockEntryFor, readModelLock } from '../generate/lock.js';
 import {
   detectOpenCode,
@@ -56,9 +57,43 @@ export type PluginReport = {
   bundleBuilt: boolean;
 };
 
+/** One of the five files that decide how this project is configured. */
+export type ConfigAuthority = {
+  /** The file, or the files the host merges. */
+  path: string;
+  exists: boolean;
+  /** What the file is authoritative for, in one line. */
+  authority: string;
+  /** Who writes it. */
+  writtenBy: string;
+  /** True when the file is not the tool's to write. */
+  protected: boolean;
+};
+
+/** The Phase 2 keys, with the defaults filled in. */
+export type Phase2Config = {
+  tasks: { path: string; prefix: string; idLength: number };
+  memory: { maxTextChars: number; inboxLimit: number };
+  footprint: {
+    showWarming: boolean;
+    prefill: boolean;
+    gridRegion: string;
+    localDeviceWatts: [number, number];
+    models: string[];
+  };
+};
+
+export type ConfigMap = {
+  authorities: ConfigAuthority[];
+  effective: Phase2Config;
+  /** The places two files answer the same question. */
+  overlaps: string[];
+};
+
 export type DoctorReport = {
   opencode: { version: OpenCodeVersion | undefined; target: Target };
   config: ConfigReport;
+  configMap: ConfigMap;
   plugin: PluginReport;
   roles: RoleReport[];
   skills: FoundSkill[];
@@ -113,6 +148,214 @@ async function readProjectConfig(root: string): Promise<ConfigReport> {
     compactionPrune: undefined,
     mcpServers: [],
     plugins: [],
+  };
+}
+
+/**
+ * The five files that decide how this project is configured.
+ *
+ * The order is the order of authority: a person's roles.yaml outranks the
+ * host's config, and .beans.yml outranks the Phase 2 keys, so the two tools
+ * write the same task ids.
+ */
+const AUTHORITIES = [
+  {
+    file: 'roles.yaml',
+    authority: 'roles, permission maps, guidance',
+    writtenBy: 'a person; the generator consumes it',
+    protected: true,
+  },
+  {
+    file: 'opencode.json',
+    authority: 'the host: plugins, permissions, compaction',
+    writtenBy: 'a person; setup warns on an overlap',
+    protected: true,
+  },
+  {
+    file: 'openagentsy.jsonc',
+    authority: 'the Phase 2 keys',
+    writtenBy: 'a person',
+    protected: true,
+  },
+  {
+    file: '.beans.yml',
+    authority: 'beans interop: prefix, id length, path',
+    writtenBy: 'a person',
+    protected: false,
+  },
+  {
+    file: 'openagentsy.models.lock.json',
+    authority: 'the model lock',
+    writtenBy: 'openagentsy models init',
+    protected: true,
+  },
+];
+
+/** The Phase 2 keys, as they are when nobody says otherwise. */
+const PHASE2_DEFAULTS = {
+  tasks: { path: '.beans', prefix: 'oa-', idLength: 4 },
+  memory: { maxTextChars: 280, inboxLimit: 50 },
+  footprint: {
+    showWarming: true,
+    prefill: false,
+    gridRegion: 'auto',
+    localDeviceWatts: [25, 60] as [number, number],
+  },
+};
+
+function stringOr(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value : fallback;
+}
+
+function booleanOr(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function numberOr(value: unknown, fallback: number): number {
+  const found = firstNumber(value);
+  return found ?? fallback;
+}
+
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function rangeOr(value: unknown, fallback: [number, number]): [number, number] {
+  if (!Array.isArray(value) || value.length !== 2) return fallback;
+  const lo = value[0];
+  const hi = value[1];
+  if (typeof lo !== 'number' || typeof hi !== 'number') return fallback;
+  return [lo, hi];
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  return stat(path).then(
+    () => true,
+    () => false,
+  );
+}
+
+/** A JSONC file, read the way a person writes one: with comments. */
+async function readJsoncFile(path: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const text = await readFile(path, 'utf8');
+    return asRecord(parseJsonc(text));
+  } catch {
+    return undefined;
+  }
+}
+
+async function readYamlFile(path: string): Promise<Record<string, unknown> | undefined> {
+  try {
+    const text = await readFile(path, 'utf8');
+    return asRecord(parseYaml(text));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The Phase 2 keys, with the defaults filled in.
+ *
+ * .beans.yml decides the task ids, so it outranks the tasks.* keys of
+ * openagentsy.jsonc. The two tools then write the same ids.
+ */
+function effectiveConfig(
+  agentsy: Record<string, unknown>,
+  beans: Record<string, unknown>,
+): Phase2Config {
+  const tasks = asRecord(agentsy.tasks);
+  const beansKeys = asRecord(beans.beans);
+  const memory = asRecord(agentsy.memory);
+  const footprint = asRecord(agentsy.footprint);
+
+  return {
+    tasks: {
+      path: stringOr(beansKeys.path, stringOr(tasks.path, PHASE2_DEFAULTS.tasks.path)),
+      prefix: stringOr(beansKeys.prefix, stringOr(tasks.prefix, PHASE2_DEFAULTS.tasks.prefix)),
+      idLength:
+        firstNumber(beansKeys.id_length, beansKeys.idLength, tasks.idLength) ??
+        PHASE2_DEFAULTS.tasks.idLength,
+    },
+    memory: {
+      maxTextChars: numberOr(memory.maxTextChars, PHASE2_DEFAULTS.memory.maxTextChars),
+      inboxLimit: numberOr(memory.inboxLimit, PHASE2_DEFAULTS.memory.inboxLimit),
+    },
+    footprint: {
+      showWarming: booleanOr(footprint.showWarming, PHASE2_DEFAULTS.footprint.showWarming),
+      prefill: booleanOr(footprint.prefill, PHASE2_DEFAULTS.footprint.prefill),
+      gridRegion: stringOr(footprint.gridRegion, PHASE2_DEFAULTS.footprint.gridRegion),
+      localDeviceWatts: rangeOr(
+        footprint.localDeviceWatts,
+        PHASE2_DEFAULTS.footprint.localDeviceWatts,
+      ),
+      models: Object.keys(asRecord(footprint.models)).sort(),
+    },
+  };
+}
+
+/** The places where two files answer the same question. */
+function configOverlaps(
+  authorities: ConfigAuthority[],
+  hasAgentsy: boolean,
+  hasBeans: boolean,
+  opencodePaths: string[],
+): string[] {
+  const overlaps: string[] = [];
+  const rolesExist = authorities.some(
+    (authority) => authority.path === 'roles.yaml' && authority.exists,
+  );
+
+  if (opencodePaths.length > 1) {
+    overlaps.push(
+      `OpenCode merges ${opencodePaths.length} config files: ${opencodePaths.join(', ')}.`,
+    );
+  }
+  if (rolesExist && opencodePaths.length > 0) {
+    overlaps.push(
+      'roles.yaml and the OpenCode config both carry permissions; the roles in roles.yaml are the ones this project generates.',
+    );
+  }
+  if (hasAgentsy && hasBeans) {
+    overlaps.push('openagentsy.jsonc and .beans.yml both decide the task ids; .beans.yml wins.');
+  }
+  return overlaps;
+}
+
+/**
+ * The map of the five authorities, and the Phase 2 keys in force.
+ *
+ * A file that is not there is still part of the system, because a person
+ * may write it later, so the map says so.
+ */
+async function readConfigMap(root: string, opencodePaths: string[]): Promise<ConfigMap> {
+  const agentsy = await readJsoncFile(join(root, 'openagentsy.jsonc'));
+  const beans = await readYamlFile(join(root, '.beans.yml'));
+
+  const authorities: ConfigAuthority[] = [];
+  for (const entry of AUTHORITIES) {
+    const isHost = entry.file === 'opencode.json';
+    authorities.push({
+      path: isHost && opencodePaths.length > 0 ? opencodePaths.join(', ') : entry.file,
+      exists: isHost ? opencodePaths.length > 0 : await fileExists(join(root, entry.file)),
+      authority: entry.authority,
+      writtenBy: entry.writtenBy,
+      protected: entry.protected,
+    });
+  }
+
+  return {
+    authorities,
+    effective: effectiveConfig(agentsy ?? {}, beans ?? {}),
+    overlaps: configOverlaps(
+      authorities,
+      agentsy !== undefined,
+      beans !== undefined,
+      opencodePaths,
+    ),
   };
 }
 
@@ -179,6 +422,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   }
 
   const config = await readProjectConfig(root);
+  const configMap = await readConfigMap(root, config.paths);
 
   warnings.push(...compactionWarnings(config));
   if (!config.exists) {
@@ -246,6 +490,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   return {
     opencode: { version, target },
     config,
+    configMap,
     plugin: {
       path: pluginPath,
       installed: pluginInstalled,
@@ -298,6 +543,41 @@ function configLines(config: ConfigReport): string[] {
   return lines;
 }
 
+/**
+ * The lines about the config map.
+ *
+ * A file that is not there is still part of the system, so the map says
+ * "missing" instead of leaving the reader to guess.
+ */
+function configMapLines(map: ConfigMap): string[] {
+  const lines: string[] = [];
+  for (const authority of map.authorities) {
+    lines.push(`  ${authority.path}`);
+    lines.push(
+      `    ${authority.exists ? 'found' : 'missing'} - ${authority.authority} (written by ${authority.writtenBy}${authority.protected ? ', protected' : ''})`,
+    );
+  }
+  return lines;
+}
+
+/** The lines about the Phase 2 keys in force. */
+function phase2Lines(effective: Phase2Config): string[] {
+  const key = (label: string, value: string): string => `  ${label.padEnd(24)}${value}`;
+  const watts = effective.footprint.localDeviceWatts;
+  return [
+    key('tasks.path', effective.tasks.path),
+    key('tasks.prefix', effective.tasks.prefix),
+    key('tasks.idLength', String(effective.tasks.idLength)),
+    key('memory.maxTextChars', String(effective.memory.maxTextChars)),
+    key('memory.inboxLimit', String(effective.memory.inboxLimit)),
+    key('footprint.showWarming', String(effective.footprint.showWarming)),
+    key('footprint.prefill', String(effective.footprint.prefill)),
+    key('footprint.gridRegion', effective.footprint.gridRegion),
+    key('footprint.localDeviceWatts', `${watts[0]}-${watts[1]} W`),
+    key('footprint.models', effective.footprint.models.join(', ') || 'none'),
+  ];
+}
+
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = [];
 
@@ -312,6 +592,22 @@ export function formatDoctorReport(report: DoctorReport): string {
   lines.push('');
   lines.push('Project config');
   lines.push(...configLines(report.config));
+
+  lines.push('');
+  lines.push('Config map');
+  lines.push(...configMapLines(report.configMap));
+
+  lines.push('');
+  lines.push('Phase 2 keys');
+  lines.push(...phase2Lines(report.configMap.effective));
+
+  if (report.configMap.overlaps.length > 0) {
+    lines.push('');
+    lines.push('Overlaps');
+    for (const overlap of report.configMap.overlaps) {
+      lines.push(`  - ${overlap}`);
+    }
+  }
 
   if (report.warnings.length > 0) {
     lines.push('');
