@@ -35,7 +35,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "The OpenAgentsy board: records, leases, budgets and budgets, over MCP.",
+  "description": "The OpenAgentsy board: records, leases, budgets and audit, over MCP.",
   "keywords": [
     "agents",
     "mcp",
@@ -44,5 +44,10 @@
   ],
   "files": [
     "dist"
-  ]
+  ],
+  "author": "daniel sieradski",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "main": "./dist/index.js"
 }

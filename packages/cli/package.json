@@ -48,5 +48,6 @@
   "files": [
     "dist",
     "plugin"
-  ]
+  ],
+  "author": "daniel sieradski"
 }
