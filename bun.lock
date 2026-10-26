@@ -39,6 +39,7 @@
       },
       "dependencies": {
         "@openagentsy/core": "0.1.0",
+        "@openagentsy/ledger": "workspace:^",
         "@openagentsy/models": "0.1.0",
         "jsonc-parser": "^3.3.1",
         "yaml": "^2.8.0",
@@ -97,6 +98,20 @@
       },
       "devDependencies": {
         "@types/node": "^24.3.0",
+        "typescript": "^5.9.2",
+      },
+    },
+    "packages/ledger": {
+      "name": "@openagentsy/ledger",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openagentsy/core": "workspace:^",
+        "@openagentsy/footprint": "workspace:^",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/node": "^24.3.0",
+        "bun-types": "^1.4.4",
         "typescript": "^5.9.2",
       },
     },
@@ -362,6 +377,8 @@
     "@openagentsy/footprint": ["@openagentsy/footprint@workspace:packages/footprint"],
 
     "@openagentsy/jev": ["@openagentsy/jev@workspace:packages/jev"],
+
+    "@openagentsy/ledger": ["@openagentsy/ledger@workspace:packages/ledger"],
 
     "@openagentsy/mcp": ["@openagentsy/mcp@workspace:packages/mcp"],
 
