@@ -207,30 +207,20 @@ What to leave out:
 
 ## IV. Wiring in Beans, Magic Context, AFT, and agent skills
 
-### 1. Beans via beans-mcp
+### 1. Beans — superseded
 
-**The Lead owns the board's structure; builders only claim, update, and complete their own beans.** Permissions enforce this: `beans_create`, `beans_bulk_create`, and `beans_delete` are denied to subagents.
+**Superseded 2026-10-26.** No beans-mcp and no Beans CLI: Phase 2's `@openagentsy/tasks` re-implements the `.beans/` file format byte-compatibly and registers the `oa_task_*` tools (PHASE-2-PLAN §3). The Lead-owns-the-structure permission split lives in the board's own leases and budgets.
 
-- Start the session with `beans_query llm_context`, or `beans prime` through the existing OpenCode plugin.
-- Record `branch` and `pr` with `update_frontmatter`, so each bean traces to its code.
-- Archived beans become queryable project history, a natural input for distilling playbooks.
-- Pin the Beans CLI to 0.4.2, the version beans-mcp checks for at startup.
+### 2. Memory — superseded
 
-### 2. Magic Context: the Lead's history, everyone's memory
-
-**The Lead keeps one long session. Subagent sessions are short-lived, but what they learn stays.** Magic Context's historian compresses the Lead's history in the background, so planning never pauses for compaction. Memory is shared through Magic Context's project store, so every role can search it.
+**Superseded 2026-10-24/26.** No Magic Context dependency. The archivist's harvest below is kept as built; candidates land on the board as `bean: memory` records, and Phase 2's `@openagentsy/memory` slice stores, redacts and searches them with a human-only decide (PHASE-2-PLAN §4). Compaction stays **on** by default (`--magic-context` is the informed opt-out), and `@openagentsy/tasks` injects the short state block instead of a beans prime.
 
 **Subagent harvest.** When a child session finishes (V2 reports the result to the parent; V1 fires `session.idle`), the adapter assembles a harvest packet and launches the hidden `archivist`. The archivist writes at most five candidates per session. Each candidate gets one category, a source (bean ID, commit, and file:line), and a confidence label.
 
 - **What gets kept:** constraints the code doesn't make obvious, gotchas that cost a retry, commands that worked, review findings that recurred, and procedures, which become playbook entries per ACE and Mem^p.
 - **What gets dropped:** repo overviews and file summaries (the AGENTS.md study found these lower success and raise cost), anything the code already says, and claims labeled as guesses.
-- **Promotion:** dedupe against existing memory with `ctx_search`, verify with the dreamer, then show the result in the run digest. This keeps memory growth automatic while meeting agentsy's rule that memory stay visible and under the user's control.
-- **Search:** every agent file allows `ctx_search`. A builder checks for related memories before it starts a bean, and a scout checks before it explores.
-- Run the historian on a cheap or local model; summarizing doesn't need coding ability.
-- Restrict `ctx_memory` to `PROJECT_RULES`, `CONSTRAINTS`, `CONFIG_VALUES`, and `NAMING`. Turn off automatic `ARCHITECTURE.md`/`STRUCTURE.md` maintenance, since generated overviews measurably hurt.
-- Use `ctx_note` with smart notes for deferred follow-ups, such as revisiting a bean after a dependency upgrade.
-- The desktop memory browser covers agentsy's requirement that memory be inspectable and editable.
-- Compaction must be off. Use `compaction.auto:false, prune:false` on V1 and `compaction.auto:false` on V2.
+- **Promotion is the human-only decide:** the inbox is the pending `bean: memory` records; a person approves or rejects (`/oa memory <id> a|r`), `roles.yaml` denies `oa_memory_decide` to every agent role, and approvals append to `.openagentsy/memory.jsonl` at the state root. Search is `oa_memory_search`; unverified entries are redacted in results by default. There is no historian and no auto-injection in this slice (PHASE-2-PLAN §4).
+- **Search:** every agent file allows the board and memory tools. A builder checks `oa_memory_search` before it starts a bean, and a scout checks before it explores.
 
 ### 3. AFT as everyone's editor
 
@@ -441,7 +431,7 @@ agentsy says a principle that can't be checked in code or review isn't a real sa
 - **Red team the gates.** Scenario's `RedTeamAgent` runs multi-turn escalating attacks. Point it at OpenAgentsy's own risks: edits to `roles.yaml` or `SAFETY.md`, turning off the approval gate, `git push`, reading secrets, and prompt injection planted in a repo file the scout will read.
 - **Inject faults in the MCP layer.** A test flag makes the board and adapters fail on purpose: a Beans etag conflict on `ifMatch`, an OpenCode Go 429 or exhausted 5-hour quota, local Ollama down, a lease that expires mid-edit, a builder killed mid-task, a Magic Context search timeout. Each case passes only if it ends in a retry, a step down the model ladder, or a `blocker` record. Silent loops fail; the AutoGPT loop failures are the cautionary example. [[16]][16]
 - **Report pass^k, not pass@1.** Multi-agent runs vary from one run to the next. Run each case k times (3 for each PR, 5 before a release) and count it as passing only if every run passes, the consistency measure from τ-bench. Scenario's `cache_key` replays simulated-user turns, so a failure can be reproduced for debugging.
-- **Cost and privacy.** Each PR runs a small smoke set; the full suite runs nightly and before a release. The judge and simulated user use models from the user's chosen providers, not a hard-coded OpenAI key. LangWatch's hosted visualization uploads traces, so it stays off unless the user turns it on, matching the privacy row in §VII.
+- **Cost and privacy.** The full suite runs weekly and on demand, on the machine that changes the code; a pull request runs only the unit tests, the typecheck and the audit (the `pull_request` trigger was removed 2026-10-24 — a run is a few hundred provider calls, so its cost must not depend on how often a branch is pushed). The judge and simulated user use models from the user's chosen providers, not a hard-coded OpenAI key. LangWatch's hosted visualization uploads traces, so it stays off unless the user turns it on, matching the privacy row in §VII.
 
 ---
 

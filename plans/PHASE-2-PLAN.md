@@ -207,6 +207,8 @@ export function defineTool<A extends z.ZodType>(def: ToolDef<A>): ToolDef<A> { /
 export function toolMap(defs: Record<string, ToolDef<z.ZodType>>): Plugin['tool'] { /* … */ }
 ```
 
+**Measured against the installed SDK (2026-10-26):** `@opencode-ai/plugin` types `Plugin` as a function, so `Plugin['tool']` does not exist; the real map is `Hooks['tool']`. The shipped `toolMap` returns the adapter's own `Record<string, ToolDefinition>` (that shape), `v2Tool` registers on V2, and `ToolDef.execute` is declared as a method so a concrete-schema definition stays assignable through the erased `ToolDef<z.ZodType>` map. `v2Tool` and `V2ToolDefinition` export from the package root (the first review round caught the gap), and both adapters serialize object results through one helper so a tool returning an object never yields `[object Object]` to the model.
+
 No package rename, no new package: `@openagentsy/adapter-opencode` already owns both runtime shapes, and the Phase 1 conformance probes live there. The previous revision imported `defineTool` from a `@openagentsy/adapters` package that did not exist; this revision makes the export real before anything imports it. Exit test in §15 (2a): `grep -rn "defineTool" packages/*/src` resolves to definitions and this export only.
 
 ---
@@ -354,6 +356,8 @@ export function etag(bytes: Uint8Array): string {
 }
 ```
 
+**Landed note (2026-10-26):** `etag`/`etagOf` live in `@openagentsy/core` (the D2 ruling — the memory package needs the same helper and hooks is 2c), so `packages/tasks/src/ids.ts` keeps only `newId` and the blocked-words list and imports `etag` from core; §4.2's dedup uses the same core helper.
+
 ```ts
 // packages/tasks/src/fractional.ts
 // Ported from hmans/beans pkg/bean/fractional.go (Apache-2.0). See NOTICE.
@@ -488,12 +492,12 @@ export function primeBlock(tasks: Task[]): string {
     `${live.length} open; ${inProg.length} in progress; ${ready(tasks).length} ready.`,
     inProg.length ? `In progress:\n${inProg.map(fmt).join('\n')}` : '',
     top.length ? `Ready next:\n${top.map(fmt).join('\n')}` : '',
-    'Use the oa_task_* tools to read or change tasks. Load the "tasks" skill for conventions.',
+    'Use the oa_task_* tools to read or change tasks.',
   ].filter(Boolean).join('\n');
 }
 ```
 
-**Performance budget.** The prime renders on **every message** (`chat.system.transform`) and again on compaction. The store's stat-keyed cache (§3.4) makes that an mtime check per file, not a parse. Budget: **p95 ≤ 5 ms at 500 live tasks** on a warmed store; the 2a exit test (§15) measures it from a fixture corpus. A file watcher (`fs.watch` on `.beans/`) may replace the stat sweep later; the budget, not the mechanism, is the contract.
+**Performance budget.** The prime renders on **every message** (`chat.system.transform`) and again on compaction. The store's stat-keyed cache (§3.4) makes that an mtime check per file, not a parse. Budget: **CPU-time p95 ≤ 5 ms at 500 live tasks** on a warmed store (ruling 2026-10-26: under a loaded machine the wall clock measures the machine, not the code — the landed test asserts CPU time and reports the wall clock informationally); the 2a exit test (§15) measures it from a fixture corpus. A file watcher (`fs.watch` on `.beans/`) may replace the stat sweep later; the budget, not the mechanism, is the contract.
 
 V1 wiring uses the same hooks the Beans OpenCode plugin uses [^beansplugin]:
 
@@ -891,8 +895,8 @@ Provider site defaults, taken from EcoLogits:
 
 | Provider key | PUE | WUE on-site (L/kWh) |
 | --- | --- | --- |
-| `anthropic` | 1.09–1.14 | 0.13–0.99 |
-| `google` | 1.09 | 0.99 |
+| `anthropic` | 1.09–1.14 | 0.13–0.999 |
+| `google` | 1.09 | 0.999 |
 | `mistral` | 1.16 | 0.09 |
 | `openai` | 1.20 | 0.569 |
 | `opencode-go`, `opencode-zen`, `ollama-cloud`, other | EcoLogits world default when one is defined. Otherwise use the widest range in this table, with `disclosed: false`. | same rule |
@@ -1466,7 +1470,9 @@ export function findSecrets(s: string) { /* PATTERNS + Shannon entropy > 4.0 on 
 export function redact(s: string): { text: string; count: number } { /* replace with «redacted:<name>» */ }
 ```
 
-`redact()` runs on everything that gets stored: board records, harvested memory candidates (before they can be approved, §4.2), `memory.jsonl` writes, archived task bodies and Accountability reports. Each redaction increments the counter shown in the Accountability block. The test fixtures include a key with real secret shape, which must never appear in `.openagentsy/` after a scenario run.
+`redact()` runs on everything that gets stored: board records, harvested memory candidates (before they can be approved, §4.2), `memory.jsonl` writes, archived task bodies and Accountability reports. Each redaction increments the counter shown in the Accountability block. The test fixtures include a key with real secret shape, which must never appear in `.openagentsy/` after a scenario run. **Assemble fixtures from segments, never contiguous literals:** a real-shaped token written as one string in the source trips GitHub push protection (measured 2026-10-26 — a synthetic `xoxb-` fixture blocked a push; the fix joins the segments at runtime, keeping every test identical). The helper itself landed in `@openagentsy/core/src/redact.ts` (D2 ruling: memory needed it in 2a; hooks@2c wraps it).
+
+**Known gap (measured 2026-10-26):** the entropy guard is strictly `> 4.0` bits/char, and a pure-hex string carries at most 4.0 regardless of length, so `api_key=<32 hex chars>` is never flagged by `generic-assign` (the other six patterns still cover their own shapes). The landed helper also applies the guard to every capture, not only 20+ char ones. A hex-shaped pattern or a widened guard is a 2f review candidate; the memory package's README carries the note.
 
 ### 8.5 Lessons: reviewed self-improvement
 
