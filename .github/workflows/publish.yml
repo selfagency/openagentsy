@@ -66,14 +66,40 @@ jobs:
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm@latest
 
+      # npm refuses to run anywhere inside this tree: the root devEngines
+      # names bun and this step is npm, by necessity - trusted publishing
+      # speaks through the npm CLI. The packages therefore get copied to the
+      # neutral directory and npm runs from there, outside the repository.
+      - name: Copy the packages out of the repository tree
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          for package in packages/core packages/models packages/mcp packages/cli; do
+            base="$(basename "$package")"
+            cp -R "$package" "$RUNNER_TEMP/$base"
+            rm -rf "$RUNNER_TEMP/$base/node_modules"
+          done
+
       - name: Publish
+        env:
+          TAG: ${{ github.event.inputs.tag }}
         run: |
           # Public scope, public access, provenance comes with the OIDC
           # publish by itself: the flag is not needed and no token is set -
           # a leftover NPM_TOKEN or NODE_AUTH_TOKEN would win over OIDC.
-          for package in packages/core packages/models packages/mcp packages/cli; do
-            name="$(bun -e "console.log(require('./$package/package.json').name)")"
+          # A version the registry already has is not an error: the seed
+          # publish made 0.1.0 by hand, and a rerun of this workflow on a
+          # tag whose version exists says so and moves on.
+          version="${TAG#v}"
+          for base in core models mcp cli
+          do
+            name="$(bun -e "console.log(require('$RUNNER_TEMP/$base/package.json').name)")"
             echo "::group::publishing $name"
-            (cd "$package" && npm publish --access public)
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on the registry"
+            else
+              (cd "$RUNNER_TEMP/$base" && npm publish --access public)
+            fi
             echo "::endgroup::"
           done

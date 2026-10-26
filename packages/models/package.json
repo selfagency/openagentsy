@@ -1,6 +1,6 @@
 {
   "name": "@openagentsy/models",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "exports": {
     ".": "./dist/index.js"
@@ -45,5 +45,5 @@
   "files": [
     "dist"
   ],
-  "author": "daniel sieradski"
+  "author": "daniel sieradski <github@self.agency>"
 }

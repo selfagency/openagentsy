@@ -1,6 +1,6 @@
 {
   "name": "@openagentsy/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "bin": {
     "openagentsy-mcp": "./dist/index.js"
@@ -45,7 +45,7 @@
   "files": [
     "dist"
   ],
-  "author": "daniel sieradski",
+  "author": "daniel sieradski <github@self.agency>",
   "exports": {
     ".": "./dist/index.js"
   },
