@@ -144,6 +144,18 @@
         "typescript": "^5.9.2",
       },
     },
+    "packages/offload": {
+      "name": "@openagentsy/offload",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openagentsy/core": "workspace:^",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/node": "^24.3.0",
+        "typescript": "^5.9.2",
+      },
+    },
     "packages/tasks": {
       "name": "@openagentsy/tasks",
       "version": "0.1.0",
@@ -356,6 +368,8 @@
     "@openagentsy/memory": ["@openagentsy/memory@workspace:packages/memory"],
 
     "@openagentsy/models": ["@openagentsy/models@workspace:packages/models"],
+
+    "@openagentsy/offload": ["@openagentsy/offload@workspace:packages/offload"],
 
     "@openagentsy/tasks": ["@openagentsy/tasks@workspace:packages/tasks"],
 
