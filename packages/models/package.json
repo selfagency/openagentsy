@@ -12,7 +12,7 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@openagentsy/core": "0.1.0",
+    "@openagentsy/core": "workspace:^",
     "yaml": "^2.8.0",
     "zod": "^4.6.0"
   },

@@ -11,8 +11,8 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@openagentsy/core": "0.1.0",
-    "@openagentsy/models": "0.1.0",
+    "@openagentsy/core": "workspace:^",
+    "@openagentsy/models": "workspace:^",
     "jsonc-parser": "^3.3.1",
     "yaml": "^2.8.0"
   },

@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@langwatch/scenario": "^1.7.0",
-    "@openagentsy/core": "*",
-    "@openagentsy/jev": "*",
+    "@openagentsy/core": "workspace:^",
+    "@openagentsy/jev": "workspace:^",
     "@opencode-ai/sdk": "^1.19.3",
     "ai": "^6.0.0",
     "jsonc-parser": "^3.3.1",

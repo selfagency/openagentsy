@@ -20,7 +20,7 @@
       "name": "@openagentsy/adapter-opencode",
       "version": "0.1.0",
       "dependencies": {
-        "@openagentsy/core": "*",
+        "@openagentsy/core": "workspace:^",
         "zod": "^4.1.8",
       },
       "devDependencies": {
@@ -32,13 +32,14 @@
     },
     "packages/cli": {
       "name": "openagentsy",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
         "openagentsy": "./dist/index.js",
+        "oa": "./dist/index.js",
       },
       "dependencies": {
-        "@openagentsy/core": "0.1.0",
-        "@openagentsy/models": "0.1.0",
+        "@openagentsy/core": "workspace:^",
+        "@openagentsy/models": "workspace:^",
         "jsonc-parser": "^3.3.1",
         "yaml": "^2.8.0",
       },
@@ -50,7 +51,7 @@
     },
     "packages/core": {
       "name": "@openagentsy/core",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "drizzle-orm": "^0.45.4",
         "yaml": "^2.8.0",
@@ -67,10 +68,11 @@
       "version": "0.1.0",
       "dependencies": {
         "@langwatch/scenario": "^1.7.0",
-        "@openagentsy/core": "*",
-        "@openagentsy/jev": "*",
+        "@openagentsy/core": "workspace:^",
+        "@openagentsy/jev": "workspace:^",
         "@opencode-ai/sdk": "^1.19.3",
         "ai": "^6.0.0",
+        "jsonc-parser": "^3.3.1",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
@@ -92,14 +94,14 @@
     },
     "packages/mcp": {
       "name": "@openagentsy/mcp",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "bin": {
         "openagentsy-mcp": "./dist/index.js",
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.21.0",
-        "@openagentsy/core": "0.1.0",
-        "@openagentsy/jev": "*",
+        "@openagentsy/core": "workspace:^",
+        "@openagentsy/jev": "workspace:^",
         "zod": "^4.6.0",
       },
       "devDependencies": {
@@ -109,9 +111,9 @@
     },
     "packages/models": {
       "name": "@openagentsy/models",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
-        "@openagentsy/core": "0.1.0",
+        "@openagentsy/core": "workspace:^",
         "yaml": "^2.8.0",
         "zod": "^4.6.0",
       },

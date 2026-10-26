@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.21.0",
-    "@openagentsy/core": "0.1.0",
-    "@openagentsy/jev": "*",
+    "@openagentsy/core": "workspace:^",
+    "@openagentsy/jev": "workspace:^",
     "zod": "^4.6.0"
   },
   "devDependencies": {
