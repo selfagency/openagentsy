@@ -59,8 +59,9 @@ export interface RemoteBreakdown {
 
 /** The prefill term is an OpenAgentsy extension, and it is off by default. */
 function prefillWh(usage: Usage, arch: ModelArch, coeff: PrefillCoeff): Range {
-  const perActiveB = coeff.kIn * usage.inputTokens + coeff.kCache * usage.cacheReadTokens;
-  return scale(arch.activeParamsB, perActiveB);
+  const fresh = mul(mul(arch.activeParamsB, coeff.kIn), r(usage.inputTokens));
+  const cached = mul(mul(arch.activeParamsB, coeff.kCache), r(usage.cacheReadTokens));
+  return add(fresh, cached);
 }
 
 /**

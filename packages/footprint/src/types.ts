@@ -77,11 +77,16 @@ export interface Impact {
  *
  * The fit is not shipped: the numbers come from ML.ENERGY measurements that
  * a person has to review first, so a caller that wants the term brings its
- * own coefficients. The unit is Wh per token per billion active parameters.
+ * own coefficients. The unit is Wh per token per billion active parameters,
+ * and a coefficient is an interval like every other number in this package:
+ * the fit in `data/prefill-fit.json` carries a range, because the models
+ * that were measured differ from each other.
  */
 export interface PrefillCoeff {
-  kIn: number;
-  kCache: number;
+  /** The fresh input: Wh per input token per billion active parameters. */
+  kIn: Range;
+  /** The cache read: Wh per cache-read token per billion active parameters. */
+  kCache: Range;
 }
 
 /** How fast the provider generates, when the numbers are known. */
