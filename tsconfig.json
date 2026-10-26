@@ -11,6 +11,7 @@
     { "path": "packages/memory" },
     { "path": "packages/adapter-opencode" },
     { "path": "packages/evals" },
-    { "path": "packages/tasks" }
+    { "path": "packages/tasks" },
+    { "path": "packages/offload" }
   ]
 }
