@@ -200,6 +200,72 @@ export function wasteTotals(db: Database): WasteTotals {
   return { tokens: waste, percentage: total > 0 ? (waste / total) * 100 : 0 };
 }
 
+export type WasteKindTotals = {
+  kind: string;
+  count: number;
+  tokens: number;
+  /** The share of the waste tokens, in percent. */
+  percentage: number;
+};
+
+/**
+ * The waste tokens per kind, and the share each kind is of the waste.
+ *
+ * The kinds are the seven of §6.4, and the ones with no rows are simply
+ * absent: a kind that never happened does not need a line in a report.
+ */
+export function wasteByKind(db: Database): WasteKindTotals[] {
+  const rows = db
+    .query(
+      `SELECT kind, COUNT(*) AS count, SUM(tokens) AS tokens
+       FROM waste GROUP BY kind ORDER BY tokens DESC, kind`,
+    )
+    .all() as Record<string, unknown>[];
+
+  const totals = wasteTotals(db);
+  return rows.map((row) => {
+    const tokens = n(row.tokens);
+    return {
+      kind: String(row.kind ?? ''),
+      count: n(row.count),
+      tokens,
+      percentage: totals.tokens > 0 ? (tokens / totals.tokens) * 100 : 0,
+    };
+  });
+}
+
+export type ResultTotals = {
+  tasksCompleted: number;
+  /** The tokens one completed task cost; null when there is no task. */
+  tokensPerTask: number | null;
+  commits: number;
+  /** The tokens one commit cost; null when there is no commit. */
+  tokensPerCommit: number | null;
+  prsMerged: number;
+};
+
+/**
+ * The exit metrics of §6.5: the tokens per completed task and the tokens per
+ * commit.
+ *
+ * They are built on the two joins that are already there, so the number a
+ * report shows and the number the task list shows are the same number.
+ */
+export function tokensPerResult(db: Database, days = 30): ResultTotals {
+  const tasks = tokensPerCompletedTask(db, days);
+  const commits = tokensPerCommit(db, days);
+  const outcomes = outcomeTotals(db);
+  const taskTokens = tasks.reduce((sum, row) => sum + row.tokens, 0);
+  const commitTokens = commits.reduce((sum, row) => sum + row.tokens, 0);
+  return {
+    tasksCompleted: tasks.length,
+    tokensPerTask: tasks.length > 0 ? taskTokens / tasks.length : null,
+    commits: commits.length,
+    tokensPerCommit: commits.length > 0 ? commitTokens / commits.length : null,
+    prsMerged: outcomes.prsMerged,
+  };
+}
+
 /** How many outcomes of each kind there are. */
 export function outcomeTotals(db: Database): OutcomeTotals {
   const rows = db

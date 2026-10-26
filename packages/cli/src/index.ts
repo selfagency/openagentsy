@@ -5,7 +5,16 @@ import type { Target } from '@openagentsy/core';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
 import { formatDoctorReport, runDoctor } from './commands/doctor.js';
-import { formatLedgerReport, runLedger } from './commands/ledger.js';
+import {
+  formatLedgerReport,
+  formatOutcomesReport,
+  formatScanRevertsReport,
+  formatWasteReport,
+  runLedger,
+  runLedgerOutcomes,
+  runLedgerScanReverts,
+  runLedgerWaste,
+} from './commands/ledger.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
 import { runSetup } from './commands/setup.js';
 import { detectOpenCode, targetForVersion } from './opencode.js';
@@ -18,6 +27,9 @@ Commands:
   doctor             Report what is installed, where it came from, and what is missing
   ledger             Show the tokens, the cost and the waste of the work
   ledger export      Write the counters of the ledger as JSON
+  ledger waste       Find the waste that can be found, and say what the waste is
+  ledger scan-reverts  Find the code that was written and then taken back
+  ledger outcomes    Find the commits that name a task, and the Refs trailers they carry
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
@@ -25,6 +37,7 @@ Commands:
 
 Options:
   --root <dir>        Project root (default: current directory)
+  --since <when>      How far back to look (default: 30 days ago)
   --target v1|v2      OpenCode version to generate for (default: detected)
   --out <dir>         Output directory for build (default: <root>/.opencode)
   --roles <file>      Roles file (default: <root>/roles.yaml)
@@ -46,6 +59,7 @@ Options:
 /** The parsed options. The names are the ones the usage card names. */
 export type Values = {
   root?: string | undefined;
+  since?: string | undefined;
   target?: string | undefined;
   out?: string | undefined;
   roles?: string | undefined;
@@ -102,6 +116,23 @@ async function doctorCommand(root: string): Promise<number> {
 
 async function ledgerCommand(root: string, values: Values, positionals: string[]): Promise<number> {
   const sub = positionals[1];
+  const since = values.since;
+
+  if (sub === 'scan-reverts') {
+    const report = await runLedgerScanReverts(root, since === undefined ? {} : { since });
+    process.stdout.write(formatScanRevertsReport(report));
+    return 0;
+  }
+  if (sub === 'outcomes') {
+    const report = await runLedgerOutcomes(root, since === undefined ? {} : { since });
+    process.stdout.write(formatOutcomesReport(report));
+    return 0;
+  }
+  if (sub === 'waste') {
+    const report = await runLedgerWaste(root, since === undefined ? {} : { since });
+    process.stdout.write(formatWasteReport(report));
+    return 0;
+  }
   if (sub !== undefined && sub !== 'export') {
     process.stderr.write(`unknown ledger subcommand: ${sub}\n`);
     return 1;
@@ -263,6 +294,7 @@ export async function main(argv: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       root: { type: 'string' },
+      since: { type: 'string' },
       target: { type: 'string' },
       out: { type: 'string' },
       roles: { type: 'string' },
