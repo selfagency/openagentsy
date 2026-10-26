@@ -41,7 +41,9 @@ export async function offload<T>(
 ): Promise<T | undefined> {
   const started = performance.now();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const body = requestBody(job, be, z.toJSONSchema(job.schema));
+  const jsonSchema = jsonSchemaOf(job.schema);
+  if (jsonSchema === undefined) return undefined;
+  const body = requestBody(job, be, jsonSchema);
   const url = be.kind === 'ollama' ? `${be.baseUrl}/api/chat` : `${be.baseUrl}/v1/chat/completions`;
 
   const response = await fetch(url, {
@@ -64,7 +66,7 @@ export async function offload<T>(
   for (const candidate of [text ?? '', repairJson(text ?? '')]) {
     const parsed = parse(job.schema, candidate);
     if (parsed === undefined) continue;
-    onUsage({
+    report(onUsage, {
       job: job.name,
       seconds: (performance.now() - started) / 1000,
       inTok: tokensIn(be, answer),
@@ -73,6 +75,33 @@ export async function offload<T>(
     return parsed;
   }
   return undefined;
+}
+
+/**
+ * The JSON schema of the job. A schema that cannot be represented in JSON
+ * Schema - a custom type, a transform, a date - is a job that cannot be
+ * asked, so the job comes back as nothing and the caller falls back.
+ */
+function jsonSchemaOf(schema: z.ZodType<unknown>): unknown | undefined {
+  try {
+    return z.toJSONSchema(schema);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Tell the caller what the job cost. The answer is already parsed, so a
+ * callback that throws loses its own failure and not the answer: the
+ * caller's bookkeeping must not decide whether the work happened.
+ */
+function report(onUsage: (usage: OffloadUsage) => void, usage: OffloadUsage): void {
+  try {
+    onUsage(usage);
+  } catch {
+    // The answer is what the caller came for.
+    return;
+  }
 }
 
 /** The request each protocol expects. */

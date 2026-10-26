@@ -41,4 +41,16 @@ describe('the JSON repair', () => {
   it('drops a closing bracket that closes nothing', () => {
     expect(repairJson('{"title": "Hello"}}')).toBe('{"title": "Hello"}');
   });
+
+  it('drops a dangling backslash when the answer was cut off', () => {
+    expect(repairJson('{"title":"abc\\')).toBe('{"title":"abc"}');
+  });
+
+  it('drops a half-written unicode escape when the answer was cut off', () => {
+    expect(repairJson('{"title":"abc\\u12')).toBe('{"title":"abc"}');
+  });
+
+  it('keeps a complete unicode escape', () => {
+    expect(repairJson('{"title":"\\u00e9"}')).toBe('{"title":"\\u00e9"}');
+  });
 });

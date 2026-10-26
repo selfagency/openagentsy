@@ -9,14 +9,18 @@
  * exactly as they are. A local model produces those two shapes constantly, so
  * the repair this package needs is written here.
  *
- * The three shapes it handles:
+ * The four shapes it handles:
  *   - a truncated answer: the string and the brackets are closed
  *   - a trailing comma before a closing bracket
  *   - a raw newline or tab inside a string
+ *   - an escape that was cut off: a dangling backslash, a half-written \u
  */
 
 const OPENING_FENCE = /^```[^\n]*\n?/;
 const CLOSING_FENCE = /```\s*$/;
+
+/** What the machine is doing with a backslash. */
+type EscapeState = 'none' | 'pending' | 'unicode';
 
 /** What the machine knows while it reads the answer. */
 interface RepairState {
@@ -28,8 +32,10 @@ interface RepairState {
   lastMeaningful: number;
   /** The machine is inside a string. */
   inString: boolean;
-  /** The last character was a backslash. */
-  escaped: boolean;
+  /** The machine is inside an escape. */
+  escape: EscapeState;
+  /** The hex digits of a \u escape, while it is still short. */
+  unicodeDigits: string;
 }
 
 /** A code fence around the answer is packaging, not part of the JSON. */
@@ -42,6 +48,11 @@ function stripFence(text: string): string {
 /** The whitespace JSON allows between tokens. */
 function isSpace(char: string): boolean {
   return char === ' ' || char === '\n' || char === '\r' || char === '\t';
+}
+
+/** A hex digit, and a \u escape is made of four of them. */
+function isHex(char: string): boolean {
+  return /^[0-9a-fA-F]$/.test(char);
 }
 
 /** A control character has to be escaped to sit inside a JSON string. */
@@ -80,16 +91,49 @@ function dropTrailingComma(state: RepairState): void {
   state.lastMeaningful = index;
 }
 
+/**
+ * A character that belongs to an escape. The escape is written only once it
+ * is complete, so an escape that was cut off never reaches the answer.
+ *
+ * Returns false when the escape turned out to be broken: the character is
+ * then an ordinary one and the caller takes it as such.
+ */
+function feedEscape(state: RepairState, char: string): boolean {
+  if (state.escape === 'pending') {
+    if (char === 'u') {
+      state.escape = 'unicode';
+      state.unicodeDigits = '';
+      return true;
+    }
+    if (char < ' ') {
+      // A control character cannot be the escaped one.
+      state.escape = 'none';
+      return false;
+    }
+    state.out.push('\\', char);
+    state.escape = 'none';
+    return true;
+  }
+  if (isHex(char) && state.unicodeDigits.length < 4) {
+    state.unicodeDigits += char;
+    if (state.unicodeDigits.length === 4) {
+      state.out.push('\\u', state.unicodeDigits);
+      state.escape = 'none';
+      state.unicodeDigits = '';
+    }
+    return true;
+  }
+  // The escape never finished, so it is not part of the answer.
+  state.escape = 'none';
+  state.unicodeDigits = '';
+  return false;
+}
+
 /** A character inside a string. */
 function feedString(state: RepairState, char: string): void {
-  if (state.escaped) {
-    state.escaped = false;
-    state.out.push(char);
-    return;
-  }
+  if (state.escape !== 'none' && feedEscape(state, char)) return;
   if (char === '\\') {
-    state.escaped = true;
-    state.out.push(char);
+    state.escape = 'pending';
     return;
   }
   if (char === '"') {
@@ -136,6 +180,9 @@ function closeBracket(state: RepairState, char: string): void {
 /** Close what the answer left open. */
 function closeAnswer(state: RepairState): string {
   if (state.inString) {
+    // An escape that was cut off was never written, so the string closes
+    // without it: a dangling backslash and a half-written \u both leave the
+    // answer as if they were never there.
     state.out.push('"');
     state.lastMeaningful = state.out.length - 1;
   }
@@ -157,7 +204,8 @@ export function repairJson(input: string): string {
     stack: [],
     lastMeaningful: -1,
     inString: false,
-    escaped: false,
+    escape: 'none',
+    unicodeDigits: '',
   };
   for (const char of stripFence(input)) {
     if (state.inString) feedString(state, char);

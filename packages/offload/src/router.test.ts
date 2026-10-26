@@ -151,4 +151,37 @@ describe('the router', () => {
       server.close();
     }
   });
+
+  it('returns nothing when the schema cannot be represented in JSON Schema', async () => {
+    const server = await startStubServer(() => ({
+      body: JSON.stringify({ message: { content: '{"title":"Hello"}' } }),
+    }));
+    try {
+      const usage: OffloadUsage[] = [];
+      const result = await offload(
+        { name: 'title', prompt: 'Title this', schema: z.custom<string>(), maxTokens: 64 },
+        ollama(server.baseUrl),
+        (u) => usage.push(u),
+      );
+      expect(result).toBeUndefined();
+      expect(usage).toEqual([]);
+      expect(server.requests).toEqual([]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('keeps the answer when the usage callback throws', async () => {
+    const server = await startStubServer(() => ({
+      body: JSON.stringify({ message: { content: '{"title":"Hello"}' } }),
+    }));
+    try {
+      const result = await offload(job, ollama(server.baseUrl), () => {
+        throw new Error('the ledger is closed');
+      });
+      expect(result).toEqual({ title: 'Hello' });
+    } finally {
+      server.close();
+    }
+  });
 });

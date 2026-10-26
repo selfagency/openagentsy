@@ -1,8 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { type DetectorTarget, detectLocalBackends } from './local-detector.js';
+import { DEFAULT_TARGETS, type DetectorTarget, detectLocalBackends } from './local-detector.js';
 import { startStubServer } from './test-support/http.js';
 
 describe('the local backend detector', () => {
+  it('probes the six local servers on their documented ports', () => {
+    expect(DEFAULT_TARGETS).toHaveLength(6);
+    expect(DEFAULT_TARGETS.map((target) => target.product)).toEqual([
+      'ollama',
+      'lmstudio',
+      'apfel',
+      'jan',
+      'localai',
+      'vllm',
+    ]);
+    expect(DEFAULT_TARGETS.map((target) => new URL(target.baseUrl).port)).toEqual([
+      '11434',
+      '1234',
+      '11434',
+      '1337',
+      '8080',
+      '8000',
+    ]);
+  });
+
   it('detects an ollama backend and the models it holds', async () => {
     const server = await startStubServer((request) => {
       if (request.path === '/api/tags') {

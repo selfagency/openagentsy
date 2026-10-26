@@ -28,6 +28,21 @@ async function withAnswers<T>(
   }
 }
 
+/** A stub that answers with the text as it is, truncated and all. */
+async function withText(
+  text: string,
+  run: (backend: LocalBackend) => Promise<void>,
+): Promise<void> {
+  const server = await startStubServer(() => ({
+    body: JSON.stringify({ message: { content: text } }),
+  }));
+  try {
+    await run(backend(server.baseUrl));
+  } finally {
+    server.close();
+  }
+}
+
 describe('the housekeeping jobs', () => {
   it('returns a title that fits the bound', async () => {
     await withAnswers({ title: 'A short title' }, async (be) => {
@@ -99,7 +114,8 @@ describe('the housekeeping jobs', () => {
 
   it('repairs tool arguments into the target schema', async () => {
     const schema = z.object({ path: z.string(), line: z.number() });
-    await withAnswers({ path: 'src/index.ts', line: 12 }, async (be) => {
+    // The answer arrives cut off, so the repair has to finish it.
+    await withText('{"path": "src/index.ts", "line": 12', async (be) => {
       expect(
         await repairToolArguments(
           '{"path": "src/index.ts", "line": 12',
