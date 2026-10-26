@@ -1,3 +1,5 @@
+import { z } from 'zod';
+import { defineTool, type V2ToolDefinition, v2Tool } from './define-tool.js';
 import {
   appendAudit,
   POLICIES,
@@ -118,57 +120,35 @@ export type V2Event = {
 /** The permission actions that write. The names are the permission map keys. */
 const WRITE_ACTIONS = new Set(['edit', 'write', 'patch', 'apply_patch']);
 
-export type V2ToolDefinition = {
-  name: string;
-  description: string;
-  input: {
-    type: 'object';
-    properties: Record<string, unknown>;
-    required: string[];
-    additionalProperties: false;
-  };
-  execute: (
-    input: unknown,
-    context: { sessionID: string; agent?: string; signal?: AbortSignal },
-  ) => Promise<{ content: string }>;
-};
+export type { V2ToolDefinition };
 
 /**
  * The effort ladder tool.
  *
  * The V1 tool helper takes a Zod schema. V2 takes JSON Schema, and the tool
- * returns structured content.
+ * returns structured content. The definition holds the Zod schema, and the
+ * V2 registration takes the JSON schema out of it.
  */
-function effortTool(root: string, ctx: V2Context): V2ToolDefinition {
-  return {
-    name: 'oa_effort',
+function effortTool(root: string, ctx: V2Context) {
+  return defineTool({
     description:
       'Climb one rung on the reasoning effort ladder. Only call this when a trigger fired, for example a test failed twice or the change touches concurrency, auth or migrations. The reason must name the trigger.',
-    input: {
-      type: 'object',
-      properties: {
-        reason: {
-          type: 'string',
-          description: 'Why you are climbing. Name the trigger that fired.',
-        },
-      },
-      required: ['reason'],
-      additionalProperties: false,
-    },
-    execute: async (input, context) => {
-      const reason = (input as { reason?: unknown }).reason;
-      if (typeof reason !== 'string') {
-        return { content: 'The reason must be a string that names the trigger.' };
+    args: z.object({
+      reason: z.string().describe('Why you are climbing. Name the trigger that fired.'),
+    }),
+    async execute(args, context) {
+      if (typeof args.reason !== 'string') {
+        return 'The reason must be a string that names the trigger.';
       }
-      const role = await roleKeyForAgent(root, context.agent ?? '');
-      const plan = await planClimb(root, role, context.sessionID, reason);
+      const role = await roleKeyForAgent(root, context.agent);
+      const plan = await planClimb(root, role, context.sessionID, args.reason);
 
       if (!plan.ok) {
-        await refuseClimb(root, role, reason);
-        return { content: plan.message };
+        await refuseClimb(root, role, args.reason);
+        return plan.message;
       }
 
-      await recordClimb(root, context.sessionID, role, plan.rungIndex, reason);
+      await recordClimb(root, context.sessionID, role, plan.rungIndex, args.reason);
 
       const target = plan.target;
       const separator = target.model.indexOf('/');
@@ -185,11 +165,9 @@ function effortTool(root: string, ctx: V2Context): V2ToolDefinition {
         });
       }
 
-      return {
-        content: `Climbed to rung ${plan.rungIndex}: ${target.model} ${target.variant ?? 'default'}. Say why in your board record.`,
-      };
+      return `Climbed to rung ${plan.rungIndex}: ${target.model} ${target.variant ?? 'default'}. Say why in your board record.`;
     },
-  };
+  });
 }
 
 /**
@@ -314,7 +292,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
 
   // The effort tool.
   await ctx.tool.transform((editor) => {
-    editor.add(effortTool(root, ctx));
+    editor.add(v2Tool('oa_effort', effortTool(root, ctx)));
   });
 
   // The events. A session that goes idle gives its effort rung back, so the

@@ -1,4 +1,5 @@
 import { type ClientLike, type ProviderInventory, sessionAdapter } from './client.js';
+import { defineTool, toolMap } from './define-tool.js';
 import {
   appendAudit,
   POLICIES,
@@ -14,6 +15,15 @@ import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
+
+export type { ToolCtx, ToolDef, V2ToolDefinition } from './define-tool.js';
+/**
+ * The tool definition helper.
+ *
+ * A package that registers tools of its own defines them once and hands
+ * them to the two runtimes through this.
+ */
+export { defineTool, toolMap, v2Tool } from './define-tool.js';
 
 /**
  * OpenAgentsy for OpenCode.
@@ -51,12 +61,12 @@ async function variantOptions(
 }
 
 const effortTool = (root: string, client: ClientLike) =>
-  tool({
+  defineTool({
     description:
       'Climb one rung on the reasoning effort ladder. Only call this when a trigger fired, for example a test failed twice or the change touches concurrency, auth or migrations. The reason must name the trigger.',
-    args: {
+    args: tool.schema.object({
       reason: tool.schema.string().describe('Why you are climbing. Name the trigger that fired.'),
-    },
+    }),
     async execute(args, context) {
       const role = await roleKeyForAgent(root, context.agent);
       const plan = await planClimb(root, role, context.sessionID, args.reason);
@@ -201,9 +211,7 @@ async function setupServer(
       await onSessionIdle(client, root, sessionID, agent);
     },
 
-    tool: {
-      oa_effort: effortTool(root, client),
-    },
+    tool: toolMap({ oa_effort: effortTool(root, client) }),
   };
 }
 
