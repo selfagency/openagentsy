@@ -1,34 +1,48 @@
 name: publish
 
-# A tag is a release. The tag's version must be the version every published
-# package carries, and the packages go out in dependency order: the board
-# first, then the selector, then the server, then the command.
+# The four packages go to npm by hand: the person cutting the release picks
+# the tag this workflow already released on GitHub and runs it. Publishing
+# needs no npm token: the job presents GitHub's OIDC token, and npm accepts
+# it because the packages list this workflow as a trusted publisher. That
+# config lives on each package's npmjs.com page and names the repository,
+# the workflow filename (publish.yml) and no environment, so the three
+# have to keep matching. npm CLI 11.5.1 or newer is required, which is why
+# the job installs Node 22 and upgrades npm even though the repository is
+# Bun.
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      dry-run:
-        description: "Build and pack, but publish nothing"
-        type: boolean
-        default: true
+      tag:
+        description: "The tag whose version is published, for example v0.1.0."
+        required: true
+        type: string
 
-permissions:
-  contents: read
-  id-token: write
+concurrency:
+  group: publish-${{ github.event.inputs.tag }}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.event.inputs.tag }}
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.4.4
+          bun-version-file: package.json
+
+      # The publish step runs the npm CLI, not bun: trusted publishing speaks
+      # OIDC through npm 11.5.1 or newer.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install
         run: bun install --frozen-lockfile
@@ -36,68 +50,30 @@ jobs:
       - name: Build
         run: bun run build
 
-      - name: Test
-        run: bunx --bun vitest run
-
-      - name: The changelog
-        run: bun scripts/changelog.mjs
-
-      - name: The tag must match the version
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: The tag matches every manifest
+        env:
+          TAG: ${{ github.event.inputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          version="${TAG#v}"
           for package in packages/core packages/models packages/mcp packages/cli; do
-            version="$(bun -e "console.log(require('./$package/package.json').version)")"
-            if [ "$version" != "$tag" ]; then
-              echo "::error::$package is at $version but the tag says $tag"
+            manifest="$(bun -e "console.log(require('./$package/package.json').version)")"
+            if [ "$manifest" != "$version" ]; then
+              echo "::error::$package is at $manifest but the tag says $version"
               exit 1
             fi
           done
 
-      - name: Pack
-        id: pack
-        run: |
-          for package in packages/core packages/models packages/mcp packages/cli; do
-            name="$(bun -e "console.log(require('./$package/package.json').name)")"
-            (cd "$package" && npm pack --pack-destination "$RUNNER_TEMP")
-            echo "packed $name"
-          done
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
 
       - name: Publish
-        if: ${{ !inputs.dry-run }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          # The npm lane needs NPM_TOKEN. Until the repo carries that secret
-          # the step says so and moves on: the release itself is the
-          # deliverable, and a failed run on every tag is noise.
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "::notice::NPM_TOKEN is not a repository secret, so nothing is published to npm"
-            exit 0
-          fi
-          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+          # Public scope, public access, provenance comes with the OIDC
+          # publish by itself: the flag is not needed and no token is set -
+          # a leftover NPM_TOKEN or NODE_AUTH_TOKEN would win over OIDC.
           for package in packages/core packages/models packages/mcp packages/cli; do
             name="$(bun -e "console.log(require('./$package/package.json').name)")"
             echo "::group::publishing $name"
-            (cd "$package" && npm publish --provenance --access public)
+            (cd "$package" && npm publish --access public)
             echo "::endgroup::"
           done
-
-      - name: The release is created by release.yml
-        # release.yml runs the gates and creates the GitHub release with the
-        # section of the changelog for this version. This workflow publishes
-        # the packages and does not touch the release, so a tag runs two
-        # workflows and creates one release.
-        if: ${{ !inputs.dry-run }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          if gh release view "v$version" >/dev/null 2>&1; then
-            echo "release v$version already exists (release.yml made it)"
-          else
-            gh release create "v$version" \
-              --title "openagentsy $version" \
-              --notes "Created by the publish workflow; the notes live in release.yml's copy."
-            echo "created a stub release; rerun release.yml on workflow_dispatch to fill the notes"
-          fi

@@ -1,16 +1,25 @@
 name: release
 
-# A tag is a release. The gates run in the release job on purpose: a tag whose
-# gates are red must never become a release, so there is no second job and no
-# `needs` to hand the tag over. The job that publishes is the job that proved
-# the code, and it stops at the first red gate.
+# A release is cut by hand, never by a push. One run does the whole dance:
+# it gates the code, writes the changelog from the commits since the last
+# tag, commits it, tags, and creates the GitHub release with that section
+# as the notes and the plugin bundle as the asset. The gates run in the
+# same job on purpose - a release whose gates are red must never be
+# created, so there is no second job and no `needs` to hand anything over.
+# The job that publishes is the job that proved the code, and it stops at
+# the first red gate.
+#
+# Run it on the branch you want released (main for a release cut).
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to create and release, for example v0.1.0. Its version must match package.json and must not exist yet."
+        required: true
+        type: string
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag }}
 
 jobs:
   release:
@@ -42,8 +51,6 @@ jobs:
         env:
           TURBO_TELEMETRY_DISABLED: "1"
 
-      # The test script builds first, so the plugin bundle the bundle test
-      # reads is on disk before the tests run.
       - name: Test
         run: bun run test
         env:
@@ -54,13 +61,56 @@ jobs:
         env:
           TURBO_TELEMETRY_DISABLED: "1"
 
-      # The notes are the section of the changelog the tag names. A tag whose
-      # version has no section fails here, rather than publishing a release
-      # with an empty body.
+      # The tag's version is the version every manifest carries, and the tag
+      # does not exist yet: creating over a tag would move history.
+      - name: The tag matches the manifest
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          manifest="$(bun -e "console.log(require('./package.json').version)")"
+          if [ "$version" != "$manifest" ]; then
+            echo "::error::the tag names $version but package.json is at $manifest"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::the tag $TAG already exists"
+            exit 1
+          fi
+
+      # The changelog is regenerated from the commits since the last tag, so
+      # the file and the log cannot disagree.
+      - name: Generate the changelog
+        run: bun scripts/changelog.mjs
+
+      - name: Commit the changelog and tag
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          git config user.name "openagentsy-release"
+          git config user.email "noreply@${GITHUB_REPOSITORY_OWNER}.users.noreply.github.com"
+          if git diff --quiet CHANGELOG.md; then
+            echo "::notice::the changelog did not change"
+          else
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): the ${version} entry"
+          fi
+          if [ "$(git branch --show-current)" = "" ]; then
+            echo "::error::run this workflow on a branch, not a tag or a detached head"
+            exit 1
+          fi
+          git push origin HEAD
+          git tag -a "$TAG" -m "openagentsy ${version}"
+          git push origin "$TAG"
+
+      # The notes are the section of the changelog the tag names. A version
+      # with no section fails here, rather than publishing a release with an
+      # empty body.
       - name: The release notes
         id: notes
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event.inputs.tag }}
         run: |
           version="${TAG#v}"
           notes="$RUNNER_TEMP/notes.md"
@@ -78,7 +128,7 @@ jobs:
 
       - name: Publish the release
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ github.event.inputs.tag }}
           VERSION: ${{ steps.notes.outputs.version }}
           NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -87,4 +137,5 @@ jobs:
           gh release create "$TAG" \
             --title "openagentsy $VERSION" \
             --notes-file "$NOTES_FILE" \
+            --latest \
             "$RUNNER_TEMP/openagentsy.js"
