@@ -63,6 +63,7 @@ export const POLICIES = {
   effortClimb: { id: 'oa.effort.climb', version: 'v1' },
   effortRefused: { id: 'oa.effort.refused', version: 'v1' },
   harvestFailed: { id: 'oa.harvest.failed', version: 'v1' },
+  ledgerFailed: { id: 'oa.ledger.failed', version: 'v1' },
   stateUnreadable: { id: 'oa.state.unreadable', version: 'v1' },
   eventsFailed: { id: 'oa.events.failed', version: 'v1' },
 } as const;
@@ -200,6 +201,54 @@ export async function roleKeyForAgent(root: string, agent: string): Promise<stri
   } catch {
     return roleNameOf(agent);
   }
+}
+
+/**
+ * The role key of every name, in one read of the roles file.
+ *
+ * A lease and a session name the same agent in different spellings, so both
+ * are resolved to the role key before they are compared. The file is read
+ * once for all of them.
+ */
+async function roleKeysOf(root: string, names: string[]): Promise<Map<string, string>> {
+  const keys = new Map<string, string>();
+  let roles: { roles: Record<string, RoleDefinition> };
+  try {
+    roles = await loadRoles(join(root, 'roles.yaml'));
+  } catch {
+    for (const name of names) keys.set(name, roleNameOf(name));
+    return keys;
+  }
+  for (const name of names) keys.set(name, roleKeyOf(roles, name));
+  return keys;
+}
+
+/**
+ * The bean a session is working on.
+ *
+ * The board's bean id is the ledger's task id (§6.7), and the board is where
+ * the adapter can learn the bean: a lease carries the bean and the agent
+ * that holds it, and a session whose agent holds a lease is on that bean's
+ * work.
+ *
+ * A session that holds no lease, or that holds leases on more than one
+ * bean, has no bean that can be named: the answer is nothing rather than a
+ * guess, because a wrong task id puts the usage on the wrong bean's bill.
+ */
+export async function activeBean(root: string, agent: string): Promise<string | undefined> {
+  const leases = readLeases(root);
+  if (leases.length === 0) return undefined;
+  const keys = await roleKeysOf(root, [agent, ...leases.map((lease) => lease.agent)]);
+  const role = keys.get(agent);
+  if (role === undefined) return undefined;
+  const beans = new Set<string>();
+  for (const lease of leases) {
+    if (keys.get(lease.agent) !== role) continue;
+    beans.add(lease.bean);
+  }
+  if (beans.size !== 1) return undefined;
+  const [bean] = [...beans];
+  return bean;
 }
 
 /**

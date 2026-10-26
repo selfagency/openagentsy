@@ -29,6 +29,8 @@ export const POLICIES = {
   leaseDeny: { id: 'oa.lease.deny', version: 'v1' },
   budgetSet: { id: 'oa.budget.set', version: 'v1' },
   budgetStop: { id: 'oa.budget.stop', version: 'v1' },
+  budgetUsage: { id: 'oa.budget.usage', version: 'v1' },
+  budgetWarn: { id: 'oa.budget.warn', version: 'v1' },
 } as const;
 
 export async function appendAudit(path: string, entry: AuditInput): Promise<void> {

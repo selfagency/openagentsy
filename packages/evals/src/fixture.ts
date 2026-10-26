@@ -14,6 +14,7 @@ import {
   recordUsage,
   setBudget,
 } from '@openagentsy/core';
+import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
 import { parse as parseJsonc } from 'jsonc-parser';
 
 const execFileAsync = promisify(execFile);
@@ -25,6 +26,15 @@ export type Fixture = {
   leases?: { agent: string; glob: string; bean?: string }[];
   /** The budgets to set, with what the bean has already spent. */
   budgets?: { bean: string; limit: number; used: number }[];
+  /**
+   * The usage the ledger holds before the case runs.
+   *
+   * The cap is in the board and the usage is in the ledger (§6.7), so a case
+   * that needs a bean to look over its budget writes the tokens the ledger
+   * counted. The bean id is the ledger's task id: that is the join the
+   * board's check makes.
+   */
+  ledgerUsage?: { bean: string; tokens: number; turns?: number }[];
   /** The model the agent under test runs on. */
   model?: string;
 };
@@ -91,12 +101,58 @@ export async function seedCase(
   }
   closeDatabase(db);
 
+  await seedLedger(root, fixture.ledgerUsage ?? []);
+
   return {
     root,
     leases,
     auditPath: join(stateDir, 'audit.jsonl'),
     boardPath: join(stateDir, 'board.sqlite'),
   };
+}
+
+/**
+ * Write the usage the ledger holds before the case runs.
+ *
+ * The ledger is the measurement: the board's check reads the bean's usage
+ * from it, so a case that seeds usage has to seed the ledger and not the
+ * board's self-report. The rows carry the bean's id as the task id.
+ */
+async function seedLedger(
+  root: string,
+  usage: { bean: string; tokens: number; turns?: number }[],
+): Promise<void> {
+  if (usage.length === 0) return;
+  const ledger = openLedger(root);
+  try {
+    for (const entry of usage) {
+      const turns = Math.max(1, entry.turns ?? 1);
+      const each = Math.floor(entry.tokens / turns);
+      let left = entry.tokens;
+      for (let turn = 0; turn < turns && left > 0; turn += 1) {
+        const tokens = turn === turns - 1 ? left : each;
+        left -= tokens;
+        recordAssistantMessage(
+          ledger,
+          {
+            id: `seed-${entry.bean}-${turn}`,
+            sessionID: `seed-session-${entry.bean}`,
+            providerID: 'seed',
+            modelID: 'seed-model',
+            tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+          {
+            rootSessionId: `seed-session-${entry.bean}`,
+            role: 'builder',
+            activeTaskId: entry.bean,
+            ts: new Date().toISOString(),
+          },
+        );
+      }
+    }
+  } finally {
+    closeLedger(ledger);
+  }
 }
 
 /** The files a case may write, so the assertions can tell what changed. */

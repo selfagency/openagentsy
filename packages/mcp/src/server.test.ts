@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const SERVER = fileURLToPath(new URL('../dist/index.js', import.meta.url));
@@ -252,6 +253,53 @@ describe('the board server over stdio', () => {
 
     const over = await call('board_budget', { op: 'check', bean: 'proj-42', tokensUsed: 900 });
     expect(over.stop).toBe(true);
+  });
+
+  it('stops a bean on the usage the ledger measured', async () => {
+    // The exit test of 2b: the ledger counted the tokens and nobody reported
+    // them. The check reads the ledger, so the verdict is the measured one
+    // even though the caller reports nothing.
+    const ledger = openLedger(root);
+    try {
+      recordAssistantMessage(
+        ledger,
+        {
+          id: 'msg-ledger-1',
+          sessionID: 'ses-ledger-1',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet',
+          tokens: { input: 100, output: 900, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+        {
+          rootSessionId: 'ses-ledger-1',
+          role: 'builder',
+          activeTaskId: 'proj-ledger',
+          ts: new Date().toISOString(),
+        },
+      );
+    } finally {
+      closeLedger(ledger);
+    }
+
+    await call('board_budget_set', { bean: 'proj-ledger', tokenLimit: 1000 });
+
+    const decision = await call('board_budget', { op: 'check', bean: 'proj-ledger' });
+    expect(decision.tokensUsed).toBe(1000);
+    expect(decision.stop).toBe(true);
+    // The yellow window is 80 percent of the cap, so the warning is owed
+    // once, before the stop.
+    expect(decision.warning).toContain('yellow window');
+  });
+
+  it('keeps the self-reported usage working for the old clients', async () => {
+    await call('board_budget_set', { bean: 'proj-self', tokenLimit: 1000 });
+    const decision = await call('board_budget', {
+      op: 'check',
+      bean: 'proj-self',
+      tokensUsed: 900,
+    });
+    expect(decision.tokensUsed).toBe(900);
+    expect(decision.stop).toBe(true);
   });
 
   it('writes an audit line for every decision', async () => {

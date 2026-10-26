@@ -11,6 +11,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
+import { assistantMessageOf, bridgeToLedger } from './ledger-bridge.js';
 import { checkWrite } from './write-guard.js';
 
 /**
@@ -114,7 +115,7 @@ export type V2PermissionEvent = {
 
 export type V2Event = {
   type: string;
-  properties?: { sessionID?: string };
+  properties?: { sessionID?: string; info?: unknown };
 };
 
 /** The permission actions that write. The names are the permission map keys. */
@@ -220,6 +221,27 @@ async function registerContextHook(
 }
 
 /**
+ * An assistant message finished, on the V2 path.
+ *
+ * The V2 context has no way to look a session up, so the session is its own
+ * root here: the usage lands on the session that is known rather than on a
+ * parent the context cannot name.
+ */
+async function onMessageUpdated(
+  root: string,
+  event: V2Event,
+  sessionAgents: Map<string, string>,
+): Promise<void> {
+  const message = assistantMessageOf(event);
+  if (message === undefined) return;
+  const sessionID = event.properties?.sessionID;
+  if (sessionID === undefined) return;
+  const agent = sessionAgents.get(sessionID);
+  if (agent === undefined) return;
+  await bridgeToLedger(root, { raw: message, sessionID, rootSessionID: sessionID, agent });
+}
+
+/**
  * The OpenCode 2 entry point.
  *
  * The cleanup function aborts the event subscription when the plugin
@@ -301,6 +323,10 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
   const controller = new AbortController();
   void (async () => {
     for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+      if (event.type === 'message.updated') {
+        await onMessageUpdated(root, event, sessionAgents);
+        continue;
+      }
       if (event.type !== 'session.idle') continue;
       const sessionID = event.properties?.sessionID;
       if (!sessionID) continue;

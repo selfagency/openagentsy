@@ -4,15 +4,20 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
+  "types": "./types/index.d.ts",
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsdown",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
     "@openagentsy/core": "*",
+    "@openagentsy/ledger": "workspace:^",
     "zod": "^4.1.8"
   },
   "devDependencies": {

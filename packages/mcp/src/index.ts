@@ -6,6 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   appendAudit,
   BoardError,
+  type BudgetDecision,
   CONFIDENCE_LEVELS,
   checkBudget,
   checkLease,
@@ -29,6 +30,7 @@ import {
 } from '@openagentsy/core';
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
+import { ledgerReaders } from './ledger-usage.js';
 
 const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
 const stateDir = join(root, '.openagentsy');
@@ -42,6 +44,15 @@ const stateDir = join(root, '.openagentsy');
 const WRITER_CAP = 3;
 const databasePath = join(stateDir, 'board.sqlite');
 const auditPath = join(stateDir, 'audit.jsonl');
+
+/**
+ * The usage the ledger measured.
+ *
+ * The cap stays in the board and the usage comes from the ledger (§6.7), so
+ * the check asks the ledger what a bean spent. A project without a ledger
+ * falls back to the self-report the board already holds.
+ */
+const usageReaders = ledgerReaders(root);
 
 const AGENTS = await knownAgents();
 /**
@@ -140,7 +151,7 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_lease: the leases, which agent may write which file. op=check asks whether you may write a path. op=release gives a lease back, and only the holder may release it. op=list lists the leases.
 - board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
 - board_lease_revoke: take a lease back from an agent that is not using it, for example a session that died holding it. The Lead only.
-- board_budget: the token budgets. op=check reports whether a bean is over its budget; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.
+- board_budget: the token budgets. op=check reports whether a bean is over its budget, measured from the ledger; at 85 percent the builder stops and posts a blocker. op=list lists the budgets. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.
 - board_budget_set: set a token budget for a bean. The Lead only.
 - board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
@@ -494,6 +505,18 @@ server.registerTool(
         .positive()
         .optional()
         .describe('Token count at which the bean stops'),
+      turnLimit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Tokens a single turn of the bean may cost'),
+      sessionLimit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Tokens a single session of the bean may cost'),
     },
   },
   async (input) => {
@@ -502,6 +525,8 @@ server.registerTool(
         bean: input.bean,
         tokenLimit: input.tokenLimit,
         ...(input.stopAt !== undefined ? { stopAt: input.stopAt } : {}),
+        ...(input.turnLimit !== undefined ? { turnLimit: input.turnLimit } : {}),
+        ...(input.sessionLimit !== undefined ? { sessionLimit: input.sessionLimit } : {}),
       });
       await appendAudit(auditPath, {
         policyId: POLICIES.budgetSet.id,
@@ -521,11 +546,77 @@ server.registerTool(
   },
 );
 
+/**
+ * Check one bean's budget, and put the decision on the record.
+ *
+ * The verdict is the ledger's: the cap is in the board and the usage is
+ * measured there (§6.7). The self-report is still recorded, because the old
+ * clients still send it, but the check above did not need it.
+ */
+async function checkOneBudget(bean: string, tokensUsed: number): Promise<BudgetDecision> {
+  const decision = checkBudget(db, bean, tokensUsed, usageReaders);
+
+  if (decision.configured) {
+    recordUsage(db, bean, tokensUsed);
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetUsage.id,
+      policyVersion: POLICIES.budgetUsage.version,
+      actor: 'builder',
+      action: 'budget_usage',
+      resource: bean,
+      effect: 'allow',
+      detail: `self-reported ${tokensUsed} tokens; deprecated, the ledger measures the usage`,
+    });
+  }
+
+  if (decision.warning !== undefined) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetWarn.id,
+      policyVersion: POLICIES.budgetWarn.version,
+      actor: 'builder',
+      action: 'budget_check',
+      resource: bean,
+      effect: 'ask',
+      detail: decision.warning,
+    });
+  }
+
+  if (decision.stop) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetStop.id,
+      policyVersion: POLICIES.budgetStop.version,
+      // The caller is not known to the board, so the bean is the subject of
+      // the record and the actor is the role the tool serves.
+      actor: 'builder',
+      action: 'budget_check',
+      resource: bean,
+      effect: 'deny',
+      detail: `${decision.tokensUsed} tokens used, stop at ${decision.stopAt}`,
+    });
+  }
+
+  if (decision.turnStop || decision.sessionStop) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetStop.id,
+      policyVersion: POLICIES.budgetStop.version,
+      actor: 'builder',
+      action: 'budget_check',
+      resource: bean,
+      effect: 'deny',
+      detail: decision.turnStop
+        ? `a turn cost ${decision.turnTokens ?? 0} tokens, over its cap of ${decision.turnLimit ?? 0}`
+        : `a session cost ${decision.sessionTokens ?? 0} tokens, over its cap of ${decision.sessionLimit ?? 0}`,
+    });
+  }
+
+  return decision;
+}
+
 server.registerTool(
   'board_budget',
   {
     description:
-      'The token budgets on the board. op=check reports whether a bean is over its budget and records the usage; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.',
+      'The token budgets on the board. op=check reports whether a bean is over its budget and records the usage; at 85 percent the builder stops and posts a blocker. op=list lists the budgets. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.',
     inputSchema: {
       op: z.enum(['check', 'list']).describe('What this call does'),
       bean: z.string().optional().describe('check: the bean to check'),
@@ -534,32 +625,16 @@ server.registerTool(
         .int()
         .nonnegative()
         .optional()
-        .describe('check: the tokens spent so far'),
+        .describe(
+          'check: the tokens spent so far. Deprecated: the ledger measures the usage and the check reads it there, so this self-report is ignored by the check.',
+        ),
     },
   },
   async (input) => {
     try {
       if (input.op === 'check') {
         const bean = required(input.bean, 'bean');
-        const tokensUsed = required(input.tokensUsed, 'tokensUsed');
-        const decision = checkBudget(db, bean, tokensUsed);
-        if (decision.configured) {
-          recordUsage(db, bean, tokensUsed);
-        }
-        if (decision.stop) {
-          await appendAudit(auditPath, {
-            policyId: POLICIES.budgetStop.id,
-            policyVersion: POLICIES.budgetStop.version,
-            // The caller is not known to the board, so the bean is the subject
-            // of the record and the actor is the role the tool serves.
-            actor: 'builder',
-            action: 'budget_check',
-            resource: bean,
-            effect: 'deny',
-            detail: `${tokensUsed} tokens used, stop at ${decision.stopAt}`,
-          });
-        }
-        return text(decision);
+        return text(await checkOneBudget(bean, input.tokensUsed ?? 0));
       }
 
       return text({ budgets: listBudgets(db) });
