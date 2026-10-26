@@ -58,7 +58,7 @@ export function toolMap(defs: Record<string, ToolDef<z.ZodType>>): Record<string
       args,
       execute: async (parsed, ctx) => {
         const result = await def.execute(parsed, ctx);
-        return typeof result === 'string' ? result : String(result);
+        return text(result);
       },
     });
   }
@@ -100,9 +100,22 @@ export function v2Tool(name: string, def: ToolDef<z.ZodType>): V2ToolDefinition 
         sessionID: context.sessionID,
         agent: context.agent ?? '',
       });
-      return { content: String(result) };
+      return { content: text(result) };
     },
   };
+}
+
+/**
+ * The text a tool's result becomes.
+ *
+ * A tool that returns a string is passed through unchanged. A tool that
+ * returns an object is serialized, because the model reads text and
+ * String() would hand it "[object Object]".
+ */
+function text(result: unknown): string {
+  if (typeof result === 'string') return result;
+  const serialized: string | undefined = JSON.stringify(result);
+  return serialized ?? String(result);
 }
 
 /**

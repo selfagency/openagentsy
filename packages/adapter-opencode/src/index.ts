@@ -16,14 +16,14 @@ import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
 
-export type { ToolCtx, ToolDef } from './define-tool.js';
+export type { ToolCtx, ToolDef, V2ToolDefinition } from './define-tool.js';
 /**
  * The tool definition helper.
  *
  * A package that registers tools of its own defines them once and hands
  * them to the two runtimes through this.
  */
-export { defineTool, toolMap };
+export { defineTool, toolMap, v2Tool } from './define-tool.js';
 
 /**
  * OpenAgentsy for OpenCode.

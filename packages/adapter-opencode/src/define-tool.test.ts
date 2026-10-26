@@ -90,4 +90,22 @@ describe('the tool definition helper', () => {
 
     expect(seen).toEqual(['oa-builder', '']);
   });
+
+  it('serializes an object result, so the model does not read [object Object]', async () => {
+    const task = defineTool({
+      description: 'a tool',
+      args: z.object({ title: z.string() }),
+      execute: async () => ({ id: 'tsk_1', title: 'a task' }),
+    });
+
+    const entry = toolOf(toolMap({ oa_test: task }), 'oa_test');
+    await expect(entry.execute({ title: 'a task' }, v1Context)).resolves.toBe(
+      '{"id":"tsk_1","title":"a task"}',
+    );
+
+    const v2 = v2Tool('oa_test', task);
+    await expect(v2.execute({ title: 'a task' }, { sessionID: 'ses_1' })).resolves.toEqual({
+      content: '{"id":"tsk_1","title":"a task"}',
+    });
+  });
 });
