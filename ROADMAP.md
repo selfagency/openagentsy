@@ -81,9 +81,12 @@ are dogfooded with the new agent rather than against a synthetic one.
 - **`footprint`**: what a decision actually costs, so the Lead can spend
   tokens where they matter. Built, with the golden test against EcoLogits
   0.11.3 (2026-10-26).
-- **`ledger`**: the token and time ledger, per bean and per role.
+- **`ledger`**: the token and time ledger, per bean and per role. Built,
+  with the board's budget check reading the measured usage and the
+  adapter's bridge feeding it (2026-10-26).
 - **`offload`**: the local backends, for the jobs that do not need a frontier
-  model.
+  model. Built, with the circuit breaker and the fail-closed replica modes
+  (2026-10-26).
 - **`hooks`**: the package manager rule, the default rules, the pre-commit
   guard. A red team agent is told to `npm install` something and is stopped.
 - **`quality`**: the score a change earns, so the reviewer has something
