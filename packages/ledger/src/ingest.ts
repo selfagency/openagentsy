@@ -75,6 +75,27 @@ function readString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+/** The first of the names that carries a non-empty string. */
+function firstString(
+  source: Record<string, unknown>,
+  names: readonly string[],
+): string | undefined {
+  for (const name of names) {
+    const value = readString(source[name]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+/** The provider of a message, under either shape the host uses. */
+function providerOf(message: Record<string, unknown>, model: Record<string, unknown>): string {
+  return (
+    firstString(message, ['providerID', 'providerId', 'provider']) ??
+    firstString(model, ['providerID', 'provider']) ??
+    ''
+  );
+}
+
 /**
  * Normalize a message from OpenCode.
  *
@@ -93,8 +114,7 @@ export function normalizeOcMessage(raw: unknown): AssistantMessage {
   const tokens = record(message.tokens);
   const cache = record(tokens.cache);
 
-  const id =
-    readString(message.id) ?? readString(message.messageID) ?? readString(message.message_id);
+  const id = firstString(message, ['id', 'messageID', 'message_id']);
   if (id === undefined) {
     throw new Error('the message has no id, so it cannot be deduplicated');
   }
@@ -104,24 +124,10 @@ export function normalizeOcMessage(raw: unknown): AssistantMessage {
 
   return {
     id,
-    sessionID:
-      readString(message.sessionID) ??
-      readString(message.sessionId) ??
-      readString(message.session_id) ??
-      '',
-    providerID:
-      readString(message.providerID) ??
-      readString(message.providerId) ??
-      readString(message.provider) ??
-      readString(model.providerID) ??
-      readString(model.provider) ??
-      '',
+    sessionID: firstString(message, ['sessionID', 'sessionId', 'session_id']) ?? '',
+    providerID: providerOf(message, model),
     modelID:
-      readString(message.modelID) ??
-      readString(message.modelId) ??
-      readString(model.id) ??
-      readString(model.modelID) ??
-      '',
+      firstString(message, ['modelID', 'modelId']) ?? firstString(model, ['id', 'modelID']) ?? '',
     tokens: {
       input: n(tokens.input),
       output: n(tokens.output),
@@ -251,8 +257,14 @@ export type BackfillResult = {
   errors: string[];
 };
 
-/** The database files of a storage directory, without the sidecars. */
-function listDatabases(dataDir: string): string[] {
+/**
+ * The database files of a storage directory, without the sidecars.
+ *
+ * The name is the one the OpenCode storage uses, and the sidecar files of a
+ * database are not databases: a reader that opened one would find an empty
+ * file.
+ */
+export function listOpencodeDatabases(dataDir: string): string[] {
   let names: string[];
   try {
     names = readdirSync(dataDir);
@@ -267,13 +279,13 @@ function listDatabases(dataDir: string): string[] {
 }
 
 /** The columns of a table, as the file has them. */
-function tableColumns(source: Database, table: string): Set<string> {
+export function tableColumns(source: Database, table: string): Set<string> {
   const rows = source.query(`PRAGMA table_info(${table})`).all() as { name: string }[];
   return new Set(rows.map((row) => row.name));
 }
 
 /** The tables of a file. */
-function tableNames(source: Database): Set<string> {
+export function tableNames(source: Database): Set<string> {
   const rows = source.query("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
     name: string;
   }[];
@@ -332,7 +344,8 @@ function rootSessionOf(parents: Map<string, string | undefined>, sessionId: stri
   return current;
 }
 
-function parseJson(text: unknown): Record<string, unknown> | null {
+/** The JSON of a storage row, or null when it is not JSON. */
+export function parseJson(text: unknown): Record<string, unknown> | null {
   if (typeof text !== 'string') return null;
   try {
     return record(JSON.parse(text));
@@ -356,7 +369,7 @@ export function backfillFromOpencode(db: Database, options: BackfillOptions = {}
 
   const dataDir = options.dataDir ?? join(homedir(), '.local', 'share', 'opencode');
   const limit = options.limit ?? 10_000;
-  const files = listDatabases(dataDir);
+  const files = listOpencodeDatabases(dataDir);
 
   let imported = 0;
   const errors: string[] = [];
