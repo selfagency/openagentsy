@@ -35,6 +35,7 @@
       "version": "0.1.0",
       "bin": {
         "openagentsy": "./dist/index.js",
+        "oa": "./dist/index.js",
       },
       "dependencies": {
         "@openagentsy/core": "0.1.0",
@@ -71,12 +72,21 @@
         "@openagentsy/jev": "*",
         "@opencode-ai/sdk": "^1.19.3",
         "ai": "^6.0.0",
+        "jsonc-parser": "^3.3.1",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
         "@types/node": "^24.3.0",
         "typescript": "^5.9.2",
         "vitest": "^3.2.4",
+      },
+    },
+    "packages/footprint": {
+      "name": "@openagentsy/footprint",
+      "version": "0.1.1",
+      "devDependencies": {
+        "@types/node": "^24.3.0",
+        "typescript": "^5.9.2",
       },
     },
     "packages/jev": {
@@ -307,6 +317,8 @@
     "@openagentsy/core": ["@openagentsy/core@workspace:packages/core"],
 
     "@openagentsy/evals": ["@openagentsy/evals@workspace:packages/evals"],
+
+    "@openagentsy/footprint": ["@openagentsy/footprint@workspace:packages/footprint"],
 
     "@openagentsy/jev": ["@openagentsy/jev@workspace:packages/jev"],
 

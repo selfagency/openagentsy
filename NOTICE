@@ -30,7 +30,8 @@ the terms noted:
   sidecar and the privacy rule. No code copied.
 - EcoLogits (CC BY-SA 4.0, docs): the footprint formulas in
   packages/footprint/ are re-implemented from the published methodology,
-  with credit in the UI and this NOTICE. Its models.json data is fetched
-  at runtime and cached, not bundled, until its data license is confirmed.
+  https://github.com/mlco2/ecologits, with credit in the UI and this NOTICE.
+  Its models.json data is fetched at runtime and cached, not bundled, until
+  its data license is confirmed.
 - models.dev (MIT): model and cost data, bundled at build time through
   the @opencode-ai/models package.
