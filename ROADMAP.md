@@ -73,9 +73,14 @@ These are the packages that turn the system from a coordination harness into
 an agent that does the work. They are built after 0.1.0 is proven, and they
 are dogfooded with the new agent rather than against a synthetic one.
 
-- **`tasks`**: the task store, and the Beans compatible board.
+- **`tasks`**: the task store, and the Beans compatible board. Built, with
+  the `oa_task_*` tools and the prime block (2026-10-26).
+- **`memory`**: the memory slice — the archivist's candidates become
+  approved, searchable project memory, and only a person approves them.
+  Built (2026-10-26).
 - **`footprint`**: what a decision actually costs, so the Lead can spend
-  tokens where they matter.
+  tokens where they matter. Built, with the golden test against EcoLogits
+  0.11.3 (2026-10-26).
 - **`ledger`**: the token and time ledger, per bean and per role.
 - **`offload`**: the local backends, for the jobs that do not need a frontier
   model.
