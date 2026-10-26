@@ -2,8 +2,9 @@ import { defineConfig } from 'tsdown';
 
 /**
  * The plugin is loaded from the OpenCode config directory, where bare
- * imports do not resolve. The bundle has to stand on its own, so zod and the
- * core package are inlined and the output has no external dependency.
+ * imports do not resolve. The bundle has to stand on its own, so zod, the
+ * core package and the ledger are inlined and the output has no external
+ * dependency.
  */
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -12,7 +13,7 @@ export default defineConfig({
   target: 'node22',
   dts: false,
   clean: true,
-  noExternal: ['zod', '@openagentsy/core'],
+  noExternal: ['zod', '@openagentsy/core', '@openagentsy/ledger'],
   outputOptions: {
     minify: false,
     // The bundle is copied out as one file, so a dynamic import has to be

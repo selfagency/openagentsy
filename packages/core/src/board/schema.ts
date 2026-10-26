@@ -60,5 +60,23 @@ export const budgets = t.sqliteTable('budgets', {
   tokenLimit: t.integer('token_limit').notNull(),
   stopAt: t.integer('stop_at').notNull(),
   tokensUsed: t.integer('tokens_used').notNull().default(0),
+  /**
+   * The cap of a single turn, when the bean has one.
+   *
+   * The columns are nullable and were added after the table: a board that is
+   * already in the wild keeps working, and a row without them is a bean with
+   * no turn cap.
+   */
+  turnLimit: t.integer('turn_limit'),
+  /** The cap of a single session, when the bean has one. */
+  sessionLimit: t.integer('session_limit'),
+  /**
+   * The scope that was warned about.
+   *
+   * The yellow window warns once per crossing, so the row has to remember
+   * that it already warned. It is cleared when the bean is back under the
+   * window, and the next crossing warns again.
+   */
+  warned: t.text('warned'),
   updatedAt: t.text('updated_at').notNull(),
 });

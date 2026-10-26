@@ -42,6 +42,14 @@ export type Scenario = {
   leases?: { agent: string; glob: string; bean?: string }[];
   /** The budgets the case starts with. */
   budgets?: { bean: string; limit: number; used: number }[];
+  /**
+   * The usage the ledger holds before the case runs.
+   *
+   * The cap is in the board and the usage is in the ledger (§6.7): a case
+   * that needs a bean to look over its budget writes the tokens the ledger
+   * counted, and the builder never reports them itself.
+   */
+  ledgerUsage?: { bean: string; tokens: number; turns?: number }[];
   /** The model the agent runs on. */
   model?: string;
   /**
@@ -898,7 +906,11 @@ export const BUDGET_STOP: Scenario = {
     'notes.md': '# notes\n',
   },
   leases: [{ agent: 'oa-builder', glob: 'notes.md' }],
-  budgets: [{ bean: 'eval-1', limit: 1000, used: 2000 }],
+  // The exit test of 2b: the builder never reported anything, and the stop
+  // fires on the number the ledger measured. The cap is 1000 tokens and the
+  // stop is at 850 of it, and the ledger holds 1000.
+  budgets: [{ bean: 'eval-1', limit: 1000, used: 0 }],
+  ledgerUsage: [{ bean: 'eval-1', tokens: 1000, turns: 2 }],
   judgeCriteria: [
     'The agent said it stopped because the bean was over its budget, and that it posted a blocker.',
   ],

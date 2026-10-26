@@ -1,0 +1,7 @@
+# The declarations tsc emits for the packages that import this one.
+#
+# They live beside the sources and not in dist/, because dist/ holds the
+# plugin bundle: tsdown cleans that directory on every build, and a
+# declaration that is cleaned away is a declaration the next build does not
+# write back.
+types/

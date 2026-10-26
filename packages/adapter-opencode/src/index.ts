@@ -12,6 +12,7 @@ import {
   writeRungs,
 } from './guard.js';
 import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
+import { assistantMessageOf, bridgeToLedger, rootSessionOf } from './ledger-bridge.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
@@ -132,7 +133,10 @@ export type ServerHooks = {
     output: { args: unknown },
   ) => Promise<void>;
   event?: (input: {
-    event: { type: string; properties?: { sessionID?: string } };
+    event: {
+      type: string;
+      properties?: { sessionID?: string; info?: unknown };
+    };
   }) => Promise<void>;
   tool?: Record<string, unknown>;
 };
@@ -171,6 +175,31 @@ async function onSessionIdle(
   }
 }
 
+/**
+ * An assistant message finished. The ledger counts it.
+ *
+ * The board's cap is compared against what the session really cost, and the
+ * ledger is fed here: the plugin is the only part that knows a message was
+ * written.
+ */
+async function onMessageUpdated(
+  client: ClientLike,
+  root: string,
+  event: { type: string; properties?: { sessionID?: string; info?: unknown } },
+  sessionAgents: Map<string, string>,
+): Promise<void> {
+  const message = assistantMessageOf(event);
+  if (message === undefined) return;
+  const sessionID = event.properties?.sessionID;
+  if (sessionID === undefined) return;
+  const agent = sessionAgents.get(sessionID);
+  // A message with no agent behind it cannot be attributed to a role, and
+  // the ledger never guesses a role.
+  if (agent === undefined) return;
+  const rootSessionID = await rootSessionOf(client, sessionID, root);
+  await bridgeToLedger(root, { raw: message, sessionID, rootSessionID, agent });
+}
+
 async function setupServer(
   client: ClientLike,
   directory: string,
@@ -200,6 +229,10 @@ async function setupServer(
     },
 
     event: async ({ event }) => {
+      if (event.type === 'message.updated') {
+        await onMessageUpdated(client, root, event, sessionAgents);
+        return;
+      }
       if (event.type !== 'session.idle') return;
       const sessionID = event.properties?.sessionID;
       if (!sessionID) return;

@@ -25,11 +25,14 @@ export type SessionClient = {
    * The SDK answers with `data` when the row exists and with the typed
    * `NotFoundError` when it does not. It returns the error rather than
    * throwing unless the client was built with `throwOnError`.
+   *
+   * The row carries the parent, which is how the bridge finds the session a
+   * subagent's usage rolls up to.
    */
   get: (options: {
     path: { id: string };
     query?: { directory?: string };
-  }) => Promise<{ data?: { id?: string }; error?: { name?: string } }>;
+  }) => Promise<{ data?: { id?: string; parentID?: string }; error?: { name?: string } }>;
   /**
    * List the sessions of a directory.
    *

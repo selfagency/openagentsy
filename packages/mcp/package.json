@@ -14,10 +14,12 @@
     "@modelcontextprotocol/sdk": "^1.21.0",
     "@openagentsy/core": "0.1.0",
     "@openagentsy/jev": "*",
+    "@openagentsy/ledger": "workspace:^",
     "zod": "^4.6.0"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
+    "bun-types": "^1.4.4",
     "typescript": "^5.9.2"
   },
   "license": "GPL-3.0-or-later",
