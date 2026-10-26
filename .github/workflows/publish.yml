@@ -71,10 +71,7 @@ jobs:
       # speaks through the npm CLI. The packages therefore get copied to the
       # neutral directory and npm runs from there, outside the repository.
       - name: Copy the packages out of the repository tree
-        env:
-          TAG: ${{ github.event.inputs.tag }}
         run: |
-          version="${TAG#v}"
           for package in packages/core packages/models packages/mcp packages/cli; do
             base="$(basename "$package")"
             cp -R "$package" "$RUNNER_TEMP/$base"
