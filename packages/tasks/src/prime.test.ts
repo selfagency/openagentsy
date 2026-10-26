@@ -120,6 +120,15 @@ describe('the prime block', () => {
     expect(block).not.toContain('oa-3333');
   });
 
+  it('counts every task in progress, and lists only a few of them', () => {
+    const tasks = Array.from({ length: 7 }, (_unused, index) =>
+      task(`oa-${index}`, { status: 'in-progress', title: `Working on ${index}` }),
+    );
+    const block = primeBlock(tasks);
+    expect(block).toContain('7 open; 7 in progress; 0 ready.');
+    expect(block.split('\n').filter((line) => line.startsWith('- ')).length).toBe(3);
+  });
+
   it('says nothing but tasks', () => {
     const block = primeBlock([task('oa-1111'), task('oa-2222', { status: 'in-progress' })]);
     const headings = block.split('\n').filter((line) => line.startsWith('#'));

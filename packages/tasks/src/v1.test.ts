@@ -61,9 +61,24 @@ describe('the plugin', () => {
     const nested = join(root, 'packages', 'thing');
     await mkdir(nested, { recursive: true });
     const config = await findBeansConfig(nested);
+    expect(config?.directory).toBe(root);
     expect(config?.path).toBe('.beans');
     expect(config?.prefix).toBe('demo-');
     expect(config?.idLength).toBe(4);
+  });
+
+  it('opens the store of the project, not of the directory it was given', async () => {
+    const root = await project();
+    const nested = join(root, 'packages', 'thing');
+    await mkdir(nested, { recursive: true });
+
+    const store = await openStore(nested);
+    expect(store.root).toBe(join(root, '.beans'));
+
+    const plugin = await OpenAgentsyTasks({ directory: nested });
+    const output = { system: [] as string[] };
+    await plugin['experimental.chat.system.transform']?.({}, output);
+    expect(output.system[0]).toContain('demo-1111');
   });
 
   it('falls back to the defaults when there is no configuration', async () => {

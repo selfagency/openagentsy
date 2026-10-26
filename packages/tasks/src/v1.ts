@@ -32,6 +32,8 @@ export interface TasksPlugin {
 
 /** What `.beans.yml` says about the store. */
 export interface BeansConfig {
+  /** The directory the configuration is in, and the project it belongs to. */
+  directory: string;
   /** The directory the task files live in, relative to the project. */
   path: string;
   /** The prefix every new id carries. */
@@ -69,7 +71,10 @@ export const OpenAgentsyTasks = async (input: { directory: string }): Promise<Ta
  */
 export async function openStore(directory: string): Promise<TaskStore> {
   const config = await findBeansConfig(directory);
-  const root = join(resolve(directory), config?.path ?? '.beans');
+  // The store belongs to the project the configuration is in, not to the
+  // directory the caller happened to name: a plugin opened on a directory
+  // inside a project reads that project's tasks.
+  const root = join(config?.directory ?? resolve(directory), config?.path ?? '.beans');
   return new TaskStore(root, {
     prefix: config?.prefix ?? DEFAULT_PREFIX,
     ...(config?.idLength === undefined ? {} : { idLength: config.idLength }),
@@ -102,14 +107,15 @@ async function readConfig(directory: string): Promise<BeansConfig | undefined> {
     return undefined;
   }
   if (raw === '') return undefined;
-  return configOf(raw);
+  return configOf(raw, directory);
 }
 
 /** The configuration a file says. */
-function configOf(raw: string): BeansConfig {
+function configOf(raw: string, directory: string): BeansConfig {
   const parsed = (parseYaml(raw) ?? {}) as Record<string, unknown>;
   const beans = (parsed.beans ?? {}) as Record<string, unknown>;
   return {
+    directory,
     path: typeof beans.path === 'string' ? beans.path : '.beans',
     prefix: typeof beans.prefix === 'string' ? beans.prefix : DEFAULT_PREFIX,
     idLength: typeof beans.id_length === 'number' ? beans.id_length : DEFAULT_LENGTH,

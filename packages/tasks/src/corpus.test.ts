@@ -46,9 +46,10 @@ describe('the beans corpus', () => {
         `[corpus] ${differences.length} of ${(await files()).length} files render differently:\n${differences.join('\n')}\n`,
       );
     }
-    // The differences are reported, not failed on: they are a fact about
-    // the two writers, and the store has to be able to read either one.
-    expect(differences.every((difference) => difference.length > 0)).toBe(true);
+    // The claim is strict: the store writes the bytes Beans writes. A
+    // difference is a difference in the two writers, and it is printed
+    // above so the file that carries it can be looked at.
+    expect(differences).toEqual([]);
   });
 });
 

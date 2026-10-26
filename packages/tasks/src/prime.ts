@@ -36,18 +36,18 @@ const TITLE_LIMIT = 40;
  */
 export function primeBlock(tasks: Task[]): string {
   const live = tasks.filter((task) => !TERMINAL.has(task.status));
-  const inProgress = live
-    .filter((task) => task.status === 'in-progress')
-    .slice(0, IN_PROGRESS_SHOWN);
+  const inProgress = live.filter((task) => task.status === 'in-progress');
   const open = ready(tasks);
   const top = open.slice(0, READY_SHOWN);
 
   return [
     '## Project tasks (.beans)',
     `${live.length} open; ${inProgress.length} in progress; ${open.length} ready.`,
-    inProgress.length > 0 ? `In progress:\n${inProgress.map(line).join('\n')}` : '',
+    inProgress.length > 0
+      ? `In progress:\n${inProgress.slice(0, IN_PROGRESS_SHOWN).map(line).join('\n')}`
+      : '',
     top.length > 0 ? `Ready next:\n${top.map(line).join('\n')}` : '',
-    'Use the oa_task_* tools to read or change tasks. Load the "tasks" skill for conventions.',
+    'Use the oa_task_* tools to read or change tasks.',
   ]
     .filter((part) => part !== '')
     .join('\n');
