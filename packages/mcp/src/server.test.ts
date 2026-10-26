@@ -291,6 +291,40 @@ describe('the board server over stdio', () => {
     expect(decision.warning).toContain('yellow window');
   });
 
+  it('lists the measured usage beside the deprecated self-report', async () => {
+    // The split-brain the fault case caught: op=list used to show only the
+    // self-report, so a lead reading it saw a bean at zero while the check
+    // stopped it on the ledger's number. The list now shows both.
+    const ledger = openLedger(root);
+    try {
+      recordAssistantMessage(
+        ledger,
+        {
+          id: 'msg-list-1',
+          sessionID: 'ses-list-1',
+          providerID: 'anthropic',
+          modelID: 'claude-sonnet',
+          tokens: { input: 100, output: 900, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+        {
+          rootSessionId: 'ses-list-1',
+          role: 'builder',
+          activeTaskId: 'proj-list',
+          ts: new Date().toISOString(),
+        },
+      );
+    } finally {
+      closeLedger(ledger);
+    }
+
+    await call('board_budget_set', { bean: 'proj-list', tokenLimit: 2000 });
+
+    const { budgets } = await call('board_budget', { op: 'list' });
+    const mine = budgets.find((b: { bean: string }) => b.bean === 'proj-list');
+    expect(mine.measured).toBe(1000);
+    expect(mine.tokensUsed).toBe(0);
+  });
+
   it('keeps the self-reported usage working for the old clients', async () => {
     await call('board_budget_set', { bean: 'proj-self', tokenLimit: 1000 });
     const decision = await call('board_budget', {
