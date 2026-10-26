@@ -20,6 +20,8 @@ Every release, from the commits that made it.
 
 ## 0.1.0 - 2026-10-23
 
+the board keeps the records, the leases, the budgets and the audit trail; the lease guard plugin decides who may write, and the fourteen-case safety suite is what proves the guard holds. The Lead can dispatch again, the provider switches with one command, the janitor prunes the project's own data and nothing else, and the model lock names the model every role runs on.
+
 ### Changed
 
 - the suite runs on the project's own models from the lock, on the Console: the OpenRouter workspace budget is untouched

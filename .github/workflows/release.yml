@@ -1,0 +1,90 @@
+name: release
+
+# A tag is a release. The gates run in the release job on purpose: a tag whose
+# gates are red must never become a release, so there is no second job and no
+# `needs` to hand the tag over. The job that publishes is the job that proved
+# the code, and it stops at the first red gate.
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      # The version comes from the packageManager field in package.json, so the
+      # release is built with the version the repository pins.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bunx turbo run lint
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      - name: Typecheck
+        run: bunx turbo run typecheck
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      # The test script builds first, so the plugin bundle the bundle test
+      # reads is on disk before the tests run.
+      - name: Test
+        run: bun run test
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      - name: Build
+        run: bunx turbo run build
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      # The notes are the section of the changelog the tag names. A tag whose
+      # version has no section fails here, rather than publishing a release
+      # with an empty body.
+      - name: The release notes
+        id: notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v want="$version" '
+            $1 == "##" && $2 == want { found = 1; print; next }
+            found && $1 == "##" { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          if ! grep -q '^[^#]' "$notes"; then
+            echo "::error::CHANGELOG.md has no $version section to publish"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.notes.outputs.version }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp packages/cli/plugin/openagentsy.js "$RUNNER_TEMP/openagentsy.js"
+          gh release create "$TAG" \
+            --title "openagentsy $VERSION" \
+            --notes-file "$NOTES_FILE" \
+            "$RUNNER_TEMP/openagentsy.js"

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "packageManager": "bun@1.4.4",
   "engines": {
     "bun": ">=1.2.0"
   },
@@ -12,8 +13,9 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "typecheck": "turbo run typecheck",
+    "check": "biome ci . && turbo run typecheck",
     "ci:check": "biome ci . && turbo run typecheck",
-    "test": "turbo run test",
+    "test": "bunx --bun vitest run",
     "test:coverage": "bunx --bun vitest run --coverage --coverage.provider=v8 --coverage.reporter=json --coverage.reportsDirectory=coverage",
     "test:watch": "bunx --bun vitest",
     "openagentsy": "bun packages/cli/dist/index.js",
