@@ -68,6 +68,13 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
+          # The npm lane needs NPM_TOKEN. Until the repo carries that secret
+          # the step says so and moves on: the release itself is the
+          # deliverable, and a failed run on every tag is noise.
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::notice::NPM_TOKEN is not a repository secret, so nothing is published to npm"
+            exit 0
+          fi
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           for package in packages/core packages/models packages/mcp packages/cli; do
             name="$(bun -e "console.log(require('./$package/package.json').name)")"
