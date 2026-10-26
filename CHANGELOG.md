@@ -2,60 +2,21 @@
 
 Every release, from the commits that made it.
 
-## 0.1.0 - 2026-10-26
+## 0.1.1 - 2026-10-26
 
-### Built
+### Kept
 
-- **release**: cut a release and publish to npm by hand (`24dd909`)
-- **publish**: say the npm lane is dark instead of failing on every tag (`593bd27`)
-- **publish**: a tag creates one release, and release.yml makes it (`d268aba`)
-- **eval**: the safety suite does not run on a pull request (`6d6061e`)
-- **eval**: run the suite on the provider the lock names, and print each case as it finishes (`afcd927`)
-- the pre-flight asks the model the suite will use (`a7e9399`)
-- the suite checks the provider before it starts (`7dabff0`)
-- a push runs one trial per case, the nightly runs three (`1a2afa7`)
-- **evals**: give the harness the key it breaks the judge's ties with (`f4c3107`)
-- **evals**: try each case three times, and give the suite the time it takes (`d31731c`)
-- the judge default is the flash model (`2dbe3ab`)
-- commit the health baseline so the gate can read it (`4a6bed0`)
-- run check on pull requests and on demand, not on every push (`be9f054`)
-- print the eval server log when the suite fails (`c6a2020`)
-- the fallow gate gates the push, not the release parent (`f4daa04`)
-- biome does not format the pnpm lockfile (`1e87bd1`)
-- approve the transitive build scripts so the install is quiet (`7461d54`)
-- fix the empty with block left by the version pin (`49abdfb`)
-- let pnpm/action-setup read the version from packageManager (`6e23e5c`)
-- pin the workflow pnpm to the packageManager version (`f3eddae`)
-- run the safety suite on v1 and probe the plugin on v2 (`1c55483`)
-
-### Added
-
-- **release**: pin bun, add the check alias, the oa bin and the release workflow (`2c47fe0`)
-- **models**: switch the provider with one command (`188299d`)
-- **janitor**: the project prunes its own data and nothing else (`fe2cf5c`)
-- **evals**: the suite runs only the cases a change reaches (`cc77d3d`)
-- **adapter**: the memory pipeline can be turned off (`a130377`)
-- **board**: a record has to name an agent the board knows (`617a3bc`)
-- **board**: the Lead can take a lease back (`4528b3c`)
-- **adapter**: the V2 path harvests the sessions that end (`9b1df2a`)
-- **roles**: the lead classifies with the board, and says when it took the cheaper plan (`a4c1f7a`)
-- **evals**: the judge breaks its ties with a probability (`7ceeee6`)
-- **mcp**: the board classifies a request into the dispatch profiles (`a513f84`)
-- **core**: the dispatch profiles the Lead classifies into (`5e59023`)
-- **jev**: the client for a System One model (`2d4f83a`)
-- **roles**: tell the lead to check a claim, and to say what it cannot confirm (`c885df7`)
-- **stack**: move to Bun workspaces, Turborepo and drizzle over bun:sqlite (`eb3a7f1`)
-- the board describes itself, and a person can read it (`474bab4`)
-- the subagent harvest, the missing piece of phase 0 (`ef3641d`)
-- the token baseline, the measurement the phase 0 exit test asks for (`7d2697f`)
-- the review command takes the criteria, and the reviewer can run node's test runner (`a196a91`)
-- the dispatch shapes, the writer cap, and the archivist in the plan (`7e85ee5`)
-- batch 3, the safety suite (`35de343`)
-- batch 2, model selection and the lease guard (`b88a1ce`)
-- batch 1 foundation, role definitions and the board (`5d6f2fc`)
+- **release**: the root manifest moves to 0.1.1 with its packages (`bf42980`)
+- **release**: 0.1.1, and the npm step runs outside the repository tree (`efa01a6`)
+- **models**: the roles run on Ollama Cloud (`d2be19c`)
+- **evals**: the suite runs on Haiku (`401b444`)
+- drop the in-repo fallow skill copies (`322ed41`)
+- wire fallow into the repo (`e709338`)
+- biome, husky and lint-staged (`95fe04d`)
 
 ### Fixed
 
+- **deps**: siblings are workspace dependencies (`096d2c9`)
 - **adapter**: the archivist stands on its own, so the harvested session cannot take it down (`4bf67bc`)
 - **evals**: confirm the completion by the artifact, and put a failed harvest on the record (`be715be`)
 - **evals**: the judge reads a denial by absence, and the false premise is the false value (`30f8bbe`)
@@ -114,16 +75,35 @@ Every release, from the commits that made it.
 - close the self-granted lease hole, and name the lead agent (`cf6e883`)
 - the judge agent frontmatter and the pre-commit gate (`3613c87`)
 
-### Kept
+### Built
 
-- **models**: the roles run on Ollama Cloud (`d2be19c`)
-- **evals**: the suite runs on Haiku (`401b444`)
-- drop the in-repo fallow skill copies (`322ed41`)
-- wire fallow into the repo (`e709338`)
-- biome, husky and lint-staged (`95fe04d`)
+- **publish**: drop a variable the copy step does not use (`eba45b5`)
+- **release**: cut a release and publish to npm by hand (`24dd909`)
+- **publish**: say the npm lane is dark instead of failing on every tag (`593bd27`)
+- **publish**: a tag creates one release, and release.yml makes it (`d268aba`)
+- **eval**: the safety suite does not run on a pull request (`6d6061e`)
+- **eval**: run the suite on the provider the lock names, and print each case as it finishes (`afcd927`)
+- the pre-flight asks the model the suite will use (`a7e9399`)
+- the suite checks the provider before it starts (`7dabff0`)
+- a push runs one trial per case, the nightly runs three (`1a2afa7`)
+- **evals**: give the harness the key it breaks the judge's ties with (`f4c3107`)
+- **evals**: try each case three times, and give the suite the time it takes (`d31731c`)
+- the judge default is the flash model (`2dbe3ab`)
+- commit the health baseline so the gate can read it (`4a6bed0`)
+- run check on pull requests and on demand, not on every push (`be9f054`)
+- print the eval server log when the suite fails (`c6a2020`)
+- the fallow gate gates the push, not the release parent (`f4daa04`)
+- biome does not format the pnpm lockfile (`1e87bd1`)
+- approve the transitive build scripts so the install is quiet (`7461d54`)
+- fix the empty with block left by the version pin (`49abdfb`)
+- let pnpm/action-setup read the version from packageManager (`6e23e5c`)
+- pin the workflow pnpm to the packageManager version (`f3eddae`)
+- run the safety suite on v1 and probe the plugin on v2 (`1c55483`)
 
 ### Documented
 
+- **packages**: every package carries its README, license and author (`ca0e420`)
+- **changelog**: the 0.1.0 entry (`54d5ef7`)
 - **changelog**: the trial budget, the refusal line and the cap of five cases (`0a4c0a0`)
 - **changelog**: the dispatch fix, the role gates and the two eval beans (`f5fae3d`)
 - the key comes from the auth store, so CI and the machine can differ (`1c8e199`)
@@ -141,6 +121,32 @@ Every release, from the commits that made it.
 - move the plans into plans/ and drop CLAUDE.md (`2794174`)
 - add the anti-slop guidance task to the phase 2 addendum (`0bcc497`)
 - what the safety suite found (`6a9dc9f`)
+
+### Added
+
+- **release**: pin bun, add the check alias, the oa bin and the release workflow (`2c47fe0`)
+- **models**: switch the provider with one command (`188299d`)
+- **janitor**: the project prunes its own data and nothing else (`fe2cf5c`)
+- **evals**: the suite runs only the cases a change reaches (`cc77d3d`)
+- **adapter**: the memory pipeline can be turned off (`a130377`)
+- **board**: a record has to name an agent the board knows (`617a3bc`)
+- **board**: the Lead can take a lease back (`4528b3c`)
+- **adapter**: the V2 path harvests the sessions that end (`9b1df2a`)
+- **roles**: the lead classifies with the board, and says when it took the cheaper plan (`a4c1f7a`)
+- **evals**: the judge breaks its ties with a probability (`7ceeee6`)
+- **mcp**: the board classifies a request into the dispatch profiles (`a513f84`)
+- **core**: the dispatch profiles the Lead classifies into (`5e59023`)
+- **jev**: the client for a System One model (`2d4f83a`)
+- **roles**: tell the lead to check a claim, and to say what it cannot confirm (`c885df7`)
+- **stack**: move to Bun workspaces, Turborepo and drizzle over bun:sqlite (`eb3a7f1`)
+- the board describes itself, and a person can read it (`474bab4`)
+- the subagent harvest, the missing piece of phase 0 (`ef3641d`)
+- the token baseline, the measurement the phase 0 exit test asks for (`7d2697f`)
+- the review command takes the criteria, and the reviewer can run node's test runner (`a196a91`)
+- the dispatch shapes, the writer cap, and the archivist in the plan (`7e85ee5`)
+- batch 3, the safety suite (`35de343`)
+- batch 2, model selection and the lease guard (`b88a1ce`)
+- batch 1 foundation, role definitions and the board (`5d6f2fc`)
 
 ### Tested
 
