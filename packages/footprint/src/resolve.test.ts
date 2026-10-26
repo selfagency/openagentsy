@@ -29,12 +29,12 @@ describe('the provider table', () => {
   it('keeps the numbers the methodology publishes', () => {
     expect(providerDefaults('anthropic')).toMatchObject({
       pue: [1.09, 1.14],
-      wueOnSite: [0.13, 0.99],
+      wueOnSite: [0.13, 0.999],
       disclosed: true,
     });
     expect(providerDefaults('google')).toMatchObject({
       pue: [1.09, 1.09],
-      wueOnSite: [0.99, 0.99],
+      wueOnSite: [0.999, 0.999],
     });
     expect(providerDefaults('mistral')).toMatchObject({
       pue: [1.16, 1.16],
@@ -54,7 +54,7 @@ describe('the provider table', () => {
   it('gives an unknown provider the widest range, marked as undisclosed', () => {
     const unknown = providerDefaults('ollama-cloud');
     expect(unknown.pue).toEqual([1.09, 1.14]);
-    expect(unknown.wueOnSite).toEqual([0.13, 0.99]);
+    expect(unknown.wueOnSite).toEqual([0.13, 0.999]);
     expect(unknown.disclosed).toBe(false);
   });
 });

@@ -30,7 +30,7 @@ The provider defaults in `src/resolve.ts` were checked against EcoLogits
 | `google` (EcoLogits: `google_genai`) | 1.09 | 0.999 |
 | `mistral` (EcoLogits: `mistralai`) | 1.16 | 0.09 |
 | `openai` | 1.20 | 0.569 |
-| any other provider | 1.09-1.14 | 0.13-0.99, marked `disclosed: false` |
+| any other provider | 1.09-1.14 | 0.13-0.999, marked `disclosed: false` |
 
 The constants in `src/constants.ts` are the rounded values the plan quotes.
 EcoLogits 0.11.3 uses `1.1665273170451914e-06`, `-0.011205921025579175` and

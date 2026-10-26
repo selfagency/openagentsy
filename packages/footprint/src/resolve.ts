@@ -41,13 +41,13 @@ export interface ProviderDefaults {
 const PROVIDER_TABLE: Record<string, ProviderDefaults> = {
   anthropic: {
     pue: r(1.09, 1.14),
-    wueOnSite: r(0.13, 0.99),
+    wueOnSite: r(0.13, 0.999),
     source: 'ecologits:anthropic',
     disclosed: true,
   },
   google: {
     pue: r(1.09),
-    wueOnSite: r(0.99),
+    wueOnSite: r(0.999),
     source: 'ecologits:google',
     disclosed: true,
   },
@@ -79,7 +79,7 @@ const PROVIDER_ALIASES: Record<string, string> = {
  */
 const UNDISCLOSED: ProviderDefaults = {
   pue: r(1.09, 1.14),
-  wueOnSite: r(0.13, 0.99),
+  wueOnSite: r(0.13, 0.999),
   source: 'world-default',
   disclosed: false,
 };
