@@ -104,12 +104,7 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
   const command = await resolveMcpCommand(options.root);
   const merged = await mergedConfigs(options.root);
 
-  let text = '';
-  try {
-    text = await readFile(configPath, 'utf8');
-  } catch {
-    text = '';
-  }
+  const text = await readFile(configPath, 'utf8').catch(() => '');
 
   const changed: string[] = [];
   let content = text;

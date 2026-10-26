@@ -6,17 +6,74 @@ import { buildLock } from './lock.js';
 import { loadModelsDev } from './modelsdev.js';
 import { loadAliases, loadPolicy } from './policy.js';
 import { type FetchLike, listProviderModels, type ProviderSelection } from './providers.js';
-import { PROVIDER_IDS } from './types.js';
+import { withFlashPreference } from './score.js';
+import { type ModelLock, PROVIDER_IDS, type ProviderId } from './types.js';
 
 export const POLICY_PATH = fileURLToPath(new URL('../policy/providers.yaml', import.meta.url));
 export const ALIASES_PATH = fileURLToPath(
   new URL('../policy/benchlm-aliases.yaml', import.meta.url),
 );
 
+type ProviderAlias = {
+  /** The provider the alias names. */
+  provider: ProviderId;
+  /** What the alias means, so the choice is visible instead of guessed. */
+  means: string;
+};
+
+/**
+ * The names a person may type for a provider.
+ *
+ * The alias `ollama` is the cloud provider, because the local one is not a
+ * provider OpenCode can run. The local one is `ollama-local`.
+ *
+ * The provider ids do not move with the aliases: the policy file names
+ * `ollama` for the provider on this machine and `ollama-cloud` for the cloud
+ * one, and the lock records ids and not names.
+ */
+const PROVIDER_ALIASES = new Map<string, ProviderAlias>([
+  ['opencode', { provider: 'opencode', means: 'the OpenCode Zen models' }],
+  ['zen', { provider: 'opencode', means: 'the OpenCode Zen models' }],
+  ['opencode-go', { provider: 'opencode-go', means: 'the OpenCode Console Go plan' }],
+  ['go', { provider: 'opencode-go', means: 'the OpenCode Console Go plan' }],
+  ['ollama', { provider: 'ollama-cloud', means: 'the Ollama Cloud models' }],
+  ['ollama-cloud', { provider: 'ollama-cloud', means: 'the Ollama Cloud models' }],
+  ['ollama-local', { provider: 'ollama', means: 'the Ollama models on this machine' }],
+]);
+
+/** The provider an alias names, or nothing when the name is not one. */
+export function resolveProviderAlias(name: string): ProviderId | undefined {
+  // A map, not an object: the name is what a person typed, and a lookup by
+  // it in an object can land on the prototype's own property instead of on
+  // nothing.
+  return PROVIDER_ALIASES.get(name.toLowerCase())?.provider;
+}
+
+/** The aliases and what each one means, for the error message. */
+export function providerAliasSummary(): string {
+  return [...PROVIDER_ALIASES].map(([alias, entry]) => `${alias} = ${entry.means}`).join(', ');
+}
+
+/**
+ * The provider ids a lock records, the ones that still exist.
+ *
+ * The lock holds ids and not names, so they are read as ids. Reading them
+ * as names would send a lock that names the local provider to the cloud one.
+ */
+export function providerIdsFromLock(lock: ModelLock | undefined): ProviderId[] {
+  const ids: ProviderId[] = [];
+  for (const id of lock?.providers ?? []) {
+    if (PROVIDER_IDS.includes(id as ProviderId)) ids.push(id as ProviderId);
+  }
+  return ids;
+}
+
 export type SelectModelsInput = {
   root: string;
   roles: RolesFile;
   providers: ProviderSelection[];
+  /** Take the flash variant of the family a role would get, when it qualifies. */
+  preferFlash?: boolean;
   fetchImpl?: FetchLike;
   now?: number;
   benchLmKey?: string;
@@ -62,7 +119,8 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
   for (const selection of input.providers) {
     if (!PROVIDER_IDS.includes(selection.provider)) {
       throw new Error(
-        `unknown provider: ${selection.provider}. The providers are ${PROVIDER_IDS.join(', ')}.`,
+        `unknown provider: ${selection.provider}. The provider ids are ${PROVIDER_IDS.join(', ')}. ` +
+          `The names you may use: ${providerAliasSummary()}.`,
       );
     }
   }
@@ -81,7 +139,7 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
     served[provider] = models;
   }
 
-  const candidates = assembleCandidates({
+  const assembled = assembleCandidates({
     providers: input.providers,
     served,
     modelsDev: modelsDev.catalog,
@@ -89,6 +147,10 @@ export async function selectModels(input: SelectModelsInput): Promise<SelectMode
     aliases: aliasFile.aliases,
     policy,
   });
+
+  // The flash preference rides with the candidate set, because the lock
+  // builder takes no preference of its own and every role applies this one.
+  const candidates = input.preferFlash === true ? withFlashPreference(assembled) : assembled;
 
   const { lock, reasons, rejected, failures } = buildLock({
     roles: input.roles,

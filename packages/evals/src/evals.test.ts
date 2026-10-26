@@ -14,9 +14,11 @@ import {
   answerPermissions,
   createCaseDir,
   type OpenCodeHarness,
+  type ProviderRefusal,
   removeCaseDir,
   runTurn,
   startHarness,
+  TRIAL_BUDGET_MS,
 } from './opencode.js';
 import { SCENARIOS, type Scenario, selectCases } from './scenarios.js';
 
@@ -79,6 +81,55 @@ const suite = ENABLED && SELECTED.length > 0 ? describe : describe.skip;
  */
 const TRIALS = Number(process.env.OPENAGENTSY_EVAL_TRIALS ?? 3);
 
+/**
+ * How many cases run at once.
+ *
+ * A case is not one session: it runs a Lead, the builder the Lead dispatches
+ * and the judge, so a cap of three cases is about ten concurrent sessions and
+ * a cap of five is about fifteen. Five keeps the provider's patience and
+ * takes about a third off the wall time. The number of provider calls does
+ * not change with the cap, so the cost of a run does not change either: only
+ * the wall time does.
+ */
+const DEFAULT_CONCURRENCY = 5;
+
+/**
+ * The cap the environment asks for.
+ *
+ * The environment moves the cap in both directions: one case at a time for
+ * a provider that is refusing, more for a provider that is not. A value
+ * that is not a number falls back to the default, and a cap below one is
+ * lifted to one, because a cap of zero queues every case and runs none.
+ */
+function concurrencyCap(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_CONCURRENCY;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_CONCURRENCY;
+  return Math.max(1, Math.floor(parsed));
+}
+
+/**
+ * The line a provider refusal is reported with.
+ *
+ * A run that is slower because the provider refuses looks like a run that is
+ * slower because the model is slow, and nothing else says which one it was.
+ * The line names the status the provider answered with, which attempt this
+ * is, and how long the harness is about to wait.
+ */
+function providerRefusalLine(refusal: ProviderRefusal): string {
+  return `the provider refused the turn with ${refusal.status}: attempt ${refusal.attempt}, waiting ${refusal.waitMs}ms before asking again`;
+}
+
+/**
+ * Report a provider refusal the harness is about to retry.
+ *
+ * The harness knows the refusal and the suite is what a person reads while
+ * the run is going, so the suite writes it down.
+ */
+function reportProviderRefusal(refusal: ProviderRefusal): void {
+  console.log(providerRefusalLine(refusal));
+}
+
 suite('the safety suite', () => {
   let harness: OpenCodeHarness;
 
@@ -95,9 +146,8 @@ suite('the safety suite', () => {
 
   // The cases run side by side: each one has its own throwaway directory,
   // its own board and its own session, and the server serves any directory
-  // it is asked for. The cap is the providers' patience, not the machine's:
-  // ten sessions at once would trade minutes for 429s.
-  const cap = Number(process.env.OPENAGENTSY_EVAL_CONCURRENCY ?? 3);
+  // it is asked for. The cap is the providers' patience, not the machine's.
+  const cap = concurrencyCap(process.env.OPENAGENTSY_EVAL_CONCURRENCY);
   let running = 0;
   const queue: (() => void)[] = [];
   const acquire = () =>
@@ -140,7 +190,13 @@ suite('the safety suite', () => {
             release();
           }
         },
-        900_000 * TRIALS,
+        // A case is not one turn: it is the Lead's turn, the builder's turn
+        // the Lead dispatches, the judge's turn and, in a fault case, a
+        // second turn after the fault. Each of them may be slow, because the
+        // suite runs several cases at once and a turn waits behind the other
+        // cases' streams. The budget of a case is therefore the budget of a
+        // trial times the number of trials.
+        TRIAL_BUDGET_MS * TRIALS,
       );
     }
   });
@@ -318,7 +374,10 @@ async function runScenario(
         agent: scenarioCase.agent,
         ...(MODEL !== undefined ? { model: MODEL } : {}),
         text,
-        timeoutMs: 600_000,
+        // The turn gets the trial's own budget, so a turn is only given up
+        // when the trial it belongs to would have been given up.
+        timeoutMs: TRIAL_BUDGET_MS,
+        onProviderRefusal: reportProviderRefusal,
         ...(scenarioCase.rateLimitRetries !== undefined
           ? { rateLimitRetries: scenarioCase.rateLimitRetries }
           : {}),
@@ -361,3 +420,31 @@ async function runScenario(
 
   return { replies, toolCalls };
 }
+
+/**
+ * The parts of the suite that are a decision rather than a run.
+ *
+ * The cap and the refusal line are pure: they are what a person reads and
+ * what decides how many cases the provider has to answer at once, so they
+ * are worth a test that does not cost a provider call.
+ */
+describe('the harness the suite runs', () => {
+  it('reports a provider refusal with its status, its attempt and its wait', () => {
+    const line = providerRefusalLine({ status: 429, attempt: 2, waitMs: 60_000 });
+    expect(line).toContain('429');
+    expect(line).toContain('attempt 2');
+    expect(line).toContain('60000ms');
+  });
+
+  it('takes the cap the environment asks for, in both directions', () => {
+    expect(concurrencyCap(undefined)).toBe(DEFAULT_CONCURRENCY);
+    expect(concurrencyCap('')).toBe(DEFAULT_CONCURRENCY);
+    expect(concurrencyCap('1')).toBe(1);
+    expect(concurrencyCap('9')).toBe(9);
+  });
+
+  it('never takes a cap that would queue every case and run none', () => {
+    expect(concurrencyCap('0')).toBe(1);
+    expect(concurrencyCap('not a number')).toBe(DEFAULT_CONCURRENCY);
+  });
+});

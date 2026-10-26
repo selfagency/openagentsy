@@ -31,8 +31,29 @@ describe('toV1Permissions', () => {
   });
 
   it('names the spawn tool task', () => {
+    // A role that may not dispatch keeps its own deny. The shorthand form of a
+    // single rule carries no catch-all, so there is nothing to rewrite.
     const result = toV1Permissions({ subagent: rules(['*', 'deny']) });
     expect(result).toEqual({ task: 'deny' });
+  });
+
+  it('writes the spawn catch-all as a double asterisk, before the named allows', () => {
+    // The plugin drops a literal asterisk key from the spawn map and
+    // re-appends it last, so the catch-all would beat the named allows and
+    // the Task tool would leave the toolset.
+    const result = toV1Permissions({
+      subagent: rules(['*', 'deny'], ['oa-scout', 'allow'], ['oa-builder', 'allow']),
+    });
+    expect(result).toEqual({
+      task: { '**': 'deny', 'oa-scout': 'allow', 'oa-builder': 'allow' },
+    });
+    const task = result.task as Record<string, string>;
+    expect(Object.keys(task)[0]).toBe('**');
+  });
+
+  it('leaves the catch-all of another action alone', () => {
+    const result = toV1Permissions({ shell: rules(['*', 'deny'], ['npm test*', 'allow']) });
+    expect(result).toEqual({ bash: { '*': 'deny', 'npm test*': 'allow' } });
   });
 
   it('keeps the list and lsp actions', () => {
@@ -76,11 +97,14 @@ describe('toV2Permissions', () => {
     ]);
   });
 
-  it('names the spawn tool subagent', () => {
-    const result = toV2Permissions({ subagent: rules(['*', 'deny'], ['oa-scout', 'allow']) });
+  it('names the spawn tool subagent and keeps its catch-all a single asterisk', () => {
+    const result = toV2Permissions({
+      subagent: rules(['*', 'deny'], ['oa-scout', 'allow'], ['oa-builder', 'allow']),
+    });
     expect(result).toEqual([
       { action: 'subagent', resource: '*', effect: 'deny' },
       { action: 'subagent', resource: 'oa-scout', effect: 'allow' },
+      { action: 'subagent', resource: 'oa-builder', effect: 'allow' },
     ]);
   });
 

@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "openagentsy": "./dist/index.js"
+    "openagentsy": "./dist/index.js",
+    "oa": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -b tsconfig.json && chmod +x dist/index.js && node scripts/copy-plugin.mjs",

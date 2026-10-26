@@ -2,7 +2,25 @@
 
 Every release, from the commits that made it.
 
+## Unreleased
+
+### Fixed
+
+- the Lead can dispatch again: the spawn catch-all is written with two asterisks, so the wildcard rewrite of the memory plugin cannot turn deny-all-except-six into deny-all (`8afd075`)
+- the roles can run the gates this project runs: the vitest command, the bun scripts, biome and fallow were missing from every shell map (`f7e95d3`)
+- the killed-builder case fails when the agent says nothing: it asks for the record that reports the non completion, and it reads a claim and a denial per clause (`0b44448`)
+- the harness surfaces the host errors: it reads the server log, attributes each to the case that owns the session, and fails the suite at teardown (`aec4f56`)
+- the harvest checks that the archivist child still exists before it prompts it, and the V2 harvest is off until the V2 context can answer (`aec4f56`)
+- a turn is given up only when its trial would have been: a Lead's turn waits for the builder it dispatches, so one turn covers the child's whole session, and the 600 second guard was shorter than that (`e1a3053`)
+- a provider refusal is written down, with its status and its wait: a run that is slow because the provider refuses looked exactly like a run that is slow because the model is slow (`e1a3053`)
+
+### Changed
+
+- the cases run five at a time instead of three: a case is a Lead and the builder it dispatches, so five cases are about ten sessions, and the number of provider calls does not change with the cap, so the cost of a run does not change either (`e1a3053`)
+
 ## 0.1.0 - 2026-10-23
+
+the board keeps the records, the leases, the budgets and the audit trail; the lease guard plugin decides who may write, and the fourteen-case safety suite is what proves the guard holds. The Lead can dispatch again, the provider switches with one command, the janitor prunes the project's own data and nothing else, and the model lock names the model every role runs on.
 
 ### Changed
 
@@ -57,6 +75,7 @@ Every release, from the commits that made it.
 
 ### Fixed
 
+- the event data reaches the shell through the environment, never through the script: a value the workflow interpolates into a run block is a value a pull request can write
 - every role in a case runs on the model under test; the archivist ran on the lock's model, so a free provider's failure showed up as a case that failed for the wrong reason (`42abf58`)
 - the reporting section showed a bare JSON block, and an agent that read "post one board record" wrote the JSON to a file; it names the tool now (`42abf58`)
 - a climb leaves a synthetic message at the end of the session, and the harness took it as the reply, so a case where the agent climbed had no reply at all (`7295453`)

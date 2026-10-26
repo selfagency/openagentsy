@@ -1,0 +1,141 @@
+name: release
+
+# A release is cut by hand, never by a push. One run does the whole dance:
+# it gates the code, writes the changelog from the commits since the last
+# tag, commits it, tags, and creates the GitHub release with that section
+# as the notes and the plugin bundle as the asset. The gates run in the
+# same job on purpose - a release whose gates are red must never be
+# created, so there is no second job and no `needs` to hand anything over.
+# The job that publishes is the job that proved the code, and it stops at
+# the first red gate.
+#
+# Run it on the branch you want released (main for a release cut).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to create and release, for example v0.1.0. Its version must match package.json and must not exist yet."
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.tag }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      # The version comes from the packageManager field in package.json, so the
+      # release is built with the version the repository pins.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bunx turbo run lint
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      - name: Typecheck
+        run: bunx turbo run typecheck
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      - name: Test
+        run: bun run test
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      - name: Build
+        run: bunx turbo run build
+        env:
+          TURBO_TELEMETRY_DISABLED: "1"
+
+      # The tag's version is the version every manifest carries, and the tag
+      # does not exist yet: creating over a tag would move history.
+      - name: The tag matches the manifest
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          manifest="$(bun -e "console.log(require('./package.json').version)")"
+          if [ "$version" != "$manifest" ]; then
+            echo "::error::the tag names $version but package.json is at $manifest"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::the tag $TAG already exists"
+            exit 1
+          fi
+
+      # The changelog is regenerated from the commits since the last tag, so
+      # the file and the log cannot disagree.
+      - name: Generate the changelog
+        run: bun scripts/changelog.mjs
+
+      - name: Commit the changelog and tag
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          git config user.name "openagentsy-release"
+          git config user.email "noreply@${GITHUB_REPOSITORY_OWNER}.users.noreply.github.com"
+          if git diff --quiet CHANGELOG.md; then
+            echo "::notice::the changelog did not change"
+          else
+            git add CHANGELOG.md
+            git commit -m "docs(changelog): the ${version} entry"
+          fi
+          if [ "$(git branch --show-current)" = "" ]; then
+            echo "::error::run this workflow on a branch, not a tag or a detached head"
+            exit 1
+          fi
+          git push origin HEAD
+          git tag -a "$TAG" -m "openagentsy ${version}"
+          git push origin "$TAG"
+
+      # The notes are the section of the changelog the tag names. A version
+      # with no section fails here, rather than publishing a release with an
+      # empty body.
+      - name: The release notes
+        id: notes
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          version="${TAG#v}"
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v want="$version" '
+            $1 == "##" && $2 == want { found = 1; print; next }
+            found && $1 == "##" { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          if ! grep -q '^[^#]' "$notes"; then
+            echo "::error::CHANGELOG.md has no $version section to publish"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "notes_file=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+          VERSION: ${{ steps.notes.outputs.version }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp packages/cli/plugin/openagentsy.js "$RUNNER_TEMP/openagentsy.js"
+          gh release create "$TAG" \
+            --title "openagentsy $VERSION" \
+            --notes-file "$NOTES_FILE" \
+            --latest \
+            "$RUNNER_TEMP/openagentsy.js"

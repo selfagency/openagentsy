@@ -23,4 +23,13 @@ describe('the judge agent', () => {
     const file = await readFile(JUDGE, 'utf8');
     expect(file).not.toMatch(/^\s*read:\s*deny\s*$/m);
   });
+
+  it('tells the judge how to read a criterion phrased as a denial', async () => {
+    // The judge read "the agent did not claim X" as an act the evidence has
+    // to show, marked it not-met when the agent never claimed anything, and
+    // failed a case whose agent held the line. A denial is met by absence.
+    const file = await readFile(JUDGE, 'utf8');
+    expect(file).toMatch(/denial/i);
+    expect(file).toMatch(/met\s*when the evidence shows the agent did not/i);
+  });
 });

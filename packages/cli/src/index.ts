@@ -5,7 +5,7 @@ import type { Target } from '@openagentsy/core';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
 import { formatDoctorReport, runDoctor } from './commands/doctor.js';
-import { runModels } from './commands/models.js';
+import { runModels, type SwitchTouches } from './commands/models.js';
 import { runSetup } from './commands/setup.js';
 import { detectOpenCode, targetForVersion } from './opencode.js';
 
@@ -17,7 +17,8 @@ Commands:
   doctor             Report what is installed, where it came from, and what is missing
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
-  models refresh     Re-pick the models, show what changed, and write the lock file
+  models refresh     Re-pick the models with the providers the lock records, and write the lock file
+  models switch      Switch the provider, re-pick the models, and write the lock file
 
 Options:
   --root <dir>        Project root (default: current directory)
@@ -27,6 +28,7 @@ Options:
   --lock <file>       Model lock file (default: <root>/openagentsy.models.lock.json)
   --config <file>     Config file for setup (default: <root>/opencode.json)
   --providers <list>  Providers for models init, comma separated
+  --prefer-flash      Take the flash variant of the family a role would get
   --allow-training    Allow models whose terms train on prompts
   --allow-retention   Allow models that are not zero data retention
   --key <key>         BenchLM key, for the keyed REST API
@@ -49,6 +51,7 @@ export type Values = {
   key?: string | undefined;
   'dry-run'?: boolean | undefined;
   'magic-context'?: boolean | undefined;
+  'prefer-flash'?: boolean | undefined;
   'allow-training'?: boolean | undefined;
   'allow-retention'?: boolean | undefined;
   yes?: boolean | undefined;
@@ -152,19 +155,50 @@ function reportModels(
   }
 }
 
-async function modelsCommand(root: string, values: Values): Promise<number> {
+/** What the switch touches besides the lock file. */
+function reportTouches(touches: SwitchTouches): void {
+  process.stdout.write('\nthe switch touches more than the lock:\n');
+  process.stdout.write(`  the agent files are stale: run ${touches.rebuild} to regenerate them\n`);
+  process.stdout.write(
+    `  CI takes its model from the lock: the next run uses ${touches.providers.join(', ')}\n`,
+  );
+  if (touches.keys.length === 0) {
+    process.stdout.write('  the provider needs no key\n');
+    return;
+  }
+  const subject =
+    touches.keys.length === 1 ? 'the provider needs its key' : 'the providers need their keys';
+  process.stdout.write(
+    `  ${subject}: ${touches.keys.join(', ')}, in the auth store locally and as a CI secret of the same name\n`,
+  );
+}
+
+async function modelsCommand(root: string, values: Values, positionals: string[]): Promise<number> {
+  const sub = positionals[1] ?? 'init';
+  if (sub !== 'init' && sub !== 'refresh' && sub !== 'switch') {
+    process.stderr.write(`unknown models subcommand: ${sub}\n`);
+    return 1;
+  }
+
+  // The providers come from the positionals and from the flag, so both
+  // `models switch ollama-cloud` and `models switch --providers ollama-cloud`
+  // name the provider.
+  const requested = [...positionals.slice(2), ...(values.providers?.split(',') ?? [])];
+
   const result = await runModels({
     root,
-    // The default is the provider the account can pay for. Ollama Cloud and
-    // Zen are left out on purpose: their free tiers answer a burst with a
-    // 429, and a role pinned to one of them fails every session it runs in.
-    providers: values.providers?.split(',') ?? ['opencode-go'],
+    mode: sub,
+    providers: requested,
+    ...(values['prefer-flash'] ? { preferFlash: true } : {}),
     ...(values['allow-training'] ? { allowTraining: true } : {}),
     ...(values['allow-retention'] ? { allowRetention: true } : {}),
     ...(values.key ? { key: values.key } : {}),
     ...(values.yes ? { yes: true } : {}),
   });
   reportModels(result.changes, result.rejected, result.failures);
+  if (result.touches) {
+    reportTouches(result.touches);
+  }
   process.stdout.write(
     result.written
       ? `\nwrote ${result.path}\n`
@@ -174,7 +208,10 @@ async function modelsCommand(root: string, values: Values): Promise<number> {
 }
 
 /** The command table. One entry per command, so the dispatch is a lookup. */
-const COMMANDS: Record<string, (root: string, values: Values) => Promise<number>> = {
+const COMMANDS: Record<
+  string,
+  (root: string, values: Values, positionals: string[]) => Promise<number>
+> = {
   build: buildCommand,
   board: boardCommand,
   doctor: doctorCommand,
@@ -212,6 +249,7 @@ export async function main(argv: string[]): Promise<number> {
       'dry-run': { type: 'boolean' },
       'magic-context': { type: 'boolean' },
       providers: { type: 'string' },
+      'prefer-flash': { type: 'boolean' },
       'allow-training': { type: 'boolean' },
       'allow-retention': { type: 'boolean' },
       key: { type: 'string' },
@@ -235,15 +273,7 @@ export async function main(argv: string[]): Promise<number> {
     return 1;
   }
 
-  if (command === 'models') {
-    const sub = positionals[1] ?? 'init';
-    if (sub !== 'init' && sub !== 'refresh') {
-      process.stderr.write(`unknown models subcommand: ${sub}\n`);
-      return 1;
-    }
-  }
-
-  return handler(root, values);
+  return handler(root, values, positionals);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
