@@ -42,10 +42,35 @@
       "slope_joules": 0.0026144176318359624,
       "intercept_joules": -4.940674820834356
     },
+    "model_pulls": [
+      {
+        "model": "Llama 3.1 8B",
+        "active_params_billions": 8,
+        "mean_ratio_joules": 0.0020818910047743036,
+        "pull": 0.24282542639112847
+      },
+      {
+        "model": "Llama 3.1 70B",
+        "active_params_billions": 70,
+        "mean_ratio_joules": 0.0026858913225446426,
+        "pull": -0.03665980302690641
+      }
+    ],
+    "largest_ratio_point": {
+      "model": "Llama 3.1 70B",
+      "input_mean_tokens": 512,
+      "ratio_joules": 0.002734955357142857
+    },
+    "heaviest_point": {
+      "model": "Llama 3.1 70B",
+      "input_mean_tokens": 4096,
+      "x": 286720
+    },
     "residuals": [
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 1P3D",
+        "active_params_billions": 8,
         "input_mean_tokens": 512,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 37.71,
@@ -57,6 +82,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 1P3D",
+        "active_params_billions": 8,
         "input_mean_tokens": 512,
         "output_mean_tokens": 4096,
         "energy_per_generation_j": 665.77,
@@ -68,6 +94,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 1P3D",
+        "active_params_billions": 8,
         "input_mean_tokens": 4096,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 208.34,
@@ -79,6 +106,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 2P2D",
+        "active_params_billions": 8,
         "input_mean_tokens": 512,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 36.22,
@@ -90,6 +118,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 2P2D",
+        "active_params_billions": 8,
         "input_mean_tokens": 512,
         "output_mean_tokens": 4096,
         "energy_per_generation_j": 706.27,
@@ -101,6 +130,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 2P2D",
+        "active_params_billions": 8,
         "input_mean_tokens": 4096,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 151.75,
@@ -112,6 +142,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 3P1D",
+        "active_params_billions": 8,
         "input_mean_tokens": 512,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 37.26,
@@ -123,6 +154,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 3P1D",
+        "active_params_billions": 8,
         "input_mean_tokens": 512,
         "output_mean_tokens": 4096,
         "energy_per_generation_j": 748.45,
@@ -134,6 +166,7 @@
       {
         "model": "Llama 3.1 8B",
         "deployment": "TP=1, 3P1D",
+        "active_params_billions": 8,
         "input_mean_tokens": 4096,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 158.85,
@@ -145,6 +178,7 @@
       {
         "model": "Llama 3.1 70B",
         "deployment": "TP=4, 1P1D",
+        "active_params_billions": 70,
         "input_mean_tokens": 512,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 276.93,
@@ -156,6 +190,7 @@
       {
         "model": "Llama 3.1 70B",
         "deployment": "TP=4, 1P1D",
+        "active_params_billions": 70,
         "input_mean_tokens": 512,
         "output_mean_tokens": 4096,
         "energy_per_generation_j": 907.6,
@@ -167,6 +202,7 @@
       {
         "model": "Llama 3.1 70B",
         "deployment": "TP=4, 1P1D",
+        "active_params_billions": 70,
         "input_mean_tokens": 4096,
         "output_mean_tokens": 512,
         "energy_per_generation_j": 1492.59,
@@ -181,6 +217,7 @@
     "This fit does not ship enabled. footprint.prefill stays false, and the package never reads this file: a caller who wants the term passes the coefficients in.",
     "The unit is watt-hours per token per billion active parameters, the same unit as the EcoLogits per-token coefficient in src/constants.ts.",
     "The measured models are dense, so the active parameters are the total parameters.",
-    "The measurements are per generation of a served request. The prefill of a batched request is compute-bound, so the batching does not amorten it the way it amortens the decode phase; the deployments differ in how many prefill and decode instances they ran, which is part of what the range covers."
+    "The measurements are per generation of a served request. The prefill of a batched request is compute-bound, so the batching does not amortize it the way it amortizes the decode phase; the deployments differ in how many prefill and decode instances they ran, which is part of what the range covers.",
+    "The fit is one number for models that differ, and it does not sit in the middle of them: the point value is 24 percent high for the Llama 3.1 8B model and the point value is 4 percent low for the Llama 3.1 70B model. The least squares carry the weight of the bigger model and its longer input (the Llama 3.1 70B with 4096 input tokens is the heaviest point of the twelve), and the measurement with the largest ratio (the Llama 3.1 70B with 512 input tokens) sets the pace. The residual RMS is 21.2 percent and the worst point is 28.7 percent off, and the range is what carries that model-size effect."
   ]
 }

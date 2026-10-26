@@ -182,6 +182,53 @@ function readSnapshot() {
  * input tokens at all, and it is small next to the energy a request costs, so
  * the origin is the right place to pin it.
  */
+/** The measurements of each model, in one list per model. */
+function groupByModel(points) {
+  const byModel = new Map();
+  for (const point of points) {
+    const list = byModel.get(point.model) ?? [];
+    list.push(point);
+    byModel.set(point.model, list);
+  }
+  return byModel;
+}
+
+/** The point with the highest score, by the score the point carries. */
+function extremePoint(points, score) {
+  let best = null;
+  for (const point of points) {
+    if (!best || score(point) > score(best)) best = point;
+  }
+  return best;
+}
+
+/**
+ * How far the single fitted number sits from the models that were measured.
+ *
+ * The fit through the origin is one number for models that differ, and the
+ * bigger model carries the weight of the least squares, so the number does
+ * not sit in the middle of the measurements. This says by how much, and names
+ * the measurement with the largest ratio.
+ */
+function modelPulls(points, kJoules) {
+  const pulls = [];
+  for (const list of groupByModel(points).values()) {
+    const meanRatioJ = list.reduce((sum, p) => sum + p.y / p.x, 0) / list.length;
+    pulls.push({
+      model: list[0].model,
+      active_params_billions: list[0].activeParamsBillions,
+      mean_ratio_joules: meanRatioJ,
+      pull: kJoules / meanRatioJ - 1,
+    });
+  }
+  pulls.sort((a, b) => a.active_params_billions - b.active_params_billions);
+  return {
+    pulls,
+    largestRatioPoint: extremePoint(points, (p) => p.y / p.x),
+    heaviestPoint: extremePoint(points, (p) => p.x),
+  };
+}
+
 function fit(snapshot) {
   const points = [];
   for (const row of snapshot.rows) {
@@ -192,7 +239,7 @@ function fit(snapshot) {
       points.push({
         model: row.model,
         deployment: row.deployment,
-        activeParamsBillions: row.activeParamsBillillions,
+        activeParamsBillions: row.activeParamsBillions,
         inputMeanTokens: column.inputMeanTokens,
         outputMeanTokens: column.outputMeanTokens,
         energyPerGenerationJ: cell.energyPerGenerationJ,
@@ -225,6 +272,8 @@ function fit(snapshot) {
     residuals.reduce((sum, p) => sum + p.relativeResidual ** 2, 0) / n,
   );
 
+  const { pulls, largestRatioPoint, heaviestPoint } = modelPulls(points, kJoules);
+
   const kInWh = kJoules / JOULES_PER_WATT_HOUR;
   const rangeWh = [Math.min(...ratios), Math.max(...ratios)].map((v) => v / JOULES_PER_WATT_HOUR);
 
@@ -240,6 +289,17 @@ function fit(snapshot) {
       ratio_mean_joules: ratios.reduce((a, b) => a + b, 0) / n,
       rms_relative_residual: rmsRelativeResidual,
       max_relative_residual: Math.max(...residuals.map((p) => Math.abs(p.relativeResidual))),
+      model_pulls: pulls,
+      largest_ratio_point: {
+        model: largestRatioPoint.model,
+        input_mean_tokens: largestRatioPoint.inputMeanTokens,
+        ratio_joules: largestRatioPoint.y / largestRatioPoint.x,
+      },
+      heaviest_point: {
+        model: heaviestPoint.model,
+        input_mean_tokens: heaviestPoint.inputMeanTokens,
+        x: heaviestPoint.x,
+      },
       residuals,
     },
   };
@@ -290,6 +350,9 @@ function fitFile(snapshot, result) {
       ratio_mean_joules: result.diagnostics.ratio_mean_joules,
       fit_through_origin_joules: result.diagnostics.fit_through_origin_joules,
       fit_with_intercept: result.diagnostics.fit_with_intercept,
+      model_pulls: result.diagnostics.model_pulls,
+      largest_ratio_point: result.diagnostics.largest_ratio_point,
+      heaviest_point: result.diagnostics.heaviest_point,
       residuals: result.diagnostics.residuals.map((p) => ({
         model: p.model,
         deployment: p.deployment,
@@ -307,7 +370,8 @@ function fitFile(snapshot, result) {
       'This fit does not ship enabled. footprint.prefill stays false, and the package never reads this file: a caller who wants the term passes the coefficients in.',
       'The unit is watt-hours per token per billion active parameters, the same unit as the EcoLogits per-token coefficient in src/constants.ts.',
       'The measured models are dense, so the active parameters are the total parameters.',
-      'The measurements are per generation of a served request. The prefill of a batched request is compute-bound, so the batching does not amorten it the way it amortens the decode phase; the deployments differ in how many prefill and decode instances they ran, which is part of what the range covers.',
+      'The measurements are per generation of a served request. The prefill of a batched request is compute-bound, so the batching does not amortize it the way it amortizes the decode phase; the deployments differ in how many prefill and decode instances they ran, which is part of what the range covers.',
+      `The fit is one number for models that differ, and it does not sit in the middle of them: ${result.diagnostics.model_pulls.map((p) => `the point value is ${(Math.abs(p.pull) * 100).toFixed(0)} percent ${p.pull > 0 ? 'high' : 'low'} for the ${p.model} model`).join(' and ')}. The least squares carry the weight of the bigger model and its longer input (the ${result.diagnostics.heaviest_point.model} with ${result.diagnostics.heaviest_point.input_mean_tokens} input tokens is the heaviest point of the twelve), and the measurement with the largest ratio (the ${result.diagnostics.largest_ratio_point.model} with ${result.diagnostics.largest_ratio_point.input_mean_tokens} input tokens) sets the pace. The residual RMS is ${(result.diagnostics.rms_relative_residual * 100).toFixed(1)} percent and the worst point is ${(result.diagnostics.max_relative_residual * 100).toFixed(1)} percent off, and the range is what carries that model-size effect.`,
     ],
   };
 }
