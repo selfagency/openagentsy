@@ -61,12 +61,15 @@ export type HarvestSession = {
   /** The messages of a session, in the order they were said. */
   messages: (sessionID: string) => Promise<{ parts?: { type: string; text?: string }[] }[]>;
   /**
-   * Open a session for the archivist, as a child of the session it harvests.
+   * Open a session for the archivist.
    *
-   * It is a working session, not a chapter of the person's history, and a
-   * child session keeps it out of the top level list.
+   * It is a working session, not part of the person's history, and its
+   * title is what the janitor reads, so the janitor finds it whether or not
+   * a parent links it to the session that is ending. No parent is passed:
+   * a child of the harvested session dies when the server deletes that
+   * session, which is a delete the server does without asking.
    */
-  create: (input: { title: string; parentID: string }) => Promise<string | undefined>;
+  create: (input: { title: string; parentID?: string }) => Promise<string | undefined>;
   /** Hand the archivist its packet. */
   prompt: (input: { sessionID: string; agent: string; text: string }) => Promise<void>;
   /**
@@ -128,16 +131,16 @@ export async function harvest(
 
   const packet = buildPacket({ sessionID, role, agent, transcript, decisions });
 
-  // Both calls below can fail on the server side: a create, because the
-  // server refuses a new session, and a prompt, because the runtime is
-  // gone or the provider is. Either way the candidate is lost this run.
-  // The failure goes on the record and the session that is closing is not
-  // broken, the same way the existence check reports.
+  // The archivist stands on its own, not as a child of the session it
+  // harvests. A child of that session dies with it: the server deletes a
+  // session row without asking, and the delete cascades into the child,
+  // which cost the archivist's work twice while this ran as a child. The
+  // packet carries what it needs, so no parent link is missed, and the
+  // janitor finds the sessions by their title, not by their parent.
   let archivistSession: string | undefined;
   try {
     archivistSession = await session.create({
       title: `harvest ${role}`,
-      parentID: sessionID,
     });
   } catch (error) {
     const failure =

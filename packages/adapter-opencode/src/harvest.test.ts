@@ -27,7 +27,7 @@ function fakeSession(
   const existsCalls: string[] = [];
   const session: HarvestSession = {
     create: async ({ title, parentID }) => {
-      created.push({ parentID, title });
+      created.push({ title, ...(parentID !== undefined ? { parentID } : {}) });
       return 'ses_archivist';
     },
     messages: async () => messages,
@@ -149,7 +149,11 @@ describe('harvest', () => {
     expect(packet).toContain('at most five');
   });
 
-  it('creates the archivist session as a child of the session it harvests', async () => {
+  it('creates the archivist session without a parent, so it survives the harvested session', async () => {
+    // The server deletes a session row without asking - a restart does -
+    // and the delete cascades into the child, which cost the archivist's
+    // work twice while the harvest created it as a child. The janitor finds
+    // the sessions by their title, so nothing was keeping the link alive.
     const { session, created } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     await harvest({
       session,
@@ -159,7 +163,7 @@ describe('harvest', () => {
       agent: 'oa-scout',
     });
     expect(created).toHaveLength(1);
-    expect(created[0]?.parentID).toBe('ses_scout');
+    expect(created[0]?.parentID).toBeUndefined();
   });
 
   it('asks the server that the archivist session exists before prompting it', async () => {

@@ -97,7 +97,7 @@ export function sessionAdapter(
     },
     create: async ({ title, parentID }) => {
       const created = await client.session.create({
-        body: { title, parentID },
+        body: { title, ...(parentID !== undefined ? { parentID } : {}) },
         query: { directory },
       });
       return created.data?.id;
