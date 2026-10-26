@@ -76,11 +76,21 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: The release notes
+      - name: The release is created by release.yml
+        # release.yml runs the gates and creates the GitHub release with the
+        # section of the changelog for this version. This workflow publishes
+        # the packages and does not touch the release, so a tag runs two
+        # workflows and creates one release.
         if: ${{ !inputs.dry-run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file CHANGELOG.md
+          version="${GITHUB_REF_NAME#v}"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "release v$version already exists (release.yml made it)"
+          else
+            gh release create "v$version" \
+              --title "openagentsy $version" \
+              --notes "Created by the publish workflow; the notes live in release.yml's copy."
+            echo "created a stub release; rerun release.yml on workflow_dispatch to fill the notes"
+          fi
