@@ -73,7 +73,7 @@ describe('the footprint estimator', () => {
     const usage: Usage = { ...USAGE, inputTokens: 2000, cacheReadTokens: 500 };
     const without = estimateRemote(usage, ARCH, SITE, THROUGHPUT);
     const with_ = estimateRemote(usage, ARCH, SITE, THROUGHPUT, {
-      prefill: { kIn: 1e-8, kCache: 1e-9 },
+      prefill: { kIn: r(1e-8), kCache: r(1e-9) },
     });
     expect(with_.energyWh[0]).toBeGreaterThan(without.energyWh[0]);
     expect(with_.notes).toContain('prefill term on (OpenAgentsy extension, not EcoLogits)');

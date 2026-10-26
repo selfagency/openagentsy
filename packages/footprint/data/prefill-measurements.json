@@ -1,0 +1,103 @@
+{
+  "source": {
+    "id": "arXiv:2505.06371",
+    "title": "The ML.ENERGY Benchmark: Toward Automated Inference Energy Measurement and Optimization",
+    "table": "Table 4, Appendix B.3 (prefill-decode disaggregation)",
+    "url": "https://arxiv.org/abs/2505.06371",
+    "html": "https://arxiv.org/html/2505.06371",
+    "fetched_at": "2026-10-26",
+    "what_the_numbers_are": "energy of one generation in joules, and the share of that energy the decode phase consumed"
+  },
+  "columns": [
+    {
+      "inputMeanTokens": 512,
+      "outputMeanTokens": 512
+    },
+    {
+      "inputMeanTokens": 512,
+      "outputMeanTokens": 4096
+    },
+    {
+      "inputMeanTokens": 4096,
+      "outputMeanTokens": 512
+    }
+  ],
+  "rows": [
+    {
+      "model": "Llama 3.1 8B",
+      "activeParamsBillions": 8,
+      "deployment": "TP=1, 1P3D",
+      "cells": [
+        {
+          "energyPerGenerationJ": 37.71,
+          "decodeEnergyShare": 0.772
+        },
+        {
+          "energyPerGenerationJ": 665.77,
+          "decodeEnergyShare": 0.987
+        },
+        {
+          "energyPerGenerationJ": 208.34,
+          "decodeEnergyShare": 0.672
+        }
+      ]
+    },
+    {
+      "model": "Llama 3.1 8B",
+      "activeParamsBillions": 8,
+      "deployment": "TP=1, 2P2D",
+      "cells": [
+        {
+          "energyPerGenerationJ": 36.22,
+          "decodeEnergyShare": 0.767
+        },
+        {
+          "energyPerGenerationJ": 706.27,
+          "decodeEnergyShare": 0.988
+        },
+        {
+          "energyPerGenerationJ": 151.75,
+          "decodeEnergyShare": 0.552
+        }
+      ]
+    },
+    {
+      "model": "Llama 3.1 8B",
+      "activeParamsBillions": 8,
+      "deployment": "TP=1, 3P1D",
+      "cells": [
+        {
+          "energyPerGenerationJ": 37.26,
+          "decodeEnergyShare": 0.77
+        },
+        {
+          "energyPerGenerationJ": 748.45,
+          "decodeEnergyShare": 0.9890000000000001
+        },
+        {
+          "energyPerGenerationJ": 158.85,
+          "decodeEnergyShare": 0.56
+        }
+      ]
+    },
+    {
+      "model": "Llama 3.1 70B",
+      "activeParamsBillions": 70,
+      "deployment": "TP=4, 1P1D",
+      "cells": [
+        {
+          "energyPerGenerationJ": 276.93,
+          "decodeEnergyShare": 0.648
+        },
+        {
+          "energyPerGenerationJ": 907.6,
+          "decodeEnergyShare": 0.892
+        },
+        {
+          "energyPerGenerationJ": 1492.59,
+          "decodeEnergyShare": 0.5
+        }
+      ]
+    }
+  ]
+}

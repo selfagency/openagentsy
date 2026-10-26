@@ -39,5 +39,27 @@ percent, well inside the 1 percent the golden test allows.
 
 ## The prefill term
 
-No prefill coefficients ship. The fit belongs to a later phase, and it does
-not go in until a person has reviewed it.
+No prefill coefficients ship enabled: `footprint.prefill` stays false, and
+the package never reads the fit at runtime, so a caller who wants the term
+passes the coefficients in. The fit itself is committed, in
+`data/prefill-fit.json`, with the raw measurements in
+`data/prefill-measurements.json` and the derivation in
+`scripts/fit-prefill.mjs`. The script fetches the source once to build the
+snapshot, then fits the snapshot offline.
+
+The measurements come from Table 4 of "The ML.ENERGY Benchmark: Toward
+Automated Inference Energy Measurement and Optimization"
+(arXiv:2505.06371). The table reports, for a prefill/decode disaggregated
+deployment, the energy of one generation and the share of that energy the
+decode phase consumed. What is left is the prefill energy, and the table
+names the mean input length of the request dataset, so every cell is a
+measurement of prefill energy against a known input length and a known model
+size. Twelve cells, over two models (Llama 3.1 8B and 70B, both dense) and
+two input lengths, give the least-squares fit of `k_in` through the origin.
+
+The Hugging Face dataset of the benchmark (`ml-energy/benchmark-v3`) is
+gated and was not readable, and the version 3 leaderboard carries no prefill
+column, so the paper is the source.
+
+`k_cache` is not measured: no ML.ENERGY run measures a cache read. It is set
+to a tenth of `k_in`, as a modelling assumption, and the fit file says so.
