@@ -22,8 +22,11 @@ on:
   #
   # The pull request lane runs the unit tests, the typecheck and the audit,
   # which take under a minute and cost nothing.
-  schedule:
-    - cron: "17 3 * * 1"
+  #
+  # There is no schedule either. Every workflow in this repository is manual
+  # by the owner's decision of 2026-10-26, and the weekly run happens on the
+  # machine that changes the code. A scheduled run here is runner minutes on
+  # somebody's bill, spent on a verdict nobody asked for that week.
   workflow_dispatch:
     inputs:
       runs:
