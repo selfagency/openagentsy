@@ -1,3 +1,5 @@
+import type { FileRef } from '@openagentsy/hooks';
+
 /**
  * The paths an apply_patch call touches.
  *
@@ -14,8 +16,39 @@
  */
 
 /** The marker lines of a patch, and the path each one names. */
-const MARKERS = /^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*$/gm;
-const MOVE = /^\*\*\*\s+Move\s+to:\s*(.+?)\s*$/gm;
+const MARKERS = /^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s*(.+?)\s*$/;
+const MOVE = /^\*\*\*\s+Move\s+to:\s*(.+?)\s*$/;
+
+/**
+ * The files a patch touches, in the normalised shape.
+ *
+ * A move is one file with two ends: the file it comes from and the file it
+ * goes to. The rules read both ends, because a patch that moves a file onto
+ * a protected path has touched the protected path.
+ */
+export function patchFiles(patchText: string): FileRef[] {
+  const files: FileRef[] = [];
+  for (const line of patchText.split('\n')) {
+    const marker = MARKERS.exec(line);
+    if (marker) {
+      const path = marker[1];
+      if (path !== undefined && path !== '') files.push({ path });
+      continue;
+    }
+    const move = MOVE.exec(line);
+    if (!move) continue;
+    const path = move[1];
+    if (path === undefined || path === '') continue;
+    const current = files[files.length - 1];
+    const from = current?.path;
+    if (current !== undefined && from !== undefined && current.fromPath === undefined) {
+      files[files.length - 1] = { path, fromPath: from };
+      continue;
+    }
+    files.push({ path });
+  }
+  return files;
+}
 
 /**
  * The paths a patch touches, relative to the project root.
@@ -25,13 +58,9 @@ const MOVE = /^\*\*\*\s+Move\s+to:\s*(.+?)\s*$/gm;
  */
 export function patchPaths(patchText: string): string[] {
   const paths = new Set<string>();
-  for (const match of patchText.matchAll(MARKERS)) {
-    const path = match[1];
-    if (path) paths.add(path);
-  }
-  for (const match of patchText.matchAll(MOVE)) {
-    const path = match[1];
-    if (path) paths.add(path);
+  for (const file of patchFiles(patchText)) {
+    if (file.fromPath !== undefined) paths.add(file.fromPath);
+    if (file.path !== undefined) paths.add(file.path);
   }
   return [...paths];
 }

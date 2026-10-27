@@ -1,4 +1,5 @@
 import { defineTool } from '@openagentsy/adapter-opencode';
+import { taskToolNames } from '@openagentsy/core';
 import { z } from 'zod';
 import { PRIORITIES, STATUSES, type Task, TYPES } from './model.js';
 import { index, next, ready, sortTasks } from './query.js';
@@ -38,15 +39,14 @@ const TaskPatchSchema = z.object({
     .optional(),
 });
 
-/** The names of the tools, in the order they are shown. */
-export const taskToolNames = [
-  'oa_task_list',
-  'oa_task_show',
-  'oa_task_create',
-  'oa_task_update',
-  'oa_task_next',
-  'oa_task_archive',
-] as const;
+/**
+ * The names of the tools, in the order they are shown.
+ *
+ * The list lives in core, with the other tool names, so that the vocabulary
+ * which resolves a tool name back to its base name and the tools the
+ * server offers are one list.
+ */
+export { taskToolNames };
 
 /**
  * The task tools, bound to a store.

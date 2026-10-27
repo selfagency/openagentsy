@@ -66,6 +66,9 @@ export const POLICIES = {
   ledgerFailed: { id: 'oa.ledger.failed', version: 'v1' },
   stateUnreadable: { id: 'oa.state.unreadable', version: 'v1' },
   eventsFailed: { id: 'oa.events.failed', version: 'v1' },
+  outputFlagged: { id: 'oa.output.flagged', version: 'v1' },
+  roundStatusMismatch: { id: 'oa.round.status', version: 'v1' },
+  permissionRefused: { id: 'oa.permission.refused', version: 'v1' },
 } as const;
 
 export async function appendAudit(root: string, entry: AuditInput): Promise<void> {
