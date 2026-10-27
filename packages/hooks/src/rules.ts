@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { findSecrets } from '@openagentsy/core';
 import { approvalGate, createApprovalStore } from './approvals.js';
-import { isWritingTool, type PreToolCallEvent, readPreToolCall } from './event.js';
+import { isReaderTool, isWritingTool, type PreToolCallEvent, readPreToolCall } from './event.js';
 import { isInside, pathSegments, projectName, worktreeRoot } from './paths.js';
 import type { HandlerResult, Rule } from './registry.js';
 
@@ -74,17 +74,73 @@ const MESSAGE_FLAG_PREFIXES = ['-m=', '--message=', '-F=', '--file='];
 /** The git subcommands whose arguments the hook rule reads. */
 const GIT_SUBCOMMANDS = new Set(['commit', 'merge', 'rebase']);
 
+/** The characters that end a command. */
+const SEPARATOR_CHARS = new Set([';', '&', '|', '\n']);
+
 /**
- * The tokens of a command, without the values of the message flags.
- *
- * The value of a message flag is a message and not an argument: a commit
- * that says "docs: explain rm -rf /" is not a removal, and a commit whose
- * message names --no-verify is not a skip. A quoted span that is not a
- * message value stays in the list, so a command that is passed as an
- * argument is still read.
+ * Whether a token is a quoted span.
  */
-export function commandTokens(command: string): string[] {
-  const tokens = tokenise(command);
+function isQuoted(token: string): boolean {
+  if (token.length < 2) return false;
+  const first = token[0];
+  const last = token[token.length - 1];
+  return (first === '"' || first === "'") && first === last;
+}
+
+/**
+ * The command, split into the segments a separator ends.
+ *
+ * A separator inside a quoted span does not end a segment: the span is one
+ * argument, and a command in it belongs to the command that holds the
+ * argument.
+ */
+export function commandSegments(command: string): string[] {
+  const segments: string[] = [];
+  let current = '';
+  let quote: string | undefined;
+  for (const char of command) {
+    if (quote !== undefined) {
+      current += char;
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (SEPARATOR_CHARS.has(char)) {
+      if (current.trim() !== '') segments.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim() !== '') segments.push(current);
+  return segments;
+}
+
+/**
+ * Whether the tokens are a git command the hook rule reads.
+ */
+function isGitParse(tokens: readonly string[]): boolean {
+  const gitIndex = tokens.indexOf('git');
+  if (gitIndex === -1) return false;
+  const next = tokens[gitIndex + 1];
+  return next !== undefined && GIT_SUBCOMMANDS.has(next);
+}
+
+/**
+ * The tokens of a segment, without the values of the message flags.
+ *
+ * The value of a message flag is a message and not an argument, and it is
+ * dropped only inside a git command: `git commit -m "docs: explain rm
+ * -rf /"` is a commit whose message talks about a removal, while the `-m`
+ * of another command is that command's own flag.
+ */
+function segmentTokens(segment: string): string[] {
+  const tokens = tokenise(segment);
+  if (!isGitParse(tokens)) return tokens;
   const kept: string[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] ?? '';
@@ -99,35 +155,89 @@ export function commandTokens(command: string): string[] {
 }
 
 /**
+ * The payload of every substitution in a command.
+ *
+ * The shell runs a substitution before the command that holds it, so the
+ * payload is a command of its own: `git commit -m "$(rm -rf /)"` removes
+ * the directory even though the message is only text.
+ */
+export function substitutionPayloads(command: string): string[] {
+  const payloads: string[] = [];
+  const patterns = [/\$\(([^()]*)\)/g, /<\(([^()]*)\)/g, /`([^`]*)`/g];
+  for (const pattern of patterns) {
+    for (const match of command.matchAll(pattern)) {
+      const payload = match[1];
+      if (payload !== undefined && payload.trim() !== '') payloads.push(payload);
+    }
+  }
+  return payloads;
+}
+
+/**
+ * The scope of the shell matcher.
+ *
+ * It covers: the flags of a removal in any order and either spelling, the
+ * git commands that skip the hooks, the other package managers, and the
+ * payload of every quoted span and every substitution, which is scanned as
+ * a command of its own.
+ *
+ * It does not cover: the shell. A payload behind a construct this matcher
+ * does not read - an alias, a function, a here-document, a variable - is
+ * not seen. A name the matcher does not know is treated as a writer, not
+ * as a reader.
+ */
+export function scannedParts(command: string): string[] {
+  const parts: string[] = [];
+  for (const segment of commandSegments(command)) {
+    parts.push(...segmentParts(segment));
+  }
+  for (const payload of substitutionPayloads(command)) {
+    parts.push(...scannedParts(payload));
+  }
+  return parts;
+}
+
+/**
+ * The parts of one segment.
+ *
+ * The quotes are flattened, so a command in a quoted span is read, and the
+ * separators the span held are separators again.
+ */
+function segmentParts(segment: string): string[] {
+  const tokens = segmentTokens(segment);
+  const parts = commandSegments(tokens.map((token) => unquote(token)).join(' '));
+  for (const token of tokens) {
+    if (!isQuoted(token)) continue;
+    parts.push(...scannedParts(unquote(token)));
+  }
+  return parts;
+}
+
+/**
  * Whether a command skips the git hooks.
  *
  * The `-n` of `git commit` is the short form of `--no-verify`, and it is
  * caught in any position of the commit's own arguments:
  * `git commit -n`, `git commit -m "wip" -n`, `git commit -a -n` and
- * `git commit -nm "wip"` all skip the hooks. The value of a message flag
- * is a message and not an argument, so it is dropped before anything is
- * read: a commit whose message talks about the flag is still a commit.
- * A command that is passed as a quoted argument is read too, so
- * `bash -c "git commit -n"` is caught.
+ * `git commit -nm "wip"` all skip the hooks. A command that is passed as a
+ * quoted argument is read too, so `bash -c "git commit -n"` is caught.
  */
 export function skipsGitHooks(command: string): boolean {
-  const bare = commandTokens(command)
-    .map((token) => unquote(token))
-    .join(' ');
-  if (/\bHUSKY=0\b/.test(bare)) return true;
-  if (/\bcore\.hooksPath\b/.test(bare)) return true;
-  return bare.split(/[|;&]/).some((segment) => segmentSkipsHooks(segment));
+  return scannedParts(command).some((part) => partSkipsHooks(part));
 }
 
 /**
- * Whether a segment of a command skips the git hooks.
+ * Whether a part of a command skips the git hooks.
  *
  * The flags are read from the arguments of the git subcommand alone: the
  * `-n` of `git merge` is `--no-stat`, the `-n` of `sudo` belongs to sudo,
- * and after `--` a git command takes pathspecs.
+ * and after `--` a git command takes pathspecs. The long flag is matched
+ * by the prefixes git accepts, so `--no-verbose` is not a skip.
  */
-function segmentSkipsHooks(segment: string): boolean {
-  const tokens = segment.split(/\s+/).filter((token) => token.length > 0);
+function partSkipsHooks(part: string): boolean {
+  if (/\bHUSKY=0\b/.test(part)) return true;
+  if (/\bcore\.hooksPath\b/.test(part)) return true;
+  const tokens = part.split(/\s+/).filter((token) => token.length > 0);
   const gitIndex = tokens.indexOf('git');
   if (gitIndex === -1) return false;
   const subIndex = tokens.findIndex(
@@ -139,7 +249,7 @@ function segmentSkipsHooks(segment: string): boolean {
     if (token === '--') break;
     args.push(token);
   }
-  if (args.some((token) => /^--no-ver/.test(token))) return true;
+  if (args.some((token) => /^--no-(veri|verif|verify)$/.test(token))) return true;
   // The -n is the short form of --no-verify for commit alone.
   if (tokens[subIndex] !== 'commit') return false;
   return args.some((token) => /^-([A-Za-z]+)$/.exec(token)?.[1]?.includes('n') === true);
@@ -187,10 +297,20 @@ const PROTECTED_STATE = [
   '.openagentsy/conformance.json',
   '.openagentsy/memory.jsonl',
   '.openagentsy/approvals.json',
-  '.openagentsy/approvals.json.lock',
-  '.openagentsy/approvals.json.lock.reclaim',
-  '.openagentsy/approvals.json.lock.stale',
 ];
+
+/**
+ * The lock family of the approval store.
+ *
+ * Every name in it is protected: the lock, the reclaim file, the stale
+ * file and the private copy a release makes. They are the store's, and an
+ * agent that removes one of them breaks the serialisation.
+ */
+function isApprovalLock(segments: readonly string[]): boolean {
+  if (!segments.includes('.openagentsy')) return false;
+  const last = segments[segments.length - 1] ?? '';
+  return last.startsWith('approvals.json.lock');
+}
 
 /**
  * Whether the segments of a path hold a run of segments.
@@ -222,7 +342,7 @@ export function isProtected(path: string): boolean {
   for (const entry of PROTECTED_STATE) {
     if (holdsSegments(segments, entry.split('/'))) return true;
   }
-  return false;
+  return isApprovalLock(segments);
 }
 
 /**
@@ -299,23 +419,33 @@ function hasDestructiveRm(command: string): boolean {
 }
 
 /**
- * The characters that separate one command from the next.
- */
-const SEPARATORS = /[;&|()$`'"\\\n]/g;
-
-/**
  * Whether a command destroys something.
  *
- * The separators and the quotes are flattened, so a destructive command
- * inside a substitution or inside a quoted argument is still one:
- * `echo $(rm -rf /)` and `bash -c "rm -rf /"` are both caught.
+ * The command is read in parts, so a destructive command inside a
+ * substitution or inside a quoted argument is still one: `echo $(rm -rf
+ * /)` and `bash -c "rm -rf /"` are both caught. The flags of a removal
+ * are read per part, so `rm -r build; rm -f /tmp/x` is two removals and
+ * neither is the dangerous one.
  */
 export function isDestructiveCommand(command: string): boolean {
-  const bare = commandTokens(command).join(' ').replace(SEPARATORS, ' ');
-  if (/\bgit\s+push\s+--force\b/i.test(bare)) return true;
-  if (/\bgit\s+reset\s+--hard\b/i.test(bare)) return true;
-  if (/\bdrop\s+table\b/i.test(bare)) return true;
-  return hasDestructiveRm(bare);
+  return scannedParts(command).some((part) => partIsDestructive(part));
+}
+
+/**
+ * Whether a part of a command destroys something.
+ */
+function partIsDestructive(part: string): boolean {
+  if (/\bgit\s+push\s+--force\b/i.test(part)) return true;
+  if (/\bgit\s+reset\s+--hard\b/i.test(part)) return true;
+  if (/\bdrop\s+table\b/i.test(part)) return true;
+  return hasDestructiveRm(part);
+}
+
+/**
+ * Whether a command uses another package manager.
+ */
+export function usesOtherPackageManager(command: string): boolean {
+  return scannedParts(command).some((part) => OTHER_PM.test(part));
 }
 
 /**
@@ -363,12 +493,25 @@ function absolutePath(root: string, path: string): string {
 /**
  * Whether a call writes a file.
  *
- * The tool has to be one that writes, and the call has to name a file. A
- * read is a read, even when the host says which file it read, so the
- * exclusion cannot come back through the bridge.
+ * A known writing tool writes. A known reader does not, even when the
+ * host says which file it read, so the exclusion cannot come back through
+ * the bridge. A name that is neither is treated as a writer when the
+ * call carries a file: a rule that let an unknown name through would let
+ * every write the host names in an unfamiliar way through.
  */
 function writesFiles(call: PreToolCallEvent): boolean {
-  return isWritingTool(call.toolName) && call.files.length > 0;
+  if (isReaderTool(call.toolName)) return false;
+  if (isWritingTool(call.toolName)) return true;
+  return call.files.length > 0;
+}
+
+/**
+ * Whether a call writes content.
+ */
+function writesContent(call: PreToolCallEvent): boolean {
+  if (isReaderTool(call.toolName)) return false;
+  if (isWritingTool(call.toolName)) return true;
+  return contentOf(call) !== '';
 }
 
 /** The options the default rules are built with. */
@@ -412,7 +555,7 @@ export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions)
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined || call.command === undefined) return CONTINUE;
-        if (!OTHER_PM.test(call.command)) return CONTINUE;
+        if (!usesOtherPackageManager(call.command)) return CONTINUE;
         return {
           continue: false,
           reason:
@@ -487,7 +630,7 @@ export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions)
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined) return CONTINUE;
-        if (!isWritingTool(call.toolName)) return CONTINUE;
+        if (!writesContent(call)) return CONTINUE;
         const content = contentOf(call);
         if (content === '') return CONTINUE;
         if (findSecrets(content).length === 0) return CONTINUE;

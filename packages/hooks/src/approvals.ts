@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { readPreToolCall } from './event.js';
@@ -43,8 +43,33 @@ const LOCK_TIMEOUT_MS = 2000;
  */
 const STALE_LOCK_MS = LOCK_TIMEOUT_MS * 4;
 
+/**
+ * How often the lock is refreshed while the action runs, in milliseconds.
+ *
+ * The refresh is what makes a lock stale only when its owner died: a
+ * writer that is slow keeps its lock alive.
+ */
+const HEARTBEAT_MS = STALE_LOCK_MS / 4;
+
 /** The pause between two tries for the lock, in milliseconds. */
 const LOCK_RETRY_MS = 5;
+
+/**
+ * The timings of the store.
+ *
+ * They are the defaults of a store; a test can shorten them.
+ */
+export interface ApprovalTiming {
+  /** How long a writer waits for the lock. */
+  timeoutMs?: number;
+  /** How old a lock must be before it is presumed abandoned. */
+  staleMs?: number;
+  /** How often the lock is refreshed while the action runs. */
+  heartbeatMs?: number;
+}
+
+/** The timings a store runs with. */
+export type ResolvedTiming = Required<ApprovalTiming>;
 
 /**
  * Where the grants live.
@@ -93,13 +118,24 @@ function sleep(ms: number): Promise<void> {
  * that is created exclusively. The second caller waits and then finds the
  * grant gone.
  */
-async function withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
+export async function withLock<T>(
+  path: string,
+  timing: ResolvedTiming,
+  action: () => Promise<T>,
+): Promise<T> {
   const lockPath = `${path}.lock`;
   await mkdir(dirname(lockPath), { recursive: true });
-  const release = await acquireLock(lockPath);
+  const release = await acquireLock(lockPath, timing);
+  const heartbeat = setInterval(() => {
+    // The refresh is not awaited: the action is what matters, and a
+    // refresh that fails leaves the lock as it was.
+    void utimes(lockPath, new Date(), new Date()).catch(() => undefined);
+  }, timing.heartbeatMs);
+  heartbeat.unref?.();
   try {
     return await action();
   } finally {
+    clearInterval(heartbeat);
     await release();
   }
 }
@@ -117,10 +153,10 @@ async function withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
  * writer that waits for too long gives up with an error: the store is not
  * left open.
  */
-async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+async function acquireLock(lockPath: string, timing: ResolvedTiming): Promise<() => Promise<void>> {
+  const deadline = Date.now() + timing.timeoutMs;
   const token = randomUUID();
-  let reclaimable: boolean | undefined;
+  let seen = false;
   for (;;) {
     try {
       const handle = await open(lockPath, 'wx');
@@ -131,13 +167,9 @@ async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
       };
     } catch (error) {
       if (!isFileError(error, 'EEXIST')) throw error;
-      if (reclaimable === undefined) {
-        reclaimable = await isStale(lockPath);
-      }
-      if (reclaimable) {
-        reclaimable = false;
-        await reclaimStaleLock(lockPath);
-        continue;
+      if (!seen) {
+        seen = true;
+        await takeStaleLock(lockPath, timing);
       }
       if (Date.now() > deadline) {
         throw new Error(`the approval store is locked by another writer: ${lockPath}`);
@@ -148,35 +180,71 @@ async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
 }
 
 /**
+ * A stale lock is taken over, once.
+ *
+ * The taking over is exclusive: exactly one waiter may take a stale lock
+ * over. The one that does not win waits and then fails cleanly, because
+ * two approvals out of one stale lock is one approval too many.
+ */
+async function takeStaleLock(lockPath: string, timing: ResolvedTiming): Promise<void> {
+  if (!(await isStale(lockPath, timing))) return;
+  if (await reclaimStaleLock(lockPath, timing)) return;
+  throw new Error(`the approval store is locked by another writer: ${lockPath}`);
+}
+
+/**
  * The lock is given back.
  *
- * The lock carries the token of the writer that holds it, so a writer
- * that lost its lock to a reclaim does not remove the lock of the writer
- * that took it.
+ * The lock is moved to a private path with a rename, which is one atomic
+ * step, and the token is read there: a lock that was taken away from this
+ * writer and given to another one is not removed by mistake, and the lock
+ * of the other writer is put back.
  */
 async function releaseLock(lockPath: string, token: string): Promise<void> {
-  let content: string;
+  const privatePath = `${lockPath}.release.${token}`;
   try {
-    content = await readFile(lockPath, 'utf8');
+    await rename(lockPath, privatePath);
   } catch (error) {
     if (isFileError(error, 'ENOENT')) return;
     throw error;
   }
-  if (content !== token) return;
-  await rm(lockPath, { force: true });
+  let content: string;
+  try {
+    content = await readFile(privatePath, 'utf8');
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) return;
+    throw error;
+  }
+  if (content !== token) {
+    // The lock is not this writer's: it goes back where it was.
+    await rename(privatePath, lockPath).catch(() => undefined);
+    return;
+  }
+  await rm(privatePath, { force: true });
 }
 
 /**
  * Whether a lock is old enough to be presumed abandoned.
  */
-async function isStale(lockPath: string): Promise<boolean> {
+async function isStale(path: string, timing: ResolvedTiming): Promise<boolean> {
   try {
-    const stats = await stat(lockPath);
-    return Date.now() - stats.mtimeMs > STALE_LOCK_MS;
+    const stats = await stat(path);
+    return Date.now() - stats.mtimeMs > timing.staleMs;
   } catch (error) {
     if (isFileError(error, 'ENOENT')) return true;
     throw error;
   }
+}
+
+/**
+ * A file that outlived its writer is removed.
+ *
+ * It answers whether the file was there to be removed.
+ */
+async function removeIfStale(path: string, timing: ResolvedTiming): Promise<boolean> {
+  if (!(await isStale(path, timing))) return false;
+  await rm(path, { force: true });
+  return true;
 }
 
 /**
@@ -187,26 +255,37 @@ async function isStale(lockPath: string): Promise<boolean> {
  * staleness is checked again under it, so a lock that a live writer took
  * in the meantime is left alone, and the lock is moved aside with a
  * rename, which is one atomic step: only one waiter moves it.
+ *
+ * It answers whether this waiter took the lock over: the one that does
+ * not goes on to wait, and then fails.
  */
-async function reclaimStaleLock(lockPath: string): Promise<void> {
+async function reclaimStaleLock(lockPath: string, timing: ResolvedTiming): Promise<boolean> {
   const reclaimPath = `${lockPath}.reclaim`;
   let handle: FileHandle;
   try {
     handle = await open(reclaimPath, 'wx');
   } catch (error) {
-    if (isFileError(error, 'EEXIST')) return;
+    if (isFileError(error, 'EEXIST')) {
+      // An orphan reclaim file blocks every later reclaim, so it is
+      // removed when it is old enough to be one, and the reclaim is tried
+      // again.
+      if (!(await removeIfStale(reclaimPath, timing))) return false;
+      return reclaimStaleLock(lockPath, timing);
+    }
     throw error;
   }
   try {
-    if (!(await isStale(lockPath))) return;
+    if (!(await isStale(lockPath, timing))) return false;
     const aside = `${lockPath}.stale`;
+    await rm(aside, { force: true });
     try {
       await rename(lockPath, aside);
     } catch (error) {
-      if (isFileError(error, 'ENOENT')) return;
+      if (isFileError(error, 'ENOENT')) return false;
       throw error;
     }
     await rm(aside, { force: true });
+    return true;
   } finally {
     await handle.close();
     await rm(reclaimPath, { force: true });
@@ -261,19 +340,24 @@ async function saveGrants(path: string, entries: ApprovalEntry[]): Promise<void>
 /**
  * The store of grants for one project.
  */
-export function createApprovalStore(stateRoot: string): ApprovalStore {
+export function createApprovalStore(stateRoot: string, timing: ApprovalTiming = {}): ApprovalStore {
   const path = approvalsPath(stateRoot);
+  const resolved: ResolvedTiming = {
+    timeoutMs: timing.timeoutMs ?? LOCK_TIMEOUT_MS,
+    staleMs: timing.staleMs ?? STALE_LOCK_MS,
+    heartbeatMs: timing.heartbeatMs ?? HEARTBEAT_MS,
+  };
   return {
     path,
     async isApproved(callID: string, now: number): Promise<boolean> {
-      return withLock(path, async () => {
+      return withLock(path, resolved, async () => {
         const { entries, pruned } = await loadGrants(path, now);
         if (pruned) await saveGrants(path, entries);
         return entries.some((entry) => entry.callID === callID);
       });
     },
     async approve(callID: string, now: number, ttlMs = DEFAULT_APPROVAL_TTL_MS) {
-      return withLock(path, async () => {
+      return withLock(path, resolved, async () => {
         const { entries } = await loadGrants(path, now);
         const entry: ApprovalEntry = { callID, expiresAt: now + ttlMs };
         const kept = entries.filter((held) => held.callID !== callID);
@@ -282,7 +366,7 @@ export function createApprovalStore(stateRoot: string): ApprovalStore {
       });
     },
     async consumeApproval(callID: string, now: number): Promise<boolean> {
-      return withLock(path, async () => {
+      return withLock(path, resolved, async () => {
         const { entries, pruned } = await loadGrants(path, now);
         const held = entries.find((entry) => entry.callID === callID);
         if (held === undefined) {

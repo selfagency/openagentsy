@@ -147,8 +147,17 @@ describe('no-skip-git-hooks', () => {
     expect(continues(await decide('no-skip-git-hooks', shell('git commit --no-veri -m x')))).toBe(
       false,
     );
+  });
+
+  it('lets the options that only look like the flag through', async () => {
+    expect(
+      continues(await decide('no-skip-git-hooks', shell('git commit --no-verbose -m x'))),
+    ).toBe(true);
+    expect(
+      continues(await decide('no-skip-git-hooks', shell('git merge --no-verify-signatures'))),
+    ).toBe(true);
     expect(continues(await decide('no-skip-git-hooks', shell('git commit --no-ver -m x')))).toBe(
-      false,
+      true,
     );
   });
 
@@ -523,6 +532,92 @@ describe('the raw host shape', () => {
       toolName: 'write',
       args: { content: SECRET_CONTENT },
       files: [],
+    });
+    expect(continues(result)).toBe(false);
+  });
+});
+
+describe('the commands that hide their payload', () => {
+  it('blocks a removal that hides in a substitution', async () => {
+    expect(
+      continues(
+        await decide('destructive-needs-approval', shell('git commit -m "$(rm -rf /tmp/victim)"')),
+      ),
+    ).toBe(false);
+  });
+
+  it('blocks a hook skip that hides in a substitution', async () => {
+    expect(
+      continues(await decide('no-skip-git-hooks', shell('git commit -m "$(git commit -n)"'))),
+    ).toBe(false);
+  });
+
+  it('blocks a removal that hides in a process substitution', async () => {
+    expect(
+      continues(await decide('destructive-needs-approval', shell('git commit -F <(rm -rf /)'))),
+    ).toBe(false);
+  });
+
+  it('blocks a removal behind another command', async () => {
+    expect(
+      continues(await decide('destructive-needs-approval', shell('unshare -m rm -rf /tmp/x'))),
+    ).toBe(false);
+  });
+
+  it('blocks another package manager that hides in a substitution', async () => {
+    expect(continues(await decide('package-manager', shell('echo $(pnpm add x)')))).toBe(false);
+  });
+});
+
+describe('the removals of two segments', () => {
+  it('lets them through when neither is dangerous', async () => {
+    expect(
+      continues(await decide('destructive-needs-approval', shell('rm -r build; rm -f /tmp/x'))),
+    ).toBe(true);
+    expect(
+      continues(
+        await decide('destructive-needs-approval', shell('rm build && tar -rf archive.tar file')),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('the tools a host composes', () => {
+  it('treats an unknown name that carries files as a writer', async () => {
+    const path = '.opencode/skills/openagentsy-review/SKILL.md';
+    const copy = await decide('protect-policy', {
+      toolName: 'copy_file',
+      args: { filePath: path },
+      files: [{ path }],
+    });
+    expect(continues(copy)).toBe(false);
+  });
+
+  it('blocks a write outside the workspace', async () => {
+    for (const tool of ['push_files', 'upload_file']) {
+      const result = await decide('workspace-writes-only', {
+        toolName: tool,
+        args: { filePath: '/elsewhere/a.ts' },
+        files: [{ path: '/elsewhere/a.ts' }],
+      });
+      expect(continues(result), tool).toBe(false);
+    }
+  });
+
+  it('scans the content of a tool it does not know', async () => {
+    const result = await decide('secret-scan-writes', {
+      toolName: 'save_file',
+      args: { content: SECRET_CONTENT, filePath: 'a.ts' },
+      files: [{ path: 'a.ts' }],
+    });
+    expect(continues(result)).toBe(false);
+  });
+
+  it('blocks a directory a person changes', async () => {
+    const result = await decide('protect-policy', {
+      toolName: 'create_directory',
+      args: { filePath: '.opencode/skills' },
+      files: [{ path: '.opencode/skills' }],
     });
     expect(continues(result)).toBe(false);
   });

@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { approvalGate, approvalsPath, createApprovalStore } from './approvals.js';
+import { approvalGate, approvalsPath, createApprovalStore, withLock } from './approvals.js';
 import type { HandlerResult } from './registry.js';
 
 /** The reason a result carries, when it stops the call. */
@@ -13,6 +13,13 @@ function reasonOf(result: HandlerResult): string | undefined {
 /** Whether a result lets the call through. */
 function continues(result: HandlerResult): boolean {
   return 'continue' in result ? result.continue : true;
+}
+
+/** A pause. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 let root: string;
@@ -87,19 +94,65 @@ describe('the approval store', () => {
     expect(await readFile(lockPath, 'utf8')).toBe('held');
   });
 
-  it('lets two writers through a stale lock, one at a time', async () => {
-    const store = createApprovalStore(root);
+  it('lets one writer take a stale lock over and refuses the other', async () => {
+    const store = createApprovalStore(root, { timeoutMs: 50, staleMs: 200, heartbeatMs: 50 });
     await mkdir(join(root, '.openagentsy'), { recursive: true });
     const lockPath = `${store.path}.lock`;
     await writeFile(lockPath, 'held', 'utf8');
     const old = new Date(Date.now() - 60_000);
     await utimes(lockPath, old, old);
-    await Promise.all([
+    const results = await Promise.allSettled([
       store.approve('first', 1000, 60_000),
       store.approve('second', 1000, 60_000),
     ]);
-    const raw = JSON.parse(await readFile(store.path, 'utf8'));
-    expect(raw).toHaveLength(2);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('takes a stale lock over even when a reclaim file was left behind', async () => {
+    const store = createApprovalStore(root, { timeoutMs: 50, staleMs: 200, heartbeatMs: 50 });
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${store.path}.lock`;
+    await writeFile(lockPath, 'held', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+    const reclaimPath = `${lockPath}.reclaim`;
+    await writeFile(reclaimPath, 'orphan', 'utf8');
+    await utimes(reclaimPath, old, old);
+    const entry = await store.approve('call-1', 1000, 60_000);
+    expect(entry.callID).toBe('call-1');
+  });
+
+  it('takes a stale lock over even when a stale file was left behind', async () => {
+    const store = createApprovalStore(root, { timeoutMs: 50, staleMs: 200, heartbeatMs: 50 });
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${store.path}.lock`;
+    await writeFile(lockPath, 'held', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+    const stalePath = `${lockPath}.stale`;
+    await writeFile(stalePath, 'old', 'utf8');
+    await utimes(stalePath, old, old);
+    const entry = await store.approve('call-1', 1000, 60_000);
+    expect(entry.callID).toBe('call-1');
+  });
+
+  it('refreshes the lock while the action runs', async () => {
+    const path = approvalsPath(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const timing = { timeoutMs: 50, staleMs: 200, heartbeatMs: 50 };
+    await withLock(path, timing, async () => {
+      await sleep(150);
+      const stats = await stat(`${path}.lock`);
+      expect(Date.now() - stats.mtimeMs).toBeLessThan(100);
+    });
+  });
+
+  it('leaves no lock behind', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-1', 1000, 60_000);
+    const files = await readdir(join(root, '.openagentsy'));
+    expect(files.filter((name) => name.startsWith('approvals.json.lock'))).toEqual([]);
   });
 
   it('takes over a lock that was left behind', async () => {

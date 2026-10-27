@@ -45,7 +45,12 @@ const PATH_ARGS = ['filePath', 'file_path', 'path', 'file'];
 const WRITING_TOOLS = ['write', 'edit', 'multi_edit', 'patch', 'apply_patch'];
 
 /**
- * The verbs that say a tool writes.
+ * The verbs that say a tool writes, on their own.
+ */
+const WRITING_VERBS_ALWAYS = ['move', 'delete', 'rename'];
+
+/**
+ * The verbs that say a tool writes a file.
  */
 const WRITING_VERBS = [
   'write',
@@ -54,15 +59,48 @@ const WRITING_VERBS = [
   'create',
   'update',
   'remove',
-  'delete',
-  'rename',
-  'move',
+  'copy',
+  'upload',
+  'save',
+  'push',
+  'truncate',
+  'replace',
 ];
 
 /**
  * The nouns that say a tool touches a file.
  */
-const FILE_NOUNS = ['file', 'files'];
+const FILE_NOUNS = ['file', 'files', 'directory', 'dir'];
+
+/**
+ * The tools that only read.
+ */
+const READER_TOOLS = [
+  'read',
+  'grep',
+  'glob',
+  'list',
+  'ls',
+  'search',
+  'find',
+  'cat',
+  'view',
+  'open',
+  'fetch',
+  'webfetch',
+  'websearch',
+];
+
+/**
+ * Whether a tool only reads.
+ *
+ * A reader names a file as well, and a read of a policy file has to stay
+ * possible, so the write rules are about the tools that are not readers.
+ */
+export function isReaderTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase();
+  return READER_TOOLS.some((tool) => lower === tool || lower.endsWith(`_${tool}`));
+}
 
 /**
  * Whether a tool writes a file.
@@ -79,6 +117,7 @@ export function isWritingTool(toolName: string): boolean {
     .filter((token) => token.length > 0)
     .map((token) => token.toLowerCase());
   if (WRITING_TOOLS.includes(tokens.join('_'))) return true;
+  if (tokens.some((token) => WRITING_VERBS_ALWAYS.includes(token))) return true;
   const verb = tokens.some((token) => WRITING_VERBS.includes(token));
   const noun = tokens.some((token) => FILE_NOUNS.includes(token));
   return verb && noun;
