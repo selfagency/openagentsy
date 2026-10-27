@@ -53,6 +53,14 @@ export type OpenCodeHarness = {
    * attributed instead of falling back to the suite as a whole.
    */
   trackSession: (sessionID: string, caseLabel: string) => void;
+  /**
+   * The idle events the event stream carried.
+   *
+   * The subscription of a case is scoped to its directory and sees the
+   * idle event of every session in it, so the registry is how the wait for
+   * a turn learns that the turn is over.
+   */
+  idle: IdleRegistry;
 };
 
 /**
@@ -143,6 +151,67 @@ export function permissionPatterns(properties: {
 }
 
 /**
+ * The idle events the event stream carried, per session.
+ *
+ * The server says a session is idle when its turn is over, and the
+ * harness's own subscription sees the event: the turn of a session is over
+ * when the server says the session is idle. The registry counts the idle
+ * events of every session and remembers where the turn of a session began,
+ * so an idle that came before the prompt cannot end the turn.
+ */
+export class IdleRegistry {
+  private readonly idle = new Map<string, number>();
+  private readonly marks = new Map<string, number>();
+
+  /** Record that the server said the session is idle. */
+  record(sessionID: string): void {
+    this.idle.set(sessionID, (this.idle.get(sessionID) ?? 0) + 1);
+  }
+
+  /** Note that the turn of a session begins now. */
+  beginTurn(sessionID: string): void {
+    this.marks.set(sessionID, this.idle.get(sessionID) ?? 0);
+  }
+
+  /** The idle events the session had since its turn began. */
+  sinceTurnStart(sessionID: string): number {
+    return (this.idle.get(sessionID) ?? 0) - (this.marks.get(sessionID) ?? 0);
+  }
+}
+
+/**
+ * The session an event says is idle.
+ *
+ * The v1 server sends `{type, properties}` and the v2 server sends the
+ * envelope `{id, created, type, location?, data}`. The harness's own
+ * subscription receives the v1 shape today, and the v2 client hands over
+ * the other one, so both are read here and the next wiring does not have
+ * to change this.
+ *
+ * Two events say that a session is idle: `session.idle`, and a
+ * `session.status` whose status is `idle`. The v2 schema calls the first
+ * one deprecated, so the second one is what a v2 server sends.
+ */
+export function idleSessionOf(event: unknown): string | undefined {
+  const shape = asObject(event);
+  if (shape === undefined) return undefined;
+  const type = shape['type'];
+  if (typeof type !== 'string') return undefined;
+  const body = asObject(shape['properties']) ?? asObject(shape['data']);
+  const sessionID = body?.['sessionID'];
+  if (typeof sessionID !== 'string') return undefined;
+  if (type === 'session.idle') return sessionID;
+  if (type !== 'session.status') return undefined;
+  return asObject(body?.['status'])?.['type'] === 'idle' ? sessionID : undefined;
+}
+
+/** Is the value an object and not an array? */
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+/**
  * Watch the server for permission requests and answer them.
  *
  * The event stream is scoped to a directory, so one subscription serves one
@@ -174,6 +243,10 @@ export async function answerPermissions(
           `${new Date().toISOString()} ${event.type}\n`,
         );
       }
+      // The idle event is the end of a turn, so it is kept: the wait for a
+      // turn reads it, and a run that hung says nothing without it.
+      const idleSession = idleSessionOf(event);
+      if (idleSession !== undefined) harness.idle.record(idleSession);
       if (event.type !== 'permission.updated') continue;
       const properties = event.properties as {
         id: string;
@@ -720,6 +793,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     runtime,
     watches,
     hostErrors,
+    idle: new IdleRegistry(),
     trackSession: (sessionID, caseLabel) => {
       sessions.set(sessionID, caseLabel);
     },
@@ -797,6 +871,19 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
  * would have been given up.
  */
 export const TRIAL_BUDGET_MS = 1_800_000;
+
+/**
+ * The margin between the budget of a turn and the timeout of a case.
+ *
+ * The harness gives up on a turn itself, with an error that says what it
+ * saw: the session, the idle event, the last message. Vitest gives up on
+ * the case, with a line that says nothing. A case whose timeout and whose
+ * turn budget are the same number is a race vitest wins, and the harness's
+ * diagnosis never reaches the log: the case that hung for thirty minutes
+ * reported only "Test timed out in 1800000ms". The margin keeps the
+ * harness's own message in the log.
+ */
+export const TURN_BUDGET_MARGIN_MS = 30_000;
 
 /**
  * A provider refusal the harness is about to retry.
@@ -1008,6 +1095,9 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   }
 
   const ask = async () => {
+    // The idle events that came before this turn are not this turn's: the
+    // wait ends on the idle of the turn it waits for.
+    harness.idle.beginTurn(sessionID);
     const asked = await client.session.promptAsync({
       path: { id: sessionID },
       body: {
@@ -1025,7 +1115,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   await ask();
 
   const timeoutMs = options.timeoutMs ?? TRIAL_BUDGET_MS;
-  await waitForIdle(client, sessionID, directory, timeoutMs);
+  await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
 
   const messages = await client.session.messages({
     path: { id: sessionID },
@@ -1052,7 +1142,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
     await sleep(waitMs);
     await ask();
-    await waitForIdle(client, sessionID, directory, timeoutMs);
+    await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
     const again = await client.session.messages({
       path: { id: sessionID },
       query: { directory },
@@ -1071,12 +1161,61 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
 
   return { text, toolCalls, files: [], sessionID };
 }
+
+/** How long the poll of the busy map sleeps between two checks. */
+const POLL_INTERVAL_MS = 500;
+
+/** What the wait says about a session that has no assistant message. */
+const NO_ASSISTANT_MESSAGE = 'none';
+
+/**
+ * What the wait knows about the turn it waits for.
+ *
+ * A wait that gives up says all of it: a run that hung for thirty minutes
+ * reported only that the turn did not finish, and the hunt for the reason
+ * took three runs.
+ */
+type TurnWait = {
+  /** The session the turn runs in. */
+  sessionID: string;
+  /** Whether the server ever reported the session as busy. */
+  seenBusy: boolean;
+  /** The idle events the server sent for the session since the turn began. */
+  idleEvents: number;
+  /** What the last assistant message looked like. */
+  lastMessage: string;
+  /** How long the wait has gone on. */
+  waitedMs: number;
+};
+
+/** The options of the wait for a turn to end. */
+export type WaitForIdleOptions = {
+  /** The client the wait asks the server with. */
+  client: OpencodeClient;
+  /** The session the turn runs in. */
+  sessionID: string;
+  /** The directory the session lives in. */
+  directory: string;
+  /** How long the wait may take, in milliseconds. */
+  timeoutMs: number;
+  /** The idle events the event stream carried. */
+  idle: IdleRegistry;
+  /** How long the poll sleeps between two checks. */
+  pollMs?: number;
+};
+
 /**
  * Wait until the session has nothing left to do.
  *
- * The server reports the sessions that are busy, so the wait is a poll of
- * that map. A session that is not in it is idle, and its last message holds
- * the reply.
+ * The server says a session is idle when its turn is over, and the
+ * harness's own subscription sees that event: the wait ends when the
+ * server says the session under test is idle. The event is matched to the
+ * session, because it fires for every session of the case, and the idle of
+ * another session ends another session's turn.
+ *
+ * The poll of the busy map is the fallback for a server that sends no
+ * event. The server reports the sessions that are busy, a session that is
+ * not in the map is idle, and its last message holds the reply.
  *
  * A turn can also end without a reply: the model streams an empty message
  * and the server never completes it. The session is then idle and the last
@@ -1084,53 +1223,182 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
  * produced nothing. That is a failure of the case, not a wait worth ten
  * minutes: a case that hung that way looked like a slow model.
  */
-async function waitForIdle(
-  client: OpencodeClient,
-  sessionID: string,
-  directory: string,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let reported = false;
-  while (Date.now() < deadline) {
-    const status = await client.session.status({ query: { directory } });
-    const busy = status.data as Record<string, unknown> | undefined;
-    const isBusy = busy !== undefined && Object.hasOwn(busy, sessionID);
-
-    if (isBusy) {
-      reported = true;
-    } else {
-      const last = await lastAssistantMessage(client, sessionID, directory);
-      if (last?.info?.time?.completed) return;
-      // The session is idle and the last assistant message never completed.
-      // Either the turn is over with nothing in it, or it has not started.
-      if (reported) return;
-      if (last !== undefined) return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+export async function waitForIdle(options: WaitForIdleOptions): Promise<void> {
+  const { client, sessionID, directory, timeoutMs, idle } = options;
+  const pollMs = options.pollMs ?? POLL_INTERVAL_MS;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  const state: TurnWait = {
+    sessionID,
+    seenBusy: false,
+    idleEvents: 0,
+    lastMessage: NO_ASSISTANT_MESSAGE,
+    waitedMs: 0,
+  };
+  for (;;) {
+    // The event wins: the server said the session is idle, so the turn is
+    // over and the wait does not have to guess it from the busy map.
+    state.idleEvents = idle.sinceTurnStart(sessionID);
+    if (state.idleEvents > 0) return;
+    if (Date.now() >= deadline) break;
+    if (await pollOnce(client, sessionID, directory, state)) return;
+    await sleep(pollMs);
   }
-  throw new Error(`the turn did not finish within ${timeoutMs}ms`);
+  state.idleEvents = idle.sinceTurnStart(sessionID);
+  state.waitedMs = Date.now() - started;
+  // One last look at the messages, so the line names the message of the
+  // turn even when the session was busy every time the poll asked.
+  state.lastMessage = await lastMessageOf(client, sessionID, directory, state.lastMessage);
+  throw new Error(turnWaitMessage(state, timeoutMs));
 }
 
-async function lastAssistantMessage(
+/**
+ * The last assistant message of a session, or what the wait already knew.
+ *
+ * A server that cannot answer right now does not take the diagnosis with
+ * it: the line says what the poll saw.
+ */
+async function lastMessageOf(
   client: OpencodeClient,
   sessionID: string,
   directory: string,
-): Promise<{ info?: { role?: string; time?: { completed?: number } } } | undefined> {
+  known: string,
+): Promise<string> {
+  try {
+    const messages = await readSessionMessages(client, sessionID, directory);
+    return describeMessage(messages.lastAssistant);
+  } catch {
+    return known;
+  }
+}
+
+/**
+ * One check of the busy map, and of the last message of the session.
+ *
+ * The check is the fallback for a server that sends no idle event. It says
+ * whether the wait is over: a finished assistant message is the reply of
+ * the turn, a session that was busy and is not any more has finished, and
+ * an assistant message that never completed is a turn that produced
+ * nothing.
+ */
+async function pollOnce(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+  state: TurnWait,
+): Promise<boolean> {
+  const status = await client.session.status({ query: { directory } });
+  const busy = status.data as Record<string, unknown> | undefined;
+  if (busy !== undefined && Object.hasOwn(busy, sessionID)) {
+    state.seenBusy = true;
+    return false;
+  }
+  const messages = await readSessionMessages(client, sessionID, directory);
+  state.lastMessage = describeMessage(messages.lastAssistant);
+  const last = messages.last;
+  const isAssistant = last?.role === 'assistant';
+  if (isAssistant && last?.completed !== undefined) return true;
+  if (state.seenBusy) return true;
+  return isAssistant;
+}
+
+/**
+ * The messages of a session, as the wait reads them.
+ *
+ * The last message is the one the turn is judged on: a session whose last
+ * message is a user message has not produced its reply yet, and that is
+ * what the retry path relies on. The last assistant message is what a run
+ * that waits too long has to describe.
+ */
+type SessionMessages = {
+  /** The last message of the session, whatever its role. */
+  last?: MessageSummary;
+  /** The last assistant message of the session. */
+  lastAssistant?: MessageSummary;
+};
+
+/** What a message looks like, for a run that has to say it. */
+type MessageSummary = {
+  /** The role of the message. */
+  role: string;
+  /** When the message completed, when it did. */
+  completed?: number;
+  /** How many parts the message has. */
+  parts: number;
+  /** How many characters of text the message carries. */
+  characters: number;
+};
+
+/** Read the messages of a session. */
+async function readSessionMessages(
+  client: OpencodeClient,
+  sessionID: string,
+  directory: string,
+): Promise<SessionMessages> {
   const messages = await client.session.messages({
     path: { id: sessionID },
     query: { directory },
   });
-  const last = messages.data?.at(-1);
-  if (last?.info?.role !== 'assistant') return undefined;
+  const list = messages.data ?? [];
+  let last: MessageSummary | undefined;
+  let lastAssistant: MessageSummary | undefined;
+  for (const message of list) {
+    const summary = summarizeMessage(message);
+    if (summary === undefined) continue;
+    last = summary;
+    if (summary.role === 'assistant') lastAssistant = summary;
+  }
   return {
-    info: {
-      role: last.info.role,
-      ...(last.info.time?.completed !== undefined
-        ? { time: { completed: last.info.time.completed } }
-        : {}),
-    },
+    ...(last === undefined ? {} : { last }),
+    ...(lastAssistant === undefined ? {} : { lastAssistant }),
   };
+}
+
+/** What one message of a session looks like. */
+function summarizeMessage(message: unknown): MessageSummary | undefined {
+  const shape = asObject(message);
+  if (shape === undefined) return undefined;
+  const info = asObject(shape['info']);
+  const role = info?.['role'];
+  const time = asObject(info?.['time']);
+  const completed = time?.['completed'];
+  const parts = Array.isArray(shape['parts']) ? shape['parts'] : [];
+  let characters = 0;
+  for (const part of parts) {
+    const text = asObject(part)?.['text'];
+    if (typeof text === 'string') characters += text.length;
+  }
+  return {
+    role: typeof role === 'string' ? role : 'unknown',
+    ...(typeof completed === 'number' ? { completed } : {}),
+    parts: parts.length,
+    characters,
+  };
+}
+
+/** What the last assistant message looked like, in a line. */
+function describeMessage(message: MessageSummary | undefined): string {
+  if (message === undefined) return NO_ASSISTANT_MESSAGE;
+  const shape = `an assistant message with ${message.parts} part(s) and ${message.characters} characters of text`;
+  if (message.completed === undefined) return `${shape} that never completed`;
+  return `${shape} that completed at ${message.completed}`;
+}
+
+/**
+ * The line a run reports a turn that did not end with.
+ *
+ * The harness gives up on a turn with the state it saw, because a run that
+ * hung for thirty minutes and reported only that the turn did not finish
+ * took three runs to diagnose.
+ */
+function turnWaitMessage(wait: TurnWait, timeoutMs: number): string {
+  return [
+    `the turn of session ${wait.sessionID} did not finish within ${timeoutMs}ms`,
+    `  the server reported the session busy: ${wait.seenBusy ? 'yes' : 'no'}`,
+    `  the server sent an idle event for the session: ${wait.idleEvents > 0 ? 'yes' : 'no'} (${wait.idleEvents} since the turn began)`,
+    `  the last assistant message: ${wait.lastMessage}`,
+    `  the wait had gone on for ${wait.waitedMs}ms`,
+  ].join('\n');
 }
 
 /** A model is written provider/model. */

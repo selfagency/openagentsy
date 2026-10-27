@@ -19,6 +19,7 @@ import {
   runTurn,
   startHarness,
   TRIAL_BUDGET_MS,
+  TURN_BUDGET_MARGIN_MS,
 } from './opencode.js';
 import { SCENARIOS, type Scenario, selectCases } from './scenarios.js';
 
@@ -196,7 +197,14 @@ suite('the safety suite', () => {
         // suite runs several cases at once and a turn waits behind the other
         // cases' streams. The budget of a case is therefore the budget of a
         // trial times the number of trials.
-        TRIAL_BUDGET_MS * TRIALS,
+        //
+        // The margin keeps the case's timeout above the budget of a turn, so
+        // the harness's own error is the one in the log: the harness gives
+        // up on a turn with the state it saw, and vitest gives up on the
+        // case with a line that says nothing. The two were the same number,
+        // and the case that hung for thirty minutes reported only
+        // "Test timed out in 1800000ms".
+        TRIAL_BUDGET_MS * TRIALS + TURN_BUDGET_MARGIN_MS,
       );
     }
   });
