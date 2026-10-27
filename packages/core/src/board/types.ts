@@ -6,6 +6,32 @@ export const CONFIDENCE_LEVELS = ['verified', 'inferred', 'guess'] as const;
 
 export type Confidence = (typeof CONFIDENCE_LEVELS)[number];
 
+/**
+ * The statuses a board round can carry (§8.7).
+ *
+ * A round is one pass of the Lead's recovery loop, and its status says where
+ * the round is. A delegated item is in the same five states, so one list
+ * serves both and a dispatch and the round that made it never disagree by
+ * accident.
+ *
+ * `awaiting_result` is a valid status and never a failure: a round that is
+ * waiting for a delegated item to come back is working, not stuck.
+ */
+export const DISPATCH_STATUSES = [
+  'running',
+  'awaiting_result',
+  'paused',
+  'blocked',
+  'complete',
+] as const;
+
+export type RoundStatus = (typeof DISPATCH_STATUSES)[number];
+
+/** Whether a value is one of the round statuses. */
+export function isRoundStatus(value: unknown): value is RoundStatus {
+  return typeof value === 'string' && (DISPATCH_STATUSES as readonly string[]).includes(value);
+}
+
 export type BoardRecord = {
   id: number;
   bean: string;

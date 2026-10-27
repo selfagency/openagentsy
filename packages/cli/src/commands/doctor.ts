@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import {
   agentIdOf,
@@ -7,10 +8,12 @@ import {
   listLeases,
   loadRoles,
   openDatabase,
+  type RolesFile,
   type Target,
 } from '@openagentsy/core';
 import { parse as parseJsonc } from 'jsonc-parser';
 import { parse as parseYaml } from 'yaml';
+import { agentFileName } from '../generate/agent.js';
 import { lockEntryFor, readModelLock } from '../generate/lock.js';
 import {
   detectOpenCode,
@@ -21,6 +24,7 @@ import {
   targetForVersion,
 } from '../opencode.js';
 import { findPluginBundle } from '../plugin.js';
+import { runBuild } from './build.js';
 
 export type ConfigReport = {
   path: string | undefined;
@@ -55,6 +59,23 @@ export type PluginReport = {
   installed: boolean;
   bundlePath: string;
   bundleBuilt: boolean;
+};
+
+/**
+ * What a fresh render of the roles says about the installed files.
+ *
+ * The generated files are written by a person who runs the generator, so an
+ * out-of-band edit is invisible until something compares the tree with the
+ * generator. The doctor does that comparison, and it never writes into the
+ * project: the render happens in a temporary directory.
+ */
+export type RegenerationReport = {
+  /** The generated files that disagree with a fresh render. */
+  drifted: string[];
+  /** The command that reconciles the tree. */
+  reconcile: string;
+  /** Why the comparison did not run, when it did not run. */
+  error?: string | undefined;
 };
 
 /** One of the five files that decide how this project is configured. */
@@ -98,6 +119,7 @@ export type DoctorReport = {
   roles: RoleReport[];
   skills: FoundSkill[];
   board: BoardReport;
+  regeneration: RegenerationReport;
   warnings: string[];
 };
 
@@ -412,6 +434,162 @@ function staleLeaseWarnings(held: Lease[]): string[] {
   return warnings;
 }
 
+/** The command that reconciles the generated agent files. */
+const RECONCILE_BUILD = 'openagentsy build';
+
+/**
+ * The agent files of a directory, by name.
+ *
+ * A directory that cannot be read is a failure and not an empty tree: an
+ * empty tree would say every generated file is missing.
+ */
+async function agentFiles(dir: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  for (const name of await readdir(dir)) {
+    if (!name.endsWith('.md')) continue;
+    files.set(name, await readFile(join(dir, name), 'utf8'));
+  }
+  return files;
+}
+
+/** The target one agent file was built for, when its frontmatter says. */
+function targetOfAgentFile(content: string): Target | undefined {
+  const match = /^---\n([\s\S]*?)\n---/.exec(content);
+  if (match === null) return undefined;
+  const frontmatter = asRecord(parseYaml(match[1] ?? ''));
+  if (frontmatter.permissions !== undefined) return 'v2';
+  if (frontmatter.permission !== undefined) return 'v1';
+  return undefined;
+}
+
+/**
+ * The targets the installed files say they were built for.
+ *
+ * The doctor cannot recover the target a project was built for from the
+ * OpenCode it finds on PATH: a project built for v2 on a machine with v1
+ * installed is not a drifted tree, it is a v2 tree, and rendering it for the
+ * wrong target would flag every file. The installed files say which target
+ * they are, so the files are what the check asks.
+ */
+function installedTargets(files: Map<string, string>): Set<Target> {
+  const targets = new Set<Target>();
+  for (const content of files.values()) {
+    const target = targetOfAgentFile(content);
+    if (target !== undefined) targets.add(target);
+  }
+  return targets;
+}
+
+/** The target the installed files agree on, or why there is none. */
+type TargetVerdict = {
+  target: Target | undefined;
+  error?: string | undefined;
+};
+
+/**
+ * The target the installed files name, and the reason when they do not.
+ *
+ * A tree whose target cannot be read is a tree the check cannot judge: the
+ * skip is reported, never presented as a clean tree.
+ */
+function judgeTarget(files: Map<string, string>): TargetVerdict {
+  const targets = installedTargets(files);
+  if (targets.size === 1) {
+    const [target] = targets;
+    return { target };
+  }
+  return {
+    target: undefined,
+    error:
+      targets.size === 0
+        ? 'no installed agent file says which target it was built for'
+        : `the installed agent files disagree about the target: ${[...targets].sort().join(', ')}`,
+  };
+}
+
+/** What the regeneration check found, and the target it judged. */
+type RegenerationDiff = {
+  drifted: string[];
+  target: Target | undefined;
+  /** Why the check did not run, when it did not run. */
+  error?: string | undefined;
+};
+
+/**
+ * The generated files that disagree with a fresh render of the roles.
+ *
+ * The render happens in a temporary directory: the doctor never writes into
+ * the project it is describing, because the person who runs it may be about
+ * to change that project.
+ */
+async function regenerationDiff(root: string, ours: Set<string>): Promise<RegenerationDiff> {
+  const installedDir = join(root, '.opencode', 'agents');
+  // A tree that was never built has nothing to drift from, and the setup
+  // warning already says the plugin is not installed.
+  if (!(await fileExists(installedDir))) return { drifted: [], target: undefined };
+
+  const installed = await agentFiles(installedDir);
+  // A tree with no agent files has nothing to drift from.
+  if (installed.size === 0) return { drifted: [], target: undefined };
+
+  // The check cannot judge a tree whose target cannot be read: rendering it
+  // for the wrong target would flag every file, and saying nothing would say
+  // the tree is clean. A skip is reported as a failure.
+  const verdict = judgeTarget(installed);
+  if (verdict.target === undefined) {
+    return { drifted: [], target: undefined, error: verdict.error };
+  }
+  const target = verdict.target;
+
+  const temp = await mkdtemp(join(tmpdir(), 'openagentsy-regeneration-'));
+  try {
+    await runBuild({ root, target, outDir: temp });
+    const fresh = await agentFiles(join(temp, 'agents'));
+
+    const drifted: string[] = [];
+    for (const [name, content] of fresh) {
+      const current = installed.get(name);
+      if (current === undefined) drifted.push(`${name} is missing`);
+      else if (current !== content) drifted.push(`${name} differs from a fresh render`);
+    }
+    for (const name of installed.keys()) {
+      if (fresh.has(name)) continue;
+      // A file the generator does not write is only a drift when it is one
+      // of ours: a person may keep their own agent file beside ours.
+      if (!ours.has(name) && !name.startsWith('oa-')) continue;
+      drifted.push(`${name} is stale: the generator does not write it any more`);
+    }
+    return { drifted, target };
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The comparison, and what a failure of it costs.
+ *
+ * A doctor that cannot run the comparison says so rather than pretending
+ * the tree is clean.
+ */
+async function regenerationReport(root: string, roles: RolesFile): Promise<RegenerationReport> {
+  const ours = new Set(Object.values(roles.roles).map((role) => agentFileName(role)));
+  try {
+    const diff = await regenerationDiff(root, ours);
+    return {
+      drifted: diff.drifted,
+      reconcile:
+        diff.target === undefined ? RECONCILE_BUILD : `${RECONCILE_BUILD} --target ${diff.target}`,
+      ...(diff.error === undefined ? {} : { error: diff.error }),
+    };
+  } catch (error) {
+    return {
+      drifted: [],
+      reconcile: RECONCILE_BUILD,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function runDoctor(root: string): Promise<DoctorReport> {
   const warnings: string[] = [];
   const version = await detectOpenCode();
@@ -434,6 +612,14 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
 
   const roles = await loadRoles(join(root, 'roles.yaml'));
   const lock = await readModelLock(join(root, 'openagentsy.models.lock.json'));
+
+  const regeneration = await regenerationReport(root, roles);
+  for (const entry of regeneration.drifted) {
+    warnings.push(`the generated agent file ${entry}, run: ${regeneration.reconcile} to reconcile`);
+  }
+  if (regeneration.error !== undefined) {
+    warnings.push(`the regeneration check did not run: ${regeneration.error}`);
+  }
 
   const roleReports: RoleReport[] = Object.values(roles.roles).map((role) => {
     const entry = lockEntryFor(lock, role.name);
@@ -511,6 +697,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
       ),
       auditEntries: await countAuditLines(auditPath),
     },
+    regeneration,
     warnings,
   };
 }
@@ -578,6 +765,29 @@ function phase2Lines(effective: Phase2Config): string[] {
   ];
 }
 
+/**
+ * The lines about the generated files that disagree with a fresh render.
+ *
+ * A tree the generator wrote has nothing to say here, so the section is
+ * only there when something drifted or the check could not run.
+ */
+function regenerationLines(report: RegenerationReport): string[] {
+  const lines = ['Regeneration'];
+  lines.push(field('drifted', `${report.drifted.length} file(s), run: ${report.reconcile}`));
+  for (const entry of report.drifted) {
+    lines.push(`  - ${entry}`);
+  }
+  if (report.error !== undefined) {
+    lines.push(field('error', report.error));
+  }
+  return lines;
+}
+
+/** Whether the report has something to say about the generated files. */
+function hasRegenerationFinding(report: RegenerationReport): boolean {
+  return report.drifted.length > 0 || report.error !== undefined;
+}
+
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = [];
 
@@ -607,6 +817,11 @@ export function formatDoctorReport(report: DoctorReport): string {
     for (const overlap of report.configMap.overlaps) {
       lines.push(`  - ${overlap}`);
     }
+  }
+
+  if (hasRegenerationFinding(report.regeneration)) {
+    lines.push('');
+    lines.push(...regenerationLines(report.regeneration));
   }
 
   if (report.warnings.length > 0) {

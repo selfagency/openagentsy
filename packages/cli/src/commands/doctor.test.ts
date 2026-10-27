@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { detectOpenCode, targetForVersion } from '../opencode.js';
+import { runBuild } from './build.js';
 import { formatDoctorReport, runDoctor } from './doctor.js';
 
 let root: string;
@@ -45,6 +47,22 @@ roles:
       startVariant: low
       ceilingVariant: high
       climbTriggers: [test_failed_twice]
+  reviewer:
+    description: Reviews a change
+    mode: subagent
+    writes: false
+    scope: the diff
+    guidance: read it
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: overall
+      hardRequirements: [tool_calls]
+      costStance: quality_first
+    effort:
+      startVariant: medium
+      ceilingVariant: high
+      climbTriggers: [planning]
 `;
 
 beforeEach(async () => {
@@ -190,5 +208,123 @@ describe('the config map', () => {
     expect(report.configMap.effective.tasks.prefix).toBe('b-');
     expect(report.configMap.effective.tasks.idLength).toBe(8);
     expect(report.configMap.overlaps.some((overlap) => overlap.includes('.beans.yml'))).toBe(true);
+  });
+});
+
+/**
+ * Render the agent files the way the project was built.
+ *
+ * The target follows the OpenCode the doctor will find, or the comparison
+ * would flag every file for a difference nobody made.
+ */
+async function buildAgents(root: string, target?: 'v1' | 'v2'): Promise<void> {
+  const version = await detectOpenCode();
+  const chosen = target ?? (version ? targetForVersion(version) : 'v1');
+  await runBuild({ root, target: chosen, outDir: join(root, '.opencode') });
+}
+
+/** The files of a tree, by name and content. */
+async function tree(dir: string, prefix = ''): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const found: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...(await tree(path, `${prefix}${entry.name}/`)));
+      continue;
+    }
+    found.push(`${prefix}${entry.name}: ${await readFile(path, 'utf8')}`);
+  }
+  return found.sort();
+}
+
+describe('the regeneration check', () => {
+  it('flags a hand-edited generated agent file with the reconcile command', async () => {
+    await buildAgents(root);
+    const agentFile = join(root, '.opencode', 'agents', 'oa-builder.md');
+    const original = await readFile(agentFile, 'utf8');
+    await writeFile(agentFile, `${original}\nhand edited\n`, 'utf8');
+
+    const report = await runDoctor(root);
+    const warning = report.warnings.find((entry) => entry.includes('oa-builder.md'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('openagentsy build');
+    expect(report.regeneration.drifted.join(' ')).toContain('oa-builder.md');
+  });
+
+  it('says nothing about a tree the generator wrote', async () => {
+    await buildAgents(root);
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.drifted).toEqual([]);
+    expect(report.warnings.some((entry) => entry.includes('openagentsy build'))).toBe(false);
+  });
+
+  it('never writes into the project it is describing', async () => {
+    await buildAgents(root);
+    const before = await tree(root);
+
+    await runDoctor(root);
+
+    const after = await tree(root);
+    expect(after).toEqual(before);
+  });
+
+  it('does not flag a tree that was built for the other target', async () => {
+    // The doctor finds the OpenCode on PATH, but a project may be built for
+    // the other version. The files say which target they are, so a v2 tree
+    // on a v1 machine is a v2 tree and not a drifted one.
+    await buildAgents(root, 'v2');
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.drifted).toEqual([]);
+  });
+
+  it('says so when the generated files cannot be read', async () => {
+    await buildAgents(root);
+    const dir = join(root, '.opencode', 'agents');
+    await chmod(dir, 0o000);
+    try {
+      const report = await runDoctor(root);
+      expect(report.regeneration.error).toBeDefined();
+      expect(report.regeneration.drifted).toEqual([]);
+    } finally {
+      await chmod(dir, 0o755);
+    }
+  });
+
+  it('does not present a skipped check as a clean tree', async () => {
+    // A hand-written agent file beside ours may name the other target, and
+    // then the tree cannot be judged. The doctor says the check did not
+    // run, instead of saying the tree is clean.
+    await buildAgents(root, 'v2');
+    await writeFile(
+      join(root, '.opencode', 'agents', 'my-helper.md'),
+      '---\ndescription: a helper\nmode: primary\npermission: {}\n---\n\nbody\n',
+      'utf8',
+    );
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.error).toBeDefined();
+    expect(report.regeneration.drifted).toEqual([]);
+    expect(
+      report.warnings.some((entry) => entry.includes('the regeneration check did not run')),
+    ).toBe(true);
+  });
+
+  it('does not present a skipped check as a clean tree after a hand edit', async () => {
+    // The hand edit the check exists for: one file's permission map became
+    // the other target's key, and the tree can no longer be judged.
+    await buildAgents(root, 'v1');
+    const file = join(root, '.opencode', 'agents', 'oa-builder.md');
+    const content = await readFile(file, 'utf8');
+    await writeFile(file, content.replace('permission:', 'permissions:'), 'utf8');
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.error).toBeDefined();
+    expect(report.regeneration.drifted).toEqual([]);
+    expect(
+      report.warnings.some((entry) => entry.includes('the regeneration check did not run')),
+    ).toBe(true);
   });
 });
