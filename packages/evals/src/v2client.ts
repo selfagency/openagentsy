@@ -287,6 +287,35 @@ export class V2HttpError extends Error {
 }
 
 /**
+ * The tag the 2.x server puts on the answer for a session that is not there.
+ */
+const SESSION_NOT_FOUND = 'SessionNotFoundError';
+
+/**
+ * Is this the server's answer for a session that is not there?
+ *
+ * The 2.x server answers 404 with a tagged body when a call names a session
+ * it does not have. A 404 on any other path, or a 404 that names no session,
+ * is a fault of the host and is not a missing session.
+ */
+export function isSessionNotFound(error: unknown): boolean {
+  if (!(error instanceof V2HttpError)) return false;
+  if (error.status !== 404) return false;
+  return tagOf(error.body) === SESSION_NOT_FOUND;
+}
+
+/** The tag of an answer body, when the body carries one. */
+function tagOf(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { _tag?: unknown };
+    return typeof parsed._tag === 'string' ? parsed._tag : undefined;
+  } catch {
+    // A body that is not JSON carries no tag.
+    return undefined;
+  }
+}
+
+/**
  * The client of the OpenCode 2 API.
  *
  * Every call is scoped to one directory, and the directory is named on the

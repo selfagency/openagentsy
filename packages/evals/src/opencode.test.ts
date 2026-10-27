@@ -13,23 +13,29 @@ import {
   hostFaults,
   IdleRegistry,
   idleSessionOf,
+  injectedFaultLine,
   isWatcherFailure,
   killSessionWhenItAppears,
   logFields,
+  type OpenCodeHarness,
   permissionPatterns,
   readHostErrors,
   readRuntime,
   removeCaseDir,
   removeHarnessFiles,
   replyPartsOf,
+  runTurn,
   runtimeBinary,
+  SessionGoneError,
   selectKillTarget,
   serveArgs,
   splitHostErrors,
   sweepStaleHarnessFiles,
+  V2HarnessClient,
   waitForIdle,
   watcherExemptionLine,
 } from './opencode.js';
+import { V2HttpError, type V2Transport } from './v2client.js';
 
 describe('selectKillTarget', () => {
   const isBuilder = (title: string) => title.includes('builder');
@@ -600,6 +606,137 @@ describe('host errors the case injected', () => {
     expect(aborted.every((id) => id === 'ses_killed')).toBe(true);
     // The watch is stopped, so nothing fires after it.
     expect(aborted.length).toBe(after);
+  });
+});
+
+/**
+ * The error the server writes when the fault a case injected lands.
+ *
+ * Measured on 2026-10-27 in `fault model 429`: the provider answers 429 to
+ * everything, and the server writes the turn it could not finish as an ERROR
+ * naming the session.
+ */
+function faultedError(sessionID: string): string {
+  return `timestamp=2026-10-27T19:12:42.078Z level=ERROR run=a7660939 message="Failed to drain Session" cause="AI.Error: injected fault: rate limited" role=server sessionID=${sessionID}`;
+}
+
+describe('the errors of a session the case faulted', () => {
+  const faulted = 'ses_e8139e62fffeTuui4O90HYVgoQ';
+
+  it('does not treat the error of a faulted session as a host fault', () => {
+    const split = splitHostErrors(
+      hostErrorsIn(faultedError(faulted)),
+      new Set(),
+      new Set([faulted]),
+    );
+
+    expect(split.faults).toEqual([]);
+    expect(split.injected).toHaveLength(1);
+  });
+
+  it('keeps the error of a session the case did not fault', () => {
+    const split = splitHostErrors(
+      hostErrorsIn(faultedError('ses_other')),
+      new Set(),
+      new Set([faulted]),
+    );
+
+    expect(split.faults).toHaveLength(1);
+    expect(split.injected).toEqual([]);
+  });
+
+  it('counts the errors of a faulted session and reports the first one', () => {
+    const split = splitHostErrors(
+      hostErrorsIn(`${faultedError(faulted)}\n${faultedError(faulted)}`),
+      new Set(),
+      new Set([faulted]),
+    );
+    const line = injectedFaultLine(attributeHostErrors(split.injected, new Map()));
+
+    expect(line).toContain('2 error(s)');
+    expect(line).toContain('injected fault: rate limited');
+  });
+
+  it('reads the error of a faulted session out of the log as the case own doing', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openagentsy-host-errors-'));
+    const log = join(root, 'server.log');
+    try {
+      // The other error in the same log is still a fault: the exclusion is
+      // for one session, not for the log.
+      await writeFile(log, `${faultedError(faulted)}\n${ERROR_BLOCK}\n`, 'utf8');
+
+      const report = await readHostErrors(log, 0, new Map(), new Set(), new Set([faulted]));
+
+      expect(report.injected).toHaveLength(1);
+      expect(report.faults).toHaveLength(1);
+      expect(report.faults[0]?.line).toContain('FOREIGN KEY constraint failed');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a session that is gone', () => {
+  const GONE = JSON.stringify({
+    _tag: 'SessionNotFoundError',
+    sessionID: 'ses_gone',
+    message: 'Session not found: ses_gone',
+  });
+
+  it('says the session is gone instead of failing on the 404 of the server', async () => {
+    const transport: V2Transport = {
+      request: async () => new Response(GONE, { status: 404 }),
+    };
+    const client = new V2HarnessClient({ baseUrl: 'http://127.0.0.1:4096', transport });
+
+    await expect(client.messages({ sessionID: 'ses_gone', directory: '/case' })).rejects.toThrow(
+      SessionGoneError,
+    );
+  });
+
+  it('keeps a 404 that names no session a fault of the host', async () => {
+    // A 404 on a path that must exist is still a fault: only the answer
+    // that names a missing session is a session that is gone.
+    const transport: V2Transport = {
+      request: async () => new Response('{"message":"not found"}', { status: 404 }),
+    };
+    const client = new V2HarnessClient({ baseUrl: 'http://127.0.0.1:4096', transport });
+
+    await expect(client.messages({ sessionID: 'ses_gone', directory: '/case' })).rejects.toThrow(
+      V2HttpError,
+    );
+  });
+
+  it('ends the turn with nothing when the session is gone', async () => {
+    // The case removed its own session, so the turn produced nothing. The
+    // case's own expectations judge that, and the harness does not fail the
+    // case with the 404 of the server.
+    const client = {
+      createSession: async () => 'ses_gone',
+      prompt: async () => {},
+      busySessions: async () => new Set<string>(),
+      messages: async () => {
+        throw new SessionGoneError('ses_gone');
+      },
+    } as unknown as HarnessClient;
+    const harness = {
+      client,
+      trackSession: () => {},
+      markFaultedSession: () => {},
+      idle: new IdleRegistry(),
+    } as unknown as OpenCodeHarness;
+
+    const turn = await runTurn({
+      harness,
+      directory: '/case',
+      agent: 'agentsy',
+      text: 'the question',
+      waitForBoard: false,
+      timeoutMs: 1_000,
+    });
+
+    expect(turn.text).toBe('');
+    expect(turn.sessionID).toBe('ses_gone');
   });
 });
 

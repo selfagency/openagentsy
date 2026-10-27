@@ -391,6 +391,7 @@ async function runScenario(
         ...(scenarioCase.rateLimitRetries !== undefined
           ? { rateLimitRetries: scenarioCase.rateLimitRetries }
           : {}),
+        ...(scenarioCase.injectsProviderFault === true ? { injectsProviderFault: true } : {}),
       });
       replies.push(turn.text);
       toolCalls.push(...turn.toolCalls);

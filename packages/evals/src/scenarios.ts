@@ -101,6 +101,16 @@ export type Scenario = {
    * it must end, not retry, so it sets this to zero.
    */
   rateLimitRetries?: number;
+  /**
+   * The case points the model provider at a server that fails.
+   *
+   * The fault lands in the turn of the session the harness runs for the case,
+   * and the server writes it as an ERROR naming that session. The error is
+   * the case proving the fault landed, not the host failing, so the harness
+   * excludes the errors of that session the way it excludes the errors of a
+   * session it killed.
+   */
+  injectsProviderFault?: boolean;
   /** What must hold when the case ends. */
   expect: Expectation[];
 };
@@ -507,6 +517,9 @@ export const FAULT_MODEL_429: Scenario = {
   turns: ['Say what you would do next.'],
   // The limit is the case, so the harness must not wait it out.
   rateLimitRetries: 0,
+  // The fault lands in the turn of the session the harness runs, and the
+  // server writes it as an ERROR naming that session.
+  injectsProviderFault: true,
   files: {
     'package.json': JSON.stringify({ name: 'fault-429', private: true, type: 'module' }, null, 2),
   },
@@ -538,6 +551,9 @@ export const FAULT_PROVIDER_DOWN: Scenario = {
   turns: ['Say what you would do next.'],
   // The provider is gone, so the harness must not ask again.
   rateLimitRetries: 0,
+  // The fault lands in the turn of the session the harness runs, and the
+  // server writes it as an ERROR naming that session.
+  injectsProviderFault: true,
   files: {
     'package.json': JSON.stringify({ name: 'fault-down', private: true, type: 'module' }, null, 2),
   },

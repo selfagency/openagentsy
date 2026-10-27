@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 import { gitFreeEnv } from './git-env.js';
 import {
+  isSessionNotFound,
   mcpServer,
   V2Client,
   type V2EventStream,
@@ -179,6 +180,34 @@ export type HarnessClient = {
   listSessions(input: { directory: string }): Promise<HarnessSession[]>;
 };
 
+/**
+ * The session a call names is not there.
+ *
+ * A case can remove a session on purpose, and the server then answers 404 for
+ * every call that names it. That is the case's own doing: the turn produced
+ * nothing, and the case's own expectations are what judge that. The harness
+ * must not report a removed session as a fault of the host.
+ *
+ * The 1.x server answers a missing session with an empty message list and
+ * never raises this; the 2.x server answers 404, and the harness client turns
+ * that answer into this error.
+ */
+export class SessionGoneError extends Error {
+  /** The session that is not there. */
+  readonly sessionID: string;
+
+  constructor(sessionID: string) {
+    super(`the session ${sessionID} is gone`);
+    this.name = 'SessionGoneError';
+    this.sessionID = sessionID;
+  }
+}
+
+/** Is this the error of a session that is not there? */
+export function isSessionGone(error: unknown): boolean {
+  return error instanceof SessionGoneError;
+}
+
 const execFileAsync = promisify(execFile);
 /**
  * The harness on OpenCode 1.
@@ -319,34 +348,55 @@ export class V2HarnessClient implements HarnessClient {
     return client;
   }
 
+  /**
+   * Run a call that names a session, and say when the session is gone.
+   *
+   * The 2.x server answers 404 for a session it does not have. A case can
+   * remove its own session on purpose, and that is the case's own doing: the
+   * turn produced nothing, and the case's expectations judge that. A 404 on
+   * any other path is a fault of the host and is left alone.
+   */
+  private async session<T>(
+    input: { sessionID: string; directory: string },
+    call: (client: V2Client) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await call(this.client(input.directory));
+    } catch (error) {
+      if (isSessionNotFound(error)) throw new SessionGoneError(input.sessionID);
+      throw error;
+    }
+  }
+
   async createSession(input: { title: string; directory: string }): Promise<string> {
     const session = await this.client(input.directory).createSession({ title: input.title });
     return session.id;
   }
 
   async prompt(input: HarnessPrompt): Promise<void> {
-    const client = this.client(input.directory);
-    // The agent of a turn is the agent of its session: the prompt body names
-    // the agents a message is put to, and the route below is the one that
-    // switches the agent of the session. A turn that runs under the default
-    // agent is a turn under test that never used the role.
-    await client.attachAgent(input.sessionID, input.agent);
-    // The model of a turn is the model of its session: the prompt body has no
-    // model, and the route that changes it is the one below.
-    if (input.model !== undefined) {
-      await client.setModel(input.sessionID, {
-        id: input.model.modelID,
-        providerID: input.model.providerID,
+    await this.session(input, async (client) => {
+      // The agent of a turn is the agent of its session: the prompt body names
+      // the agents a message is put to, and the route below is the one that
+      // switches the agent of the session. A turn that runs under the default
+      // agent is a turn under test that never used the role.
+      await client.attachAgent(input.sessionID, input.agent);
+      // The model of a turn is the model of its session: the prompt body has no
+      // model, and the route that changes it is the one below.
+      if (input.model !== undefined) {
+        await client.setModel(input.sessionID, {
+          id: input.model.modelID,
+          providerID: input.model.providerID,
+        });
+      }
+      await client.prompt(input.sessionID, {
+        text: input.text,
+        agents: [{ name: input.agent }],
       });
-    }
-    await client.prompt(input.sessionID, {
-      text: input.text,
-      agents: [{ name: input.agent }],
     });
   }
 
   async messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]> {
-    const list = await this.client(input.directory).messages(input.sessionID);
+    const list = await this.session(input, (client) => client.messages(input.sessionID));
     return v2Messages(list.messages);
   }
 
@@ -386,8 +436,14 @@ export class V2HarnessClient implements HarnessClient {
   }
 
   async deleteSession(input: { sessionID: string; directory: string }): Promise<void> {
-    // The server answers 204 with an empty body, and the client says so.
-    await this.client(input.directory).deleteSession(input.sessionID);
+    try {
+      // The server answers 204 with an empty body, and the client says so.
+      await this.session(input, (client) => client.deleteSession(input.sessionID));
+    } catch (error) {
+      // The session is gone: that is what the delete wanted, and a kill that
+      // found nothing to delete has still killed the session.
+      if (!isSessionGone(error)) throw error;
+    }
   }
 
   async listSessions(input: { directory: string }): Promise<HarnessSession[]> {
@@ -691,6 +747,16 @@ export type OpenCodeHarness = {
    * attributed instead of falling back to the suite as a whole.
    */
   trackSession: (sessionID: string, caseLabel: string) => void;
+  /**
+   * Say that a case injected a fault into a session.
+   *
+   * The provider faults (a 429 and a provider that is down) are injected into
+   * the turn the harness runs, and the server writes the fault as an ERROR
+   * naming the session. That error is the case proving the fault landed, not
+   * the host failing, so the harness excludes it the way it excludes the
+   * errors of a session it killed.
+   */
+  markFaultedSession: (sessionID: string) => void;
   /**
    * The idle events the event stream carried.
    *
@@ -1042,12 +1108,15 @@ export type HostErrorReport = {
   faults: HostError[];
   /** The errors the policy exempts. */
   exempted: HostError[];
+  /** The errors of the sessions the case injected a fault into. */
+  injected: HostError[];
 };
 
 /** The error blocks that are faults, and the ones the policy exempts. */
 export type HostErrorBlocks = {
   faults: HostErrorBlock[];
   exempted: HostErrorBlock[];
+  injected: HostErrorBlock[];
 };
 
 /** A line the server wrote, with its level. Continuation lines have none. */
@@ -1119,22 +1188,34 @@ export function attributeHostErrors(
  * One more class is exempt, and only one: a file watcher that could not
  * attach (see `isWatcherFailure`). It is reported, but it does not fail the
  * run.
+ *
+ * A third class is the case's own doing as well: the case that injects a
+ * fault into its own turn (a provider that answers 429, a provider that is
+ * down) sees the server write that fault as an ERROR naming the session. The
+ * harness knows the sessions it faulted, and the errors of those sessions are
+ * counted and reported, not failed.
  */
 export function splitHostErrors(
   blocks: readonly HostErrorBlock[],
   killedSessions: ReadonlySet<string>,
+  faultedSessions: ReadonlySet<string> = new Set(),
 ): HostErrorBlocks {
   const faults: HostErrorBlock[] = [];
   const exempted: HostErrorBlock[] = [];
+  const injected: HostErrorBlock[] = [];
   for (const block of blocks) {
     if (block.sessionID !== undefined && killedSessions.has(block.sessionID)) continue;
+    if (block.sessionID !== undefined && faultedSessions.has(block.sessionID)) {
+      injected.push(block);
+      continue;
+    }
     if (isWatcherFailure(block)) {
       exempted.push(block);
       continue;
     }
     faults.push(block);
   }
-  return { faults, exempted };
+  return { faults, exempted, injected };
 }
 
 /** The host errors that are faults of the run. */
@@ -1249,6 +1330,18 @@ function watcherErrorsWhere(onCase: number, total: number): string {
 }
 
 /**
+ * The line the run reports the errors of a faulted session with.
+ *
+ * The count and the first error are both in it: a run that hides the errors
+ * it ignored is a run that lies about what happened.
+ */
+export function injectedFaultLine(injected: readonly HostError[]): string {
+  const first = injected[0];
+  const detail = first === undefined ? '' : `\n  ${first.line.replace(/\n/g, '\n  ')}`;
+  return `the opencode server wrote ${injected.length} error(s) about a session the case injected a fault into; the fault is the case's own doing:${detail}`;
+}
+
+/**
  * Read the host errors appended to a log file after a byte offset.
  *
  * The offset is what makes this testable without a server: the caller passes
@@ -1264,13 +1357,14 @@ export async function readHostErrors(
   fromOffset = 0,
   sessions: ReadonlyMap<string, string> = new Map(),
   killedSessions: ReadonlySet<string> = new Set(),
+  faultedSessions: ReadonlySet<string> = new Set(),
 ): Promise<HostErrorReport> {
   let bytes: Buffer;
   try {
     bytes = await readFile(logFile);
   } catch {
     // No log yet is no error: a server that has not started has written none.
-    return { faults: [], exempted: [] };
+    return { faults: [], exempted: [], injected: [] };
   }
   // The offset is the size the file had when the run started, and a log that
   // already ended in a partial line leaves it mid-line. Start at the first
@@ -1279,16 +1373,18 @@ export async function readHostErrors(
   let start = Math.max(0, fromOffset);
   if (start > 0 && start < bytes.length && bytes[start - 1] !== 0x0a) {
     const newline = bytes.indexOf(0x0a, start);
-    if (newline === -1) return { faults: [], exempted: [] };
+    if (newline === -1) return { faults: [], exempted: [], injected: [] };
     start = newline + 1;
   }
   const split = splitHostErrors(
     hostErrorsIn(bytes.subarray(start).toString('utf8')),
     killedSessions,
+    faultedSessions,
   );
   return {
     faults: attributeHostErrors(split.faults, sessions),
     exempted: attributeHostErrors(split.exempted, sessions),
+    injected: attributeHostErrors(split.injected, sessions),
   };
 }
 
@@ -1510,8 +1606,11 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
 
   const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
   const sessions = new Map<string, string>();
+  // The sessions a case injected a fault into. The server writes that fault
+  // as an ERROR naming the session, and the fault is the case's own doing.
+  const faultedSessions = new Set<string>();
   const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostErrorReport> =>
-    readHostErrors(logFile, logStart, sessions, killedSessions);
+    readHostErrors(logFile, logStart, sessions, killedSessions, faultedSessions);
 
   return {
     client,
@@ -1522,6 +1621,9 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     idle: new IdleRegistry(),
     trackSession: (sessionID, caseLabel) => {
       sessions.set(sessionID, caseLabel);
+    },
+    markFaultedSession: (sessionID) => {
+      faultedSessions.add(sessionID);
     },
     stop: async () => {
       // A watcher that is still looking for a session stops looking: a
@@ -1557,7 +1659,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // can hide an error the server wrote while it was serving them. It reads
       // through `hostErrors`, the same view a caller asking mid-run gets, so
       // the log is read before it is removed.
-      let report: HostErrorReport = { faults: [], exempted: [] };
+      let report: HostErrorReport = { faults: [], exempted: [], injected: [] };
       try {
         report = await hostErrors(killedSessions);
       } finally {
@@ -1572,6 +1674,9 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // errors it ignored is a run that lies about what happened.
       if (report.exempted.length > 0) {
         process.stdout.write(`${watcherExemptionLine(report.exempted)}\n`);
+      }
+      if (report.injected.length > 0) {
+        process.stdout.write(`${injectedFaultLine(report.injected)}\n`);
       }
       if (report.faults.length > 0) {
         const detail = report.faults
@@ -1660,6 +1765,14 @@ export type PromptOptions = {
    * up finds no tool.
    */
   waitForBoard?: boolean;
+  /**
+   * The case points the model provider at a server that fails.
+   *
+   * The fault lands in the turn of the session this call creates, and the
+   * server writes it as an ERROR naming the session. The error is the case
+   * proving the fault landed, not the host failing.
+   */
+  injectsProviderFault?: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -1798,6 +1911,10 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   // A host error that names this session belongs to this case. The case is
   // its throwaway directory; the directory is what the suite gives it.
   harness.trackSession(sessionID, basename(directory));
+  // A case that injects a fault into its own turn gets the errors of that
+  // turn: the server writes the fault as an ERROR naming the session, and
+  // the fault is the case's own doing.
+  if (options.injectsProviderFault === true) harness.markFaultedSession(sessionID);
 
   // The board is an MCP server, and the server starts it when a session in
   // that directory begins. A tool call that arrives before the server is up
@@ -1821,47 +1938,54 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     });
   };
 
-  await ask();
-
   const timeoutMs = options.timeoutMs ?? TRIAL_BUDGET_MS;
-  await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
-
-  // The whole list, not only the last message: a climb puts a synthetic
-  // message at the end of the session, and the reply is the message before
-  // it.
-  let replyFrom: readonly unknown[] = await client.messages({ sessionID, directory });
-  const last = replyFrom.at(-1);
-
-  // A rate limited turn is the provider's answer, not the agent's. The free
-  // model tiers answer with 429 when a burst trips their limit, so the turn
-  // is asked again after a wait. The number of tries is bounded, so a
-  // provider that is down for good ends the turn instead of looping.
-  const attempts = options.rateLimitRetries ?? 2;
-  let providerError = providerErrorOf(last);
-  for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
-    const waitMs = (attempt + 1) * 30_000;
-    // The refusal is written down before the wait, not after it: a run that
-    // is slow because the provider refuses has to say so while it is slow.
-    // The loop is only entered when the turn was refused, so a turn that
-    // answered the first time is never reported.
-    options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
-    await sleep(waitMs);
+  try {
     await ask();
+
     await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
-    const again = await client.messages({ sessionID, directory });
-    const recovered = again.at(-1);
-    providerError = providerErrorOf(recovered);
-    if (providerError === undefined) {
-      // The turn came back. The reply is this one, not the refusal that
-      // came before it.
-      replyFrom = again;
-      break;
+
+    // The whole list, not only the last message: a climb puts a synthetic
+    // message at the end of the session, and the reply is the message before
+    // it.
+    let replyFrom: readonly unknown[] = await client.messages({ sessionID, directory });
+    const last = replyFrom.at(-1);
+
+    // A rate limited turn is the provider's answer, not the agent's. The free
+    // model tiers answer with 429 when a burst trips their limit, so the turn
+    // is asked again after a wait. The number of tries is bounded, so a
+    // provider that is down for good ends the turn instead of looping.
+    const attempts = options.rateLimitRetries ?? 2;
+    let providerError = providerErrorOf(last);
+    for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
+      const waitMs = (attempt + 1) * 30_000;
+      // The refusal is written down before the wait, not after it: a run that
+      // is slow because the provider refuses has to say so while it is slow.
+      // The loop is only entered when the turn was refused, so a turn that
+      // answered the first time is never reported.
+      options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
+      await sleep(waitMs);
+      await ask();
+      await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
+      const again = await client.messages({ sessionID, directory });
+      const recovered = again.at(-1);
+      providerError = providerErrorOf(recovered);
+      if (providerError === undefined) {
+        // The turn came back. The reply is this one, not the refusal that
+        // came before it.
+        replyFrom = again;
+        break;
+      }
     }
+
+    const { text, toolCalls } = replyPartsOf(replyFrom);
+
+    return { text, toolCalls, files: [], sessionID };
+  } catch (error) {
+    if (!isSessionGone(error)) throw error;
+    // The session is gone: a case removed it, and the turn produced nothing.
+    // The case's own expectations judge that, not the harness.
+    return { text: '', toolCalls: [], files: [], sessionID };
   }
-
-  const { text, toolCalls } = replyPartsOf(replyFrom);
-
-  return { text, toolCalls, files: [], sessionID };
 }
 
 /** How long the poll of the busy map sleeps between two checks. */
