@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { rotateAudit } from './audit.js';
+import { POLICIES, rotateAudit } from './audit.js';
 
 let dir: string;
 let path: string;
@@ -31,6 +31,13 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+});
+
+describe('the approval policies', () => {
+  it('names the grant and the use', () => {
+    expect(POLICIES.approveGranted).toEqual({ id: 'oa.approve.granted', version: 'v1' });
+    expect(POLICIES.approveUsed).toEqual({ id: 'oa.approve.used', version: 'v1' });
+  });
 });
 
 describe('rotateAudit', () => {

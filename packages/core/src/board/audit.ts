@@ -31,6 +31,8 @@ export const POLICIES = {
   budgetStop: { id: 'oa.budget.stop', version: 'v1' },
   budgetUsage: { id: 'oa.budget.usage', version: 'v1' },
   budgetWarn: { id: 'oa.budget.warn', version: 'v1' },
+  approveGranted: { id: 'oa.approve.granted', version: 'v1' },
+  approveUsed: { id: 'oa.approve.used', version: 'v1' },
 } as const;
 
 export async function appendAudit(path: string, entry: AuditInput): Promise<void> {
