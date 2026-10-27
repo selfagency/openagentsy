@@ -1,7 +1,7 @@
 import { isAbsolute, resolve } from 'node:path';
 import { findSecrets } from '@openagentsy/core';
 import { approvalGate, createApprovalStore } from './approvals.js';
-import { type PreToolCallEvent, readPreToolCall } from './event.js';
+import { isWritingTool, type PreToolCallEvent, readPreToolCall } from './event.js';
 import { isInside, pathSegments, projectName, worktreeRoot } from './paths.js';
 import type { HandlerResult, Rule } from './registry.js';
 
@@ -17,43 +17,117 @@ import type { HandlerResult, Rule } from './registry.js';
 const CONTINUE: HandlerResult = { continue: true };
 
 /**
- * The command with its quoted text taken out.
+ * The command, split into tokens.
  *
- * A message can hold anything, including the text of the rule that is
- * looking for it: `git commit -m "docs: note --no-verify"` is a commit
- * whose message talks about the flag. The quotes are stripped first, so
- * the rule reads the command and not the message.
+ * A quoted span is one token, so a command that is passed as a quoted
+ * argument stays one thing: `bash -c "git commit -n"` is three tokens and
+ * the third one holds the command. The quotes are kept, so the caller can
+ * tell a value from an argument.
  */
-export function stripQuoted(command: string): string {
-  return command.replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+export function tokenise(command: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: string | undefined;
+  for (const char of command) {
+    if (quote !== undefined) {
+      current += char;
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current !== '') {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current !== '') tokens.push(current);
+  return tokens;
 }
 
-/** A short flag cluster: `-n`, `-nm`, `-an`. */
-const SHORT_FLAG = /(?:^|\s)-([A-Za-z]+)/g;
+/**
+ * A token without its quotes.
+ */
+function unquote(token: string): string {
+  if (token.length < 2) return token;
+  const first = token[0];
+  const last = token[token.length - 1];
+  if ((first === '"' || first === "'") && first === last) return token.slice(1, -1);
+  return token;
+}
+
+/**
+ * The flags whose value is a message and not an argument.
+ */
+const MESSAGE_FLAGS = new Set(['-m', '--message', '-F', '--file']);
+
+/** The message flags that carry their value with an equals sign. */
+const MESSAGE_FLAG_PREFIXES = ['-m=', '--message=', '-F=', '--file='];
+
+/** The git subcommands whose arguments the hook rule reads. */
+const GIT_SUBCOMMANDS = new Set(['commit', 'merge', 'rebase']);
 
 /**
  * Whether a command skips the git hooks.
  *
  * The `-n` of `git commit` is the short form of `--no-verify`, and it is
- * caught in any position of the command: `git commit -n`,
- * `git commit -m "wip" -n`, `git commit -a -n` and `git commit -nm "wip"`
- * all skip the hooks. The long flag is read in the segment that names the
- * git command, and the quoted text is taken out first, so a commit whose
- * message talks about the flag is still a commit.
+ * caught in any position of the commit's own arguments:
+ * `git commit -n`, `git commit -m "wip" -n`, `git commit -a -n` and
+ * `git commit -nm "wip"` all skip the hooks. The value of a message flag
+ * is a message and not an argument, so it is dropped before anything is
+ * read: a commit whose message talks about the flag is still a commit.
+ * A command that is passed as a quoted argument is read too, so
+ * `bash -c "git commit -n"` is caught.
  */
 export function skipsGitHooks(command: string): boolean {
-  const bare = stripQuoted(command);
+  const tokens = tokenise(command);
+  const kept: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? '';
+    if (MESSAGE_FLAGS.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (MESSAGE_FLAG_PREFIXES.some((flag) => token.startsWith(flag))) continue;
+    kept.push(unquote(token));
+  }
+  const bare = kept.join(' ');
   if (/\bHUSKY=0\b/.test(bare)) return true;
   if (/\bcore\.hooksPath\b/.test(bare)) return true;
-  for (const segment of bare.split(/[|;&]/)) {
-    if (!/\bgit\b[^|;&]*\b(commit|merge|rebase)\b/.test(segment)) continue;
-    if (/--no-verify\b/.test(segment)) return true;
-    for (const match of segment.matchAll(SHORT_FLAG)) {
-      const cluster = match[1];
-      if (cluster?.includes('n')) return true;
-    }
+  return bare.split(/[|;&]/).some((segment) => segmentSkipsHooks(segment));
+}
+
+/**
+ * Whether a segment of a command skips the git hooks.
+ *
+ * The flags are read from the arguments of the git subcommand alone: the
+ * `-n` of `git merge` is `--no-stat`, the `-n` of `sudo` belongs to sudo,
+ * and after `--` a git command takes pathspecs.
+ */
+function segmentSkipsHooks(segment: string): boolean {
+  const tokens = segment.split(/\s+/).filter((token) => token.length > 0);
+  const gitIndex = tokens.indexOf('git');
+  if (gitIndex === -1) return false;
+  const subIndex = tokens.findIndex(
+    (token, index) => index > gitIndex && GIT_SUBCOMMANDS.has(token),
+  );
+  if (subIndex === -1) return false;
+  const args: string[] = [];
+  for (const token of tokens.slice(subIndex + 1)) {
+    if (token === '--') break;
+    args.push(token);
   }
-  return false;
+  if (args.some((token) => token.includes('--no-verify'))) return true;
+  // The -n is the short form of --no-verify for commit alone.
+  if (tokens[subIndex] !== 'commit') return false;
+  return args.some((token) => /^-([A-Za-z]+)$/.exec(token)?.[1]?.includes('n') === true);
 }
 
 /**
@@ -89,13 +163,16 @@ const PROTECTED_FILES = new Set([
 /** The directories a person changes. */
 const PROTECTED_DIRS = ['.opencode', '.husky', '.github/workflows', 'templates'];
 
-/** The state a person changes, under the state root. */
+/**
+ * The state a person changes, under the state root.
+ */
 const PROTECTED_STATE = [
   '.openagentsy/lessons',
   '.openagentsy/quality/waivers.json',
   '.openagentsy/conformance.json',
   '.openagentsy/memory.jsonl',
   '.openagentsy/approvals.json',
+  '.openagentsy/approvals.json.lock',
 ];
 
 /**
@@ -141,48 +218,65 @@ export function isProtected(path: string): boolean {
 const HUMAN_ONLY_TOOLS = ['oa_lesson_decide', 'oa_quality_waive', 'oa_memory_decide'];
 
 /**
- * Whether a flag makes a removal destructive.
- *
- * `rm` takes its flags in any order and in either spelling: `-rf`, `-fr`,
- * `-r -f` and `--recursive --force` are the same command.
+ * Whether a flag makes a removal recursive.
  */
-function isDestructiveFlag(flag: string): boolean {
-  if (flag.startsWith('--')) return flag === '--recursive' || flag === '--force';
+function isRecursiveFlag(flag: string): boolean {
+  if (flag.startsWith('--')) return flag === '--recursive';
   const letters = flag.slice(1);
-  return letters.includes('r') || letters.includes('f');
+  return letters.includes('r') || letters.includes('R');
 }
 
 /**
- * Whether a segment holds a destructive `rm`.
+ * Whether a flag makes a removal forced.
  */
-function hasDestructiveRm(segment: string): boolean {
-  const tokens = segment.split(/\s+/).filter((token) => token.length > 0);
+function isForceFlag(flag: string): boolean {
+  if (flag.startsWith('--')) return flag === '--force';
+  return flag.slice(1).includes('f');
+}
+
+/**
+ * Whether the text holds a destructive `rm`.
+ *
+ * The flags of the removal are read in any order and in either spelling,
+ * and the dangerous pair is a recursive removal and a force: `rm -rf`,
+ * `rm -fr`, `rm -r -f` and `rm --recursive --force` are the same command.
+ * A removal that is not both is not the dangerous one.
+ */
+function hasDestructiveRm(command: string): boolean {
+  const tokens = command.split(/\s+/).filter((token) => token.length > 0);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (token === undefined) continue;
     if (!/(^|\/)rm$/.test(token)) continue;
+    const flags: string[] = [];
     for (let next = index + 1; next < tokens.length; next += 1) {
       const flag = tokens[next];
       if (flag === undefined || !flag.startsWith('-')) break;
-      if (isDestructiveFlag(flag)) return true;
+      flags.push(flag);
     }
+    if (flags.some(isRecursiveFlag) && flags.some(isForceFlag)) return true;
   }
   return false;
 }
 
 /**
+ * The characters that separate one command from the next.
+ */
+const SEPARATORS = /[;&|()$`'"\\\n]/g;
+
+/**
  * Whether a command destroys something.
  *
- * The command is split on the separators, so a destructive command behind
- * a `;`, an `&&` or a `|` is still one, and the flags of `rm` are read in
- * any order and in either spelling.
+ * The separators and the quotes are flattened, so a destructive command
+ * inside a substitution or inside a quoted argument is still one:
+ * `echo $(rm -rf /)` and `bash -c "rm -rf /"` are both caught.
  */
 export function isDestructiveCommand(command: string): boolean {
-  const bare = stripQuoted(command);
+  const bare = command.replace(SEPARATORS, ' ');
   if (/\bgit\s+push\s+--force\b/i.test(bare)) return true;
   if (/\bgit\s+reset\s+--hard\b/i.test(bare)) return true;
   if (/\bdrop\s+table\b/i.test(bare)) return true;
-  return bare.split(/[|;&\n]+/).some((segment) => hasDestructiveRm(segment));
+  return hasDestructiveRm(bare);
 }
 
 /**
@@ -225,6 +319,17 @@ function addedLines(patch: string): string {
  */
 function absolutePath(root: string, path: string): string {
   return isAbsolute(path) ? path : resolve(root, path);
+}
+
+/**
+ * Whether a call writes a file.
+ *
+ * A call writes when the tool is one that writes, or when the host said
+ * which files the call touches. A read that names a file is a read, and a
+ * read of a policy file has to stay possible.
+ */
+function writesFiles(call: PreToolCallEvent): boolean {
+  return isWritingTool(call.toolName) || call.files.length > 0;
 }
 
 /** The options the default rules are built with. */
@@ -283,6 +388,7 @@ export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions)
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined) return CONTINUE;
+        if (!writesFiles(call)) return CONTINUE;
         const outside = call.files.some((file) =>
           [file.path, file.fromPath]
             .filter((path): path is string => path !== undefined)
@@ -302,6 +408,7 @@ export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions)
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined) return CONTINUE;
+        if (!writesFiles(call)) return CONTINUE;
         const touched = call.files.some(
           (file) =>
             (file.path !== undefined && isProtected(file.path)) ||
@@ -341,6 +448,7 @@ export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions)
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined) return CONTINUE;
+        if (!writesFiles(call)) return CONTINUE;
         const content = contentOf(call);
         if (content === '') return CONTINUE;
         if (findSecrets(content).length === 0) return CONTINUE;

@@ -34,7 +34,7 @@ beforeEach(async () => {
   workspace = join(base, WORKSPACE_NAME);
   await mkdir(workspace, { recursive: true });
   stateRoot = await mkdtemp(join(tmpdir(), 'oa-state-'));
-  rules = defaultRules({ workspace, stateRoot });
+  rules = defaultRules({ workspace, stateRoot, home: '/home/dev' });
 });
 
 function ruleOf(id: string): Rule {
@@ -128,6 +128,29 @@ describe('no-skip-git-hooks', () => {
     expect(continues(result)).toBe(true);
   });
 
+  it('blocks a commit that is passed as a quoted argument', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('bash -c "git commit -n"')))).toBe(
+      false,
+    );
+    expect(
+      continues(await decide('no-skip-git-hooks', shell('bash -c "git commit --no-verify"'))),
+    ).toBe(false);
+    expect(
+      continues(await decide('no-skip-git-hooks', shell('bash -c "HUSKY=0 git commit -m x"'))),
+    ).toBe(false);
+  });
+
+  it('lets a -n that belongs to another command through', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('git merge -n')))).toBe(true);
+    expect(continues(await decide('no-skip-git-hooks', shell('git rebase -n')))).toBe(true);
+    expect(continues(await decide('no-skip-git-hooks', shell('sudo -n git commit -m x')))).toBe(
+      true,
+    );
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit -m add -- -n')))).toBe(
+      true,
+    );
+  });
+
   it('lets an ordinary commit through', async () => {
     expect(continues(await decide('no-skip-git-hooks', shell('git commit -m "wip"')))).toBe(true);
   });
@@ -171,15 +194,31 @@ describe('workspace-writes-only', () => {
 
   it('lets a write inside a worktree of the project through', async () => {
     // The path is pinned, so the test fails when the rule looks in the
-    // wrong place, and the home is pinned with it.
-    const local = defaultRules({ workspace, stateRoot, home: '/home/dev' });
-    const rule = local.find((entry) => entry.id === 'workspace-writes-only');
-    const result = await rule?.handler({
+    // wrong place.
+    const result = await decide('workspace-writes-only', {
       toolName: 'write',
       args: { filePath: '/home/dev/.openagentsy/worktrees/oa-workspace-fixture/src/a.ts' },
       files: [],
     });
-    expect(continues(result ?? { continue: true })).toBe(true);
+    expect(continues(result)).toBe(true);
+  });
+
+  it('lets a read of a file through', async () => {
+    const result = await decide('workspace-writes-only', {
+      toolName: 'read',
+      args: { filePath: '/etc/passwd' },
+      files: [],
+    });
+    expect(continues(result)).toBe(true);
+  });
+
+  it('lets a search through', async () => {
+    const result = await decide('workspace-writes-only', {
+      toolName: 'grep',
+      args: { path: '/tmp' },
+      files: [],
+    });
+    expect(continues(result)).toBe(true);
   });
 
   it('lets a call that touches no file through', async () => {
@@ -216,6 +255,21 @@ describe('protect-policy', () => {
       const result = await decide('protect-policy', write(path));
       expect(continues(result), path).toBe(false);
     }
+  });
+
+  it('blocks the lock of the approval store', async () => {
+    expect(isProtected('.openagentsy/approvals.json.lock')).toBe(true);
+    const result = await decide('protect-policy', write('.openagentsy/approvals.json.lock'));
+    expect(continues(result)).toBe(false);
+  });
+
+  it('lets a read of a policy file through', async () => {
+    const result = await decide('protect-policy', {
+      toolName: 'read',
+      args: { filePath: '.opencode/skills/openagentsy-review/SKILL.md' },
+      files: [],
+    });
+    expect(continues(result)).toBe(true);
   });
 
   it('lets an ordinary file through', async () => {
@@ -331,6 +385,28 @@ describe('destructive-needs-approval', () => {
       shell('rm -rf /', { callID: 'call-9' }),
     );
     expect(continues(second)).toBe(false);
+  });
+
+  it('lets a removal that is not both recursive and forced through', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('rm -r build')))).toBe(true);
+    expect(continues(await decide('destructive-needs-approval', shell('rm -R build')))).toBe(true);
+    expect(continues(await decide('destructive-needs-approval', shell('rm -f /tmp/x')))).toBe(true);
+  });
+
+  it('blocks a recursive and forced removal in any spelling', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('rm -Rf /')))).toBe(false);
+  });
+
+  it('blocks a destructive command inside a substitution', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('echo $(rm -rf /)')))).toBe(
+      false,
+    );
+  });
+
+  it('blocks a destructive command inside a quoted argument', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('bash -c "rm -rf /"')))).toBe(
+      false,
+    );
   });
 
   it('lets an ordinary command through', async () => {

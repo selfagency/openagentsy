@@ -40,6 +40,24 @@ export interface PreToolCallEvent {
 const PATH_ARGS = ['filePath', 'file_path', 'path', 'file'];
 
 /**
+ * The tools that write a file.
+ *
+ * A tool that reads names a file too, and a read of a policy file has to
+ * stay possible, so the file rules are about the tools that write.
+ */
+const WRITING_TOOLS = ['write', 'edit', 'multi_edit', 'patch', 'apply_patch'];
+
+/**
+ * Whether a tool writes a file.
+ *
+ * The name is the base name of the tool, so a tool that a host prefixes
+ * is the same tool.
+ */
+export function isWritingTool(toolName: string): boolean {
+  return WRITING_TOOLS.some((tool) => toolName === tool || toolName.endsWith(`_${tool}`));
+}
+
+/**
  * The event, when it is a tool call.
  *
  * The host hands the raw arguments over, and the rules read the normalised
@@ -56,10 +74,13 @@ export function readPreToolCall(event: unknown): PreToolCallEvent | undefined {
   const args = isArgs(candidate.args) ? candidate.args : {};
   const files = fileRefs(candidate.files);
   const command = readString(candidate.command) ?? readString(args['command']);
+  // The file is read out of the arguments for the tools that write. A
+  // read names a file as well, and that is not a write.
+  const inferred = isWritingTool(candidate.toolName) ? filesFromArgs(args) : [];
   return {
     toolName: candidate.toolName,
     args,
-    files: files.length > 0 ? files : filesFromArgs(args),
+    files: files.length > 0 ? files : inferred,
     ...(command !== undefined ? { command } : {}),
     ...(typeof candidate.callID === 'string' ? { callID: candidate.callID } : {}),
     ...(typeof candidate.role === 'string' ? { role: candidate.role } : {}),

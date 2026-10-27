@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -76,6 +76,17 @@ describe('the approval store', () => {
     await store.approve('second', 1000, 60_000);
     const raw = JSON.parse(await readFile(store.path, 'utf8'));
     expect(raw).toHaveLength(2);
+  });
+
+  it('takes over a lock that was left behind', async () => {
+    const store = createApprovalStore(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${store.path}.lock`;
+    await writeFile(lockPath, '', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+    const entry = await store.approve('call-1', 1000, 60_000);
+    expect(entry.callID).toBe('call-1');
   });
 
   it('refuses to grant on a store it cannot read', async () => {

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { readPreToolCall } from './event.js';
@@ -110,11 +110,31 @@ async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
       };
     } catch (error) {
       if (!isFileError(error, 'EEXIST')) throw error;
+      if (await reclaimStaleLock(lockPath)) continue;
       if (Date.now() > deadline) {
         throw new Error(`the approval store is locked by another writer: ${lockPath}`);
       }
       await sleep(LOCK_RETRY_MS);
     }
+  }
+}
+
+/**
+ * A lock that outlived its writer is taken over.
+ *
+ * A crash leaves the lock behind, and a lock that nobody will release
+ * holds the store shut: the approval could not be given. A lock older
+ * than the timeout is stale, so it is removed and the writer tries again.
+ */
+async function reclaimStaleLock(lockPath: string): Promise<boolean> {
+  try {
+    const stats = await stat(lockPath);
+    if (Date.now() - stats.mtimeMs <= LOCK_TIMEOUT_MS) return false;
+    await rm(lockPath, { force: true });
+    return true;
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) return true;
+    throw error;
   }
 }
 
