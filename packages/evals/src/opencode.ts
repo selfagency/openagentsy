@@ -955,6 +955,15 @@ export function killSessionWhenItAppears(
   // re-aborted; a builder the Lead legitimately re-dispatches is a new
   // session id and is never touched.
   const suppressMs = options.suppressMs ?? 60_000;
+  // A dispatched child can finish a small task before the server ever gives
+  // it a title (measured 2026-10-27: a one-line hello.txt completed with
+  // the session still untitled, the title match never fired, and the fault
+  // did not land). The sessions the watch started with are the harness's
+  // own - the case's session, an already-running judge - so a session that
+  // is NEW since the first poll is the dispatched child, titled or not. A
+  // baseline member that gains a matching title later is still caught by
+  // the title test, which covers a child that raced into the baseline.
+  let baseline: Set<string> | undefined;
   let stopped = false;
   const suppress = async (id: string): Promise<void> => {
     for (let elapsed = 0; elapsed < suppressMs && !stopped; elapsed += intervalMs) {
@@ -971,9 +980,16 @@ export function killSessionWhenItAppears(
     for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
       try {
         const listed = await client.session.list({ query: { directory } });
-        const hit = (listed.data ?? []).find(
-          (session) => session.title !== undefined && matches(session.title),
+        const sessions = listed.data ?? [];
+        const ids = new Set(
+          sessions.map((session) => session.id).filter((id): id is string => id !== undefined),
         );
+        if (baseline === undefined) baseline = ids;
+        const hit = sessions.find((session) => {
+          if (session.id === undefined) return false;
+          if (session.title !== undefined) return matches(session.title);
+          return !baseline?.has(session.id);
+        });
         if (hit?.id !== undefined) {
           await client.session.abort({ path: { id: hit.id }, query: { directory } });
           void suppress(hit.id);

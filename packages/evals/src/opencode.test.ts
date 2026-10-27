@@ -334,6 +334,39 @@ describe('host errors the case injected', () => {
     expect(faults[0]?.sessionID).toBe('ses_other');
   });
 
+  it('kills an untitled child that is new since the watch started', async () => {
+    // The measured race: a dispatched builder finished a one-line task before
+    // the server gave its session a title, so the title match never fired. A
+    // session that is NEW since the first poll is the child, titled or not.
+    const lists = [
+      { data: [{ id: 'ses_lead', title: 'eval agentsy' }] },
+      { data: [{ id: 'ses_lead', title: 'eval agentsy' }, { id: 'ses_child' }] },
+    ];
+    const aborted: string[] = [];
+    const client = {
+      session: {
+        list: async () => lists.shift() ?? { data: [] },
+        abort: async ({ path }: { path: { id: string } }) => {
+          aborted.push(path.id);
+          return {};
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 2,
+      intervalMs: 1,
+      suppressMs: 1,
+    });
+    const killedSession = await watch.killed;
+    watch.stop();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(killedSession).toBe('ses_child');
+    expect(aborted.length).toBeGreaterThanOrEqual(1);
+    expect(aborted.every((id) => id === 'ses_child')).toBe(true);
+  });
+
   it('keeps aborting the killed session after the first kill', async () => {
     // The measured defect: one abort cancelled the in-flight generation, the
     // session's loop resumed, and the child kept generating for nineteen
