@@ -12,9 +12,11 @@ import { detectNoProgressAtPath, recordWasteRows } from '@openagentsy/ledger';
  * flagged: the session is never held up by it, and the flag goes to the
  * Accountability block instead.
  *
- * The module is pure. It reads the board through the core's board API and
- * takes the board's reader as an argument, so a test can hand it a status
- * without a database, and it never opens a database itself.
+ * `observeSessionIdle` is pure: it reads the board through the reader it
+ * is given and opens nothing. `recordNoProgressRounds` does I/O — it writes
+ * the ledger, and the ledger's detector opens the board read-only — and it
+ * can throw. The bridge must catch that throw: the `session.idle` hook is
+ * not awaited, so a throw there is a broken session and not a failed check.
  */
 
 /** A finding: the report and the board disagree. */

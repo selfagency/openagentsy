@@ -292,4 +292,39 @@ describe('the regeneration check', () => {
       await chmod(dir, 0o755);
     }
   });
+
+  it('does not present a skipped check as a clean tree', async () => {
+    // A hand-written agent file beside ours may name the other target, and
+    // then the tree cannot be judged. The doctor says the check did not
+    // run, instead of saying the tree is clean.
+    await buildAgents(root, 'v2');
+    await writeFile(
+      join(root, '.opencode', 'agents', 'my-helper.md'),
+      '---\ndescription: a helper\nmode: primary\npermission: {}\n---\n\nbody\n',
+      'utf8',
+    );
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.error).toBeDefined();
+    expect(report.regeneration.drifted).toEqual([]);
+    expect(
+      report.warnings.some((entry) => entry.includes('the regeneration check did not run')),
+    ).toBe(true);
+  });
+
+  it('does not present a skipped check as a clean tree after a hand edit', async () => {
+    // The hand edit the check exists for: one file's permission map became
+    // the other target's key, and the tree can no longer be judged.
+    await buildAgents(root, 'v1');
+    const file = join(root, '.opencode', 'agents', 'oa-builder.md');
+    const content = await readFile(file, 'utf8');
+    await writeFile(file, content.replace('permission:', 'permissions:'), 'utf8');
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.error).toBeDefined();
+    expect(report.regeneration.drifted).toEqual([]);
+    expect(
+      report.warnings.some((entry) => entry.includes('the regeneration check did not run')),
+    ).toBe(true);
+  });
 });

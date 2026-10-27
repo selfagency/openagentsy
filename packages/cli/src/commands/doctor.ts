@@ -463,7 +463,7 @@ function targetOfAgentFile(content: string): Target | undefined {
 }
 
 /**
- * The target the installed files say they were built for.
+ * The targets the installed files say they were built for.
  *
  * The doctor cannot recover the target a project was built for from the
  * OpenCode it finds on PATH: a project built for v2 on a machine with v1
@@ -471,20 +471,48 @@ function targetOfAgentFile(content: string): Target | undefined {
  * wrong target would flag every file. The installed files say which target
  * they are, so the files are what the check asks.
  */
-function installedTarget(files: Map<string, string>): Target | undefined {
+function installedTargets(files: Map<string, string>): Set<Target> {
   const targets = new Set<Target>();
   for (const content of files.values()) {
     const target = targetOfAgentFile(content);
     if (target !== undefined) targets.add(target);
   }
-  if (targets.size !== 1) return undefined;
-  return [...targets][0];
+  return targets;
+}
+
+/** The target the installed files agree on, or why there is none. */
+type TargetVerdict = {
+  target: Target | undefined;
+  error?: string | undefined;
+};
+
+/**
+ * The target the installed files name, and the reason when they do not.
+ *
+ * A tree whose target cannot be read is a tree the check cannot judge: the
+ * skip is reported, never presented as a clean tree.
+ */
+function judgeTarget(files: Map<string, string>): TargetVerdict {
+  const targets = installedTargets(files);
+  if (targets.size === 1) {
+    const [target] = targets;
+    return { target };
+  }
+  return {
+    target: undefined,
+    error:
+      targets.size === 0
+        ? 'no installed agent file says which target it was built for'
+        : `the installed agent files disagree about the target: ${[...targets].sort().join(', ')}`,
+  };
 }
 
 /** What the regeneration check found, and the target it judged. */
 type RegenerationDiff = {
   drifted: string[];
   target: Target | undefined;
+  /** Why the check did not run, when it did not run. */
+  error?: string | undefined;
 };
 
 /**
@@ -501,9 +529,17 @@ async function regenerationDiff(root: string, ours: Set<string>): Promise<Regene
   if (!(await fileExists(installedDir))) return { drifted: [], target: undefined };
 
   const installed = await agentFiles(installedDir);
-  const target = installedTarget(installed);
-  // A tree whose target cannot be read is not a tree this check can judge.
-  if (target === undefined) return { drifted: [], target: undefined };
+  // A tree with no agent files has nothing to drift from.
+  if (installed.size === 0) return { drifted: [], target: undefined };
+
+  // The check cannot judge a tree whose target cannot be read: rendering it
+  // for the wrong target would flag every file, and saying nothing would say
+  // the tree is clean. A skip is reported as a failure.
+  const verdict = judgeTarget(installed);
+  if (verdict.target === undefined) {
+    return { drifted: [], target: undefined, error: verdict.error };
+  }
+  const target = verdict.target;
 
   const temp = await mkdtemp(join(tmpdir(), 'openagentsy-regeneration-'));
   try {
@@ -543,6 +579,7 @@ async function regenerationReport(root: string, roles: RolesFile): Promise<Regen
       drifted: diff.drifted,
       reconcile:
         diff.target === undefined ? RECONCILE_BUILD : `${RECONCILE_BUILD} --target ${diff.target}`,
+      ...(diff.error === undefined ? {} : { error: diff.error }),
     };
   } catch (error) {
     return {
@@ -732,7 +769,7 @@ function phase2Lines(effective: Phase2Config): string[] {
  * The lines about the generated files that disagree with a fresh render.
  *
  * A tree the generator wrote has nothing to say here, so the section is
- * only there when something drifted.
+ * only there when something drifted or the check could not run.
  */
 function regenerationLines(report: RegenerationReport): string[] {
   const lines = ['Regeneration'];
@@ -740,7 +777,15 @@ function regenerationLines(report: RegenerationReport): string[] {
   for (const entry of report.drifted) {
     lines.push(`  - ${entry}`);
   }
+  if (report.error !== undefined) {
+    lines.push(field('error', report.error));
+  }
   return lines;
+}
+
+/** Whether the report has something to say about the generated files. */
+function hasRegenerationFinding(report: RegenerationReport): boolean {
+  return report.drifted.length > 0 || report.error !== undefined;
 }
 
 export function formatDoctorReport(report: DoctorReport): string {
@@ -774,7 +819,7 @@ export function formatDoctorReport(report: DoctorReport): string {
     }
   }
 
-  if (report.regeneration.drifted.length > 0) {
+  if (hasRegenerationFinding(report.regeneration)) {
     lines.push('');
     lines.push(...regenerationLines(report.regeneration));
   }
