@@ -1117,19 +1117,18 @@ export function attributeHostErrors(
  * up resolves undefined and contributes nothing.
  *
  * One more class is exempt, and only one: a file watcher that could not
- * attach to a directory this run created (see `isCaseDirWatcherFault`). It is
- * reported, but it does not fail the run.
+ * attach (see `isWatcherFailure`). It is reported, but it does not fail the
+ * run.
  */
 export function splitHostErrors(
   blocks: readonly HostErrorBlock[],
   killedSessions: ReadonlySet<string>,
-  caseDirs: ReadonlySet<string>,
 ): HostErrorBlocks {
   const faults: HostErrorBlock[] = [];
   const exempted: HostErrorBlock[] = [];
   for (const block of blocks) {
     if (block.sessionID !== undefined && killedSessions.has(block.sessionID)) continue;
-    if (isCaseDirWatcherFault(block, caseDirs)) {
+    if (isWatcherFailure(block)) {
       exempted.push(block);
       continue;
     }
@@ -1142,9 +1141,8 @@ export function splitHostErrors(
 export function hostFaults(
   blocks: readonly HostErrorBlock[],
   killedSessions: ReadonlySet<string>,
-  caseDirs: ReadonlySet<string> = new Set(),
 ): HostErrorBlock[] {
-  return splitHostErrors(blocks, killedSessions, caseDirs).faults;
+  return splitHostErrors(blocks, killedSessions).faults;
 }
 
 /**
@@ -1175,33 +1173,36 @@ export function logFields(line: string): Map<string, string> {
 }
 
 /**
- * Is this error the file watcher failing to attach to a throwaway directory?
+ * Is this error a file watcher that could not attach?
  *
  * The measured line (2026-10-27, macOS) is:
  *
  *   level=ERROR … message="failed to subscribe" directory=/…/openagentsy-eval-seeded-bug-cwZs34/.git cause="Error: Error starting FSEvents stream …"
  *
- * A watcher that cannot attach to a directory the harness itself created is
- * not a failure of the agent's environment in any way the agent could be
- * measured against: no tool call depends on it, the case's own state is
- * complete, and the verdict does not change. The same message on any other
- * path is a real host fault and still fails the run.
+ * The policy of the suite is that a case which passed while the host failed
+ * did not measure the agent. The failures that make a passing case
+ * meaningless are a model that refused, a tool that broke and a server that
+ * died. A watcher that could not subscribe is none of those: no tool call
+ * depends on it, and the state of the case on disk, on the board and in the
+ * audit log is complete. So a watcher that cannot attach is never a host
+ * fault, on any path.
  *
- * The exemption is bounded by the directories this run created, not by a
- * shape a path happens to have: a directory that only looks like a case
- * directory is not one.
+ * The path does not decide, and it is not the path the error names that
+ * matters. The OpenCode 1 server watched the directory of the case, and the
+ * OpenCode 2 server watches the machine's global skill directories as well;
+ * the watcher cannot attach to those either, and the same noise came back
+ * through a different path.
+ *
+ * The error has to name the directory it could not watch: a failure to
+ * subscribe that names no directory is not a file watcher, and the harness
+ * reads the event stream, so a stream that cannot be subscribed to is a fault
+ * of the host.
  */
-export function isCaseDirWatcherFault(
-  block: HostErrorBlock,
-  caseDirs: ReadonlySet<string>,
-): boolean {
-  // The fields are on the header line; the lines under it are the stack.
-  const header = block.line.split('\n', 1)[0] ?? '';
-  const fields = logFields(header);
+export function isWatcherFailure(block: HostErrorBlock): boolean {
+  const fields = logFields(block.line.split('\n', 1)[0] ?? '');
   if (fields.get('message') !== WATCHER_FAILURE) return false;
   const directory = fields.get('directory');
-  if (directory === undefined || directory === '') return false;
-  return [...caseDirs].some((dir) => isWithin(dir, directory));
+  return directory !== undefined && directory !== '';
 }
 
 /** Is the path the directory itself, or a path under it? */
@@ -1211,15 +1212,40 @@ function isWithin(dir: string, path: string): boolean {
 }
 
 /**
+ * Is this watcher failure on a throwaway directory of this run?
+ *
+ * The report tells the reader where the failure was, and a directory that
+ * only looks like a case directory is not one.
+ */
+function onCaseDir(error: HostError, caseDirs: ReadonlySet<string>): boolean {
+  const directory = logFields(error.line.split('\n', 1)[0] ?? '').get('directory');
+  if (directory === undefined || directory === '') return false;
+  return [...caseDirs].some((dir) => isWithin(dir, directory));
+}
+
+/**
  * The line the run reports the exempted errors with.
  *
  * The count and the first error are both in it: a run that hides the errors
- * it ignored is a run that lies about what happened.
+ * it ignored is a run that lies about what happened. The path is in it too,
+ * because the reader has to see whether the watcher failed on a directory of
+ * this run or on a path of the machine, and the two say different things.
  */
-export function watcherExemptionLine(exempted: readonly HostError[]): string {
+export function watcherExemptionLine(
+  exempted: readonly HostError[],
+  caseDirs: ReadonlySet<string> = caseDirsOfRun(),
+): string {
   const first = exempted[0];
   const detail = first === undefined ? '' : `\n  ${first.line.replace(/\n/g, '\n  ')}`;
-  return `the opencode server wrote ${exempted.length} watcher error(s) on a throwaway directory this run created; a watcher that cannot attach is not a host fault:${detail}`;
+  const onCase = exempted.filter((error) => onCaseDir(error, caseDirs)).length;
+  return `the opencode server wrote ${exempted.length} watcher error(s)${watcherErrorsWhere(onCase, exempted.length)}; a watcher that cannot attach is not a host fault:${detail}`;
+}
+
+/** Where the exempted watcher failures were. */
+function watcherErrorsWhere(onCase: number, total: number): string {
+  if (onCase === total) return ' on a throwaway directory of this run';
+  if (onCase === 0) return ' on another path';
+  return `: ${onCase} on a throwaway directory of this run, ${total - onCase} on another path`;
 }
 
 /**
@@ -1238,7 +1264,6 @@ export async function readHostErrors(
   fromOffset = 0,
   sessions: ReadonlyMap<string, string> = new Map(),
   killedSessions: ReadonlySet<string> = new Set(),
-  caseDirs: ReadonlySet<string> = caseDirsOfRun(),
 ): Promise<HostErrorReport> {
   let bytes: Buffer;
   try {
@@ -1260,7 +1285,6 @@ export async function readHostErrors(
   const split = splitHostErrors(
     hostErrorsIn(bytes.subarray(start).toString('utf8')),
     killedSessions,
-    caseDirs,
   );
   return {
     faults: attributeHostErrors(split.faults, sessions),
@@ -2088,9 +2112,10 @@ export function parseModel(model: string): { providerID: string; modelID: string
  * The throwaway directories this run created.
  *
  * The suite makes one per case, under the OS temp dir, and the server names
- * the directory in the error it writes when its watcher cannot attach. This
- * list is what tells that error apart from the same error on a path that
- * belongs to the person running the suite.
+ * the directory in the error it writes when its watcher cannot attach. The
+ * fault does not depend on the path, but the report does: this list is what
+ * tells the reader whether the watcher failed on a directory of this run or
+ * on a path of the machine.
  *
  * A directory stays in the list after its case is over: the error is written
  * while the case runs and read at teardown, when the directory is gone.

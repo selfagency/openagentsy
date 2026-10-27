@@ -9,7 +9,7 @@ import {
   readAudit,
   readRecords,
 } from './fixture.js';
-import { judge } from './judge.js';
+import { DEFAULT_JUDGE_MODEL, judge } from './judge.js';
 import {
   answerPermissions,
   createCaseDir,
@@ -47,7 +47,7 @@ import { SCENARIOS, type Scenario, selectCases } from './scenarios.js';
 const ENABLED = process.env.OPENAGENTSY_EVAL === '1';
 const REPO_ROOT = process.env.OPENAGENTSY_REPO_ROOT ?? join(import.meta.dirname, '..', '..', '..');
 const MODEL = process.env.OPENAGENTSY_EVAL_MODEL;
-const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? 'opencode-go/minimax-m3.1-flash';
+const JUDGE_MODEL = process.env.OPENAGENTSY_EVAL_JUDGE_MODEL ?? DEFAULT_JUDGE_MODEL;
 
 /**
  * The files that changed since the last known good state.

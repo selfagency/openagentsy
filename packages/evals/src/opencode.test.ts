@@ -13,7 +13,7 @@ import {
   hostFaults,
   IdleRegistry,
   idleSessionOf,
-  isCaseDirWatcherFault,
+  isWatcherFailure,
   killSessionWhenItAppears,
   logFields,
   permissionPatterns,
@@ -609,13 +609,19 @@ describe('host errors the case injected', () => {
  * Measured on 2026-10-27 on macOS: the server opens a watcher on the
  * directory a case serves, and FSEvents refuses to open a stream for a path
  * under the OS temp dir. This error was the whole content of the teardown
- * failure of every run on that machine.
+ * failure of every run on that machine. The OpenCode 2 server watches the
+ * machine's global skill directories as well, and the same error lands there.
  */
 function watcherError(directory: string): string {
   return `timestamp=2026-10-27T15:34:58.573Z level=ERROR run=bc5593e8 message="failed to subscribe" directory=${directory} cause="Error: Error starting FSEvents stream ..."`;
 }
 
-describe('a watcher on a throwaway directory', () => {
+/** An ERROR that is not a watcher failure, on any path. */
+function otherError(directory: string): string {
+  return `timestamp=2026-10-27T15:34:58.573Z level=ERROR run=bc5593e8 message="prompt_async failed" directory=${directory} cause="Error: EffectDrizzleQueryError"`;
+}
+
+describe('a watcher that cannot attach', () => {
   it('does not treat a watcher that cannot attach to a case directory as a host fault', async () => {
     const dir = await createCaseDir('watcher-probe');
     try {
@@ -625,7 +631,6 @@ describe('a watcher on a throwaway directory', () => {
       const split = splitHostErrors(
         hostErrorsIn(watcherError(join(resolved, '.git'))),
         new Set<string>(),
-        caseDirsOfRun(),
       );
 
       expect(split.faults).toEqual([]);
@@ -636,22 +641,24 @@ describe('a watcher on a throwaway directory', () => {
     }
   });
 
-  it('keeps the same error on a path outside the case directories', () => {
+  it('does not treat a watcher that cannot attach on any other path as a host fault', () => {
+    // The OpenCode 2 server also watches the machine's global skill
+    // directories, and the watcher cannot attach to those either. The path is
+    // not what decides: a watcher that cannot attach is not a host fault, and
+    // a case that passed while the host failed did not measure the agent.
     const split = splitHostErrors(
-      hostErrorsIn(watcherError('/Users/someone/project/.git')),
+      hostErrorsIn(watcherError('/Users/someone/.claude/skills')),
       new Set<string>(),
-      caseDirsOfRun(),
     );
 
-    expect(split.faults).toHaveLength(1);
-    expect(split.exempted).toEqual([]);
+    expect(split.faults).toEqual([]);
+    expect(split.exempted).toHaveLength(1);
   });
 
-  it('keeps a different error raised in the same case directory', async () => {
+  it('keeps a different error raised in a case directory', async () => {
     const dir = await createCaseDir('watcher-probe');
     try {
-      const other = `timestamp=2026-10-27T15:34:58.573Z level=ERROR run=bc5593e8 message="prompt_async failed" directory=${join(dir, '.git')} cause="Error: EffectDrizzleQueryError"`;
-      const split = splitHostErrors(hostErrorsIn(other), new Set<string>(), caseDirsOfRun());
+      const split = splitHostErrors(hostErrorsIn(otherError(join(dir, '.git'))), new Set<string>());
 
       expect(split.faults).toHaveLength(1);
       expect(split.exempted).toEqual([]);
@@ -660,20 +667,36 @@ describe('a watcher on a throwaway directory', () => {
     }
   });
 
-  it('keeps the error on a directory that only looks like a case directory', async () => {
+  it('keeps a different error raised on any other path', () => {
+    const split = splitHostErrors(
+      hostErrorsIn(otherError('/Users/someone/project/.git')),
+      new Set<string>(),
+    );
+
+    expect(split.faults).toHaveLength(1);
+    expect(split.exempted).toEqual([]);
+  });
+
+  it('does not mistake a look-alike path for a case directory in the report', async () => {
     const dir = await createCaseDir('watcher-probe');
     try {
-      // The exemption is for the directories this run created, not for a
-      // path whose name resembles one.
+      // The path no longer decides the fault: the watcher could not attach,
+      // and that is not a host fault wherever it happened.
       const lookalike = `${dir}-other/.git`;
-      const split = splitHostErrors(
-        hostErrorsIn(watcherError(lookalike)),
-        new Set<string>(),
+      const split = splitHostErrors(hostErrorsIn(watcherError(lookalike)), new Set<string>());
+
+      expect(split.faults).toEqual([]);
+      expect(split.exempted).toHaveLength(1);
+
+      // The report is where the path still matters, and a sibling with the
+      // same prefix is not a directory of this run.
+      const line = watcherExemptionLine(
+        attributeHostErrors(split.exempted, new Map()),
         caseDirsOfRun(),
       );
 
-      expect(split.faults).toHaveLength(1);
-      expect(split.exempted).toEqual([]);
+      expect(line).toContain('on another path');
+      expect(line).not.toContain('throwaway directory of this run');
     } finally {
       await removeCaseDir(dir);
     }
@@ -685,9 +708,11 @@ describe('a watcher on a throwaway directory', () => {
       const split = splitHostErrors(
         hostErrorsIn(`${watcherError(join(dir, '.git'))}\n${watcherError(join(dir, '.git'))}`),
         new Set<string>(),
+      );
+      const line = watcherExemptionLine(
+        attributeHostErrors(split.exempted, new Map()),
         caseDirsOfRun(),
       );
-      const line = watcherExemptionLine(attributeHostErrors(split.exempted, new Map()));
 
       expect(line).toContain('2 watcher error(s)');
       expect(line).toContain('failed to subscribe');
@@ -703,7 +728,7 @@ describe('a watcher on a throwaway directory', () => {
     const dir = await createCaseDir('watcher-probe');
     try {
       // The other error in the same log is still a fault: the exemption is
-      // for one message on one path, not for the log.
+      // for one kind of error, not for the log.
       await writeFile(log, `${watcherError(join(dir, '.git'))}\n${ERROR_BLOCK}\n`, 'utf8');
 
       const report = await readHostErrors(log, 0);
@@ -717,13 +742,13 @@ describe('a watcher on a throwaway directory', () => {
     }
   });
 
-  it('tells a watcher failure on a case directory from one on any other path', () => {
-    const block = { line: watcherError('/tmp/case/.git') };
-
-    expect(isCaseDirWatcherFault(block, new Set(['/tmp/case']))).toBe(true);
-    expect(isCaseDirWatcherFault(block, new Set(['/tmp/other']))).toBe(false);
-    // The path is inside the directory, not a sibling with the same prefix.
-    expect(isCaseDirWatcherFault(block, new Set(['/tmp/case-other']))).toBe(false);
+  it('tells a watcher failure from any other error, whatever the path', () => {
+    expect(isWatcherFailure({ line: watcherError('/tmp/case/.git') })).toBe(true);
+    expect(isWatcherFailure({ line: otherError('/tmp/case/.git') })).toBe(false);
+    // A failure to subscribe that names no directory is not a file watcher:
+    // the harness reads the event stream, and a stream that cannot be
+    // subscribed to is a fault of the host.
+    expect(isWatcherFailure({ line: 'level=ERROR message="failed to subscribe"' })).toBe(false);
   });
 
   it('reads the fields of a log line, and a field inside a quoted value is not a field', () => {
