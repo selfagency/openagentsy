@@ -5,6 +5,7 @@
     "patterns": ["packages/*"]
   },
   "ignorePatterns": ["packages/quality/fixtures/**"],
+  "ignoreFindings": ["packages/evals/scripts/**"],
   "ignoreDependencies": ["@openagentsy/adapter-opencode"],
   "health": {
     "maxCrap": 60
