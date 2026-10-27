@@ -1,4 +1,4 @@
-import { and, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { agentAliases } from '../roles.js';
 import type { BoardDatabase } from './db.js';
 import { recordReads, records } from './schema.js';
@@ -110,6 +110,28 @@ export function createRecord(db: BoardDatabase, input: PostRecordInput): BoardRe
     ...(input.needs !== undefined ? { needs: input.needs } : {}),
     ...(input.surprise !== undefined ? { surprise: input.surprise } : {}),
   };
+}
+
+/**
+ * The state of a record, written down.
+ *
+ * A decision changes what a record says about itself: a memory candidate a
+ * person approved is promoted, and the record carries that. Nothing else
+ * about the record is edited - the action, the confidence and the author
+ * are what it was posted with - so the state is the one field that moves,
+ * and the change is the decision.
+ *
+ * It answers whether the record was there, so a decision on a record that
+ * is gone is a decision on nothing and the caller can say so.
+ */
+export function setRecordState(db: BoardDatabase, recordId: number, state: string): boolean {
+  const updated = db
+    .update(records)
+    .set({ state })
+    .where(eq(records.id, recordId))
+    .returning()
+    .get();
+  return updated !== undefined;
 }
 
 export type InboxQuery = {

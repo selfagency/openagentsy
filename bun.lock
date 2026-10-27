@@ -144,6 +144,8 @@
         "@openagentsy/hooks": "workspace:^",
         "@openagentsy/jev": "*",
         "@openagentsy/ledger": "workspace:^",
+        "@openagentsy/memory": "workspace:^",
+        "@openagentsy/tasks": "workspace:^",
         "zod": "^4.6.0",
       },
       "devDependencies": {

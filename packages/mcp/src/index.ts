@@ -35,6 +35,8 @@ import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
 import { ledgerReaders } from './ledger-usage.js';
 import { createLessonTools } from './lessons.js';
+import { failure, type McpToolResult, text } from './mcp-tool.js';
+import { workspaceTools } from './workspace-tools.js';
 
 const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
 const stateDir = join(root, '.openagentsy');
@@ -158,6 +160,8 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_budget: the token budgets. op=check reports whether a bean is over its budget, measured from the ledger; at 85 percent the builder stops and posts a blocker. op=list lists the budgets, each carrying 'measured' = the usage the ledger counted for the bean and 'tokensUsed' = the deprecated self-report the check ignores. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.
 - board_budget_set: set a token budget for a bean. The Lead only.
 - board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
+- oa_task_*: the todo list of the project. list, show, create, update, next, archive.
+- oa_memory_*: the memories a person decided to keep. search, list. The decide tool is a person's, not an agent's.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
 
 /**
@@ -181,19 +185,15 @@ const server = new McpServer(
   { capabilities: { tools: {} }, instructions: USAGE_CARD },
 );
 
-function text(value: unknown): { content: { type: 'text'; text: string }[] } {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
-}
-
-function failure(error: unknown): { content: { type: 'text'; text: string }[]; isError: true } {
-  if (error instanceof BoardError) {
-    return {
-      content: [{ type: 'text', text: `${error.message}\n\nNext: ${error.hint}` }],
-      isError: true,
-    };
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return { content: [{ type: 'text', text: message }], isError: true };
+/**
+ * The failure of a board call, as the board answers it.
+ *
+ * A board error carries the next step, and the next step is what the
+ * caller needs, so it goes with the reason.
+ */
+function failureOf(error: unknown): McpToolResult {
+  if (error instanceof BoardError) return failure(error.message, error.hint);
+  return failure(error instanceof Error ? error.message : String(error));
 }
 
 // --- records ----------------------------------------------------------------
@@ -276,7 +276,7 @@ server.registerTool(
             }),
           );
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -393,6 +393,22 @@ server.registerTool(
   async (input) => LESSON_TOOLS.oa_lesson_decide.handler(input),
 );
 
+// --- the workspace tools ---------------------------------------------------
+
+// The task tools and the memory tools: the packages that hold the state
+// offer tools of their own, and the board server is where a session finds
+// them. The names, the descriptions and the schemas come from the
+// packages; the server opens the stores they read and writes.
+const WORKSPACE_TOOLS = await workspaceTools({ root, db });
+
+for (const tool of WORKSPACE_TOOLS) {
+  server.registerTool(
+    tool.name,
+    { description: tool.description, inputSchema: tool.inputSchema },
+    async (input) => tool.handler(input),
+  );
+}
+
 // --- leases -----------------------------------------------------------------
 
 server.registerTool(
@@ -458,7 +474,7 @@ server.registerTool(
       }
       return text(result);
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -496,7 +512,7 @@ server.registerTool(
       if (input.op === 'release') return await releaseLeases(input);
       return text({ leases: listLeases(db, input.bean) });
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -616,7 +632,7 @@ server.registerTool(
       });
       return text(budget);
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -720,7 +736,7 @@ server.registerTool(
       }));
       return text({ budgets });
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -763,7 +779,7 @@ server.registerTool(
       }
       return text(result);
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -824,7 +840,7 @@ server.registerTool(
         usage: outcome.response.usage,
       });
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
