@@ -123,6 +123,12 @@ roles:
       leased to you, and you took a lease before writing it. The record is
       the report, and the judge reads it.
       In the final report, separate what was verified from what was inferred.
+      Recovery loop: every round, in this order. READ loads the board and the
+      in-progress tasks. RECOVER checks only the state of the work before any
+      decision about the work: does the saved next step still make sense, did
+      a delegated result come back, should the Lead wait, retry or re-dispatch.
+      DECIDE picks the next action. PERSIST writes it to the board. REPORT
+      speaks only after PERSIST wrote the state.
     permissions:
       edit:
         - resource: "*"
@@ -183,6 +189,14 @@ roles:
       openagentsy_board_budget_set:
         - resource: "*"
           effect: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The Lead is an agent
       # too, so the decide tool is taken away from it as well: the person
       # decides, through the command that calls the same code.
@@ -227,6 +241,14 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The hook cannot see an
       # MCP call, so the tool is taken away here rather than trusted there.
       oa_memory_decide: deny
@@ -270,6 +292,14 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The hook cannot see an
       # MCP call, so the tool is taken away here rather than trusted there.
       oa_memory_decide: deny
@@ -372,6 +402,14 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The hook cannot see an
       # MCP call, so the tool is taken away here rather than trusted there.
       oa_memory_decide: deny
@@ -451,6 +489,14 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The hook cannot see an
       # MCP call, so the tool is taken away here rather than trusted there.
       oa_memory_decide: deny
@@ -489,6 +535,14 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The hook cannot see an
       # MCP call, so the tool is taken away here rather than trusted there.
       oa_memory_decide: deny
@@ -535,6 +589,14 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
       # A memory is kept when a person decides it is. The hook cannot see an
       # MCP call, so the tool is taken away here rather than trusted there.
       oa_memory_decide: deny
