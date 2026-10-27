@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parseRoles, RolesError } from './roles.js';
 import type { RolesFile } from './types.js';
+
+/** The roles file this repository ships. */
+const SHIPPED_ROLES = fileURLToPath(new URL('../../../roles.yaml', import.meta.url));
 
 const MINIMAL = `
 version: 1
@@ -113,5 +118,19 @@ describe('parseRoles', () => {
   it('rejects a file with no roles', () => {
     const broken = MINIMAL.replace(/roles:\n {2}builder:[\s\S]*$/, 'roles: {}\n');
     expect(() => parseRoles(broken)).toThrow(/at least one role/);
+  });
+});
+
+describe('the shipped roles file', () => {
+  it('keeps every worker role visible', () => {
+    // A hidden role is gone from the listings and from the subagent catalog,
+    // so a person cannot pick it. The workers are the roles a person wants
+    // to see, so the shipped file keeps every one of them visible.
+    const roles = parseRoles(readFileSync(SHIPPED_ROLES, 'utf8'));
+    const workers = Object.values(roles.roles).filter((role) => role.mode === 'subagent');
+    expect(workers.length).toBeGreaterThan(0);
+    for (const worker of workers) {
+      expect(worker.hidden, `${worker.name} is hidden`).toBe(false);
+    }
   });
 });
