@@ -13,7 +13,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsdown",
-    "typecheck": "tsc -b tsconfig.json"
+    "typecheck": "tsc -b tsconfig.json",
+    "probe:v2-facts": "bun scripts/probe-v2-facts.mjs"
   },
   "dependencies": {
     "@openagentsy/core": "*",
