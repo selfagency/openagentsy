@@ -224,7 +224,7 @@ roles:
   scout:
     description: Maps unfamiliar code and returns file:line findings without changing anything.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 30
     scope: |
@@ -276,7 +276,7 @@ roles:
   researcher:
     description: Fetches current external documentation and cites the source for every claim.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 40
     scope: |
@@ -327,7 +327,7 @@ roles:
   builder:
     description: Implements exactly one bean inside its leased files and worktree.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: true
     steps: 40
     scope: |
@@ -438,7 +438,7 @@ roles:
   reviewer:
     description: Reviews a diff against acceptance criteria from a clean context, on a different model family.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 30
     scope: |
@@ -524,7 +524,7 @@ roles:
   advisor:
     description: Consulted for hard judgement calls. Reviews a fork of the asker's context and recommends.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 30
     scope: |
@@ -569,7 +569,7 @@ roles:
   archivist:
     description: Distils what a finished session learned into candidate memories. Runs at session end.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 20
     scope: |

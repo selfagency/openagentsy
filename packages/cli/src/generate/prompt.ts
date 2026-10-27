@@ -46,6 +46,14 @@ function criticalRules(role: RoleDefinition): string[] {
       'Edit only the files leased to you. A file you do not own belongs to another agent.',
     );
   }
+  if (role.mode === 'primary') {
+    // The Lead dispatches, so the Lead is the role that names a dispatch and
+    // keeps it where a person can watch it.
+    rules.push(
+      'Dispatch attached, not detached. A dispatch is a job the person can watch, so keep it in the foreground where it shows as a running step. Detach it only when you have other work to do in the meantime, and say that you did.',
+      'Name the job. Every dispatch names the bean, the worktree and the files it owns, and posts a board record when it is done.',
+    );
+  }
   rules.push(
     'If the plan or the instruction looks wrong, say so in a question record. Do not comply silently.',
   );
