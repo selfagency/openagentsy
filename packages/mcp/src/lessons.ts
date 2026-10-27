@@ -8,6 +8,7 @@ import {
   type StartPacket,
 } from '@openagentsy/hooks';
 import { z } from 'zod';
+import { failure, type McpToolResult, text } from './mcp-tool.js';
 
 /**
  * The lesson tools.
@@ -28,23 +29,7 @@ import { z } from 'zod';
 export const LESSON_TOOL_NAMES = ['oa_lesson_propose', 'oa_lesson_decide'] as const;
 
 /** What an MCP tool answers with. */
-export type LessonToolResult = {
-  content: { type: 'text'; text: string }[];
-  isError?: boolean;
-};
-
-/** The answer, as JSON. */
-function text(value: unknown): LessonToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
-}
-
-/** The failure, as JSON, with the next step. */
-function failure(reason: string, hint: string): LessonToolResult {
-  return {
-    content: [{ type: 'text', text: `${reason}\n\nNext: ${hint}` }],
-    isError: true,
-  };
-}
+export type LessonToolResult = McpToolResult;
 
 const proposeArgs = z.object({
   summary: z.string().min(1).describe('What happened, in one sentence'),

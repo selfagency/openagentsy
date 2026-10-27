@@ -5,10 +5,26 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { loadRoles, memoryToolNames, taskToolNames } from '@openagentsy/core';
 import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const SERVER = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+
+/** The roles file this repository ships: the permission map under test. */
+const SHIPPED_ROLES = fileURLToPath(new URL('../../../roles.yaml', import.meta.url));
+
+/** The tools a person decides with, in the names the map uses. */
+const HUMAN_ONLY_TOOLS = [
+  'oa_lesson_decide',
+  'openagentsy_lesson_decide',
+  'openagentsy_oa_lesson_decide',
+  'oa_quality_waive',
+  'openagentsy_quality_waive',
+  'oa_memory_decide',
+  'openagentsy_memory_decide',
+  'openagentsy_oa_memory_decide',
+];
 
 let root: string;
 let client: Client;
@@ -107,6 +123,14 @@ roles:
 `,
     'utf8',
   );
+  // The task store finds the project by its configuration, so the test
+  // pins one: the store is under the temporary root and never under the
+  // repository.
+  await writeFile(
+    join(root, '.beans.yml'),
+    'project:\n  name: board-test\nbeans:\n  path: .beans\n  prefix: oa-\n  id_length: 4\n',
+    'utf8',
+  );
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
@@ -140,7 +164,7 @@ describe('the board server over stdio', () => {
     // and only a person may decide one.
     expect(names).toContain('oa_lesson_propose');
     expect(names).toContain('oa_lesson_decide');
-    expect(names.length).toBe(9);
+    expect(names.length).toBe(18);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
@@ -572,6 +596,153 @@ describe('the board with a System One key', () => {
         confidence: 'verified',
       });
       expect(posted.id).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * The tools the workspace packages offer.
+ *
+ * The board server is where a session finds them, so the tool list is the
+ * place where the todo list and the memories have to be.
+ */
+describe('the workspace tools', () => {
+  it('registers the task tools and the memory tools', async () => {
+    const { tools } = await client.listTools();
+    const names = tools.map((tool) => tool.name);
+    for (const name of taskToolNames) expect(names, name).toContain(name);
+    for (const name of memoryToolNames) expect(names, name).toContain(name);
+  });
+
+  it('gives every tool a description and a well-formed schema', async () => {
+    const { tools } = await client.listTools();
+    for (const tool of tools) {
+      expect(tool.description, tool.name).toBeTruthy();
+      expect(tool.inputSchema.type, tool.name).toBe('object');
+      expect(tool.inputSchema.properties, tool.name).toBeTypeOf('object');
+    }
+  });
+
+  it('keeps a task in the store under the state root', async () => {
+    const created = await call('oa_task_create', {
+      title: 'The Lead keeps a todo list',
+      type: 'feature',
+    });
+    expect(created.id).toBeTypeOf('string');
+
+    const listed = await call('oa_task_list', {});
+    const found = (listed.tasks as { id: string }[]).some((task) => task.id === created.id);
+    expect(found).toBe(true);
+
+    // The file is under the temporary root, never under the repository.
+    const file = await readFile(join(root, '.beans', created.path as string), 'utf8');
+    expect(file).toContain('The Lead keeps a todo list');
+  });
+
+  it('shows the memory candidates and keeps the decision', async () => {
+    const posted = await call('board_record', {
+      op: 'post',
+      bean: 'memory',
+      from: 'lead',
+      kind: 'finding',
+      action: 'The board database lives in .openagentsy/board.sqlite and needs bun:sqlite',
+      state: 'build · packages/core/src/board/db.ts:1',
+      confidence: 'verified',
+    });
+
+    const listed = await call('oa_memory_list', {});
+    expect(listed.pending).toBe(1);
+
+    const decided = await call('oa_memory_decide', {
+      recordId: posted.id,
+      decision: 'approve',
+      decidedBy: 'human',
+    });
+    expect(decided.ok).toBe(true);
+    expect(decided.state).toBe('promoted');
+
+    // The candidate is a memory now, and it is not pending any more.
+    const found = await call('oa_memory_search', { q: 'board.sqlite' });
+    expect(found.total).toBe(1);
+    const after = await call('oa_memory_list', {});
+    expect(after.pending).toBe(0);
+
+    // The decision is on the board, so the inbox does not offer it again.
+    const records = await call('board_record', { op: 'inbox', agent: 'lead' });
+    const candidate = (records.records as { id: number; state: string }[]).find(
+      (record) => record.id === posted.id,
+    );
+    expect(candidate?.state).toBe('promoted');
+  });
+});
+
+/**
+ * The permission map.
+ *
+ * The map is the primary enforcement: the hook cannot see an MCP call on
+ * the pinned binary, so the tool is taken away there rather than trusted
+ * in the hook.
+ */
+describe('the permission map', () => {
+  it('lets the Lead call a task tool and keeps the decide tool from it', async () => {
+    const roles = await loadRoles(SHIPPED_ROLES);
+    const lead = roles.roles.lead;
+    if (!lead) throw new Error('no lead role');
+    expect(lead.permissions['openagentsy_oa_task_create']?.[0]?.effect).toBe('allow');
+    expect(lead.permissions['openagentsy_oa_task_update']?.[0]?.effect).toBe('allow');
+    expect(lead.permissions['openagentsy_oa_memory_decide']?.[0]?.effect).toBe('deny');
+    expect(lead.permissions['openagentsy_oa_lesson_decide']?.[0]?.effect).toBe('deny');
+  });
+
+  it('lets a builder read the list and update a task, and not create one', async () => {
+    const roles = await loadRoles(SHIPPED_ROLES);
+    const builder = roles.roles.builder;
+    if (!builder) throw new Error('no builder role');
+    expect(builder.permissions['openagentsy_oa_task_list']?.[0]?.effect).toBe('allow');
+    expect(builder.permissions['openagentsy_oa_task_update']?.[0]?.effect).toBe('allow');
+    expect(builder.permissions['openagentsy_oa_task_create']?.[0]?.effect).toBe('deny');
+    expect(builder.permissions['openagentsy_oa_task_archive']?.[0]?.effect).toBe('deny');
+  });
+
+  it('denies the human-only tools to every role', async () => {
+    const roles = await loadRoles(SHIPPED_ROLES);
+    for (const [name, role] of Object.entries(roles.roles)) {
+      for (const tool of HUMAN_ONLY_TOOLS) {
+        const rules = role.permissions[tool];
+        expect(rules, `${name} must carry ${tool}`).toBeDefined();
+        expect(rules?.[0]?.effect, `${name} must deny ${tool}`).toBe('deny');
+      }
+    }
+  });
+
+  it('names the task and the memory tools for every role', async () => {
+    const roles = await loadRoles(SHIPPED_ROLES);
+    for (const [name, role] of Object.entries(roles.roles)) {
+      for (const tool of [
+        'openagentsy_oa_task_list',
+        'openagentsy_oa_task_show',
+        'openagentsy_oa_task_next',
+        'openagentsy_oa_memory_search',
+        'openagentsy_oa_memory_list',
+      ]) {
+        expect(role.permissions[tool]?.[0]?.effect, `${name} must allow ${tool}`).toBe('allow');
+      }
+    }
+  });
+
+  it('lets the Lead and the builder change the list, and the other roles read it', async () => {
+    const roles = await loadRoles(SHIPPED_ROLES);
+    for (const [name, role] of Object.entries(roles.roles)) {
+      const creates = role.permissions['openagentsy_oa_task_create']?.[0]?.effect;
+      if (name === 'lead') {
+        expect(creates, name).toBe('allow');
+        expect(role.permissions['openagentsy_oa_task_update']?.[0]?.effect, name).toBe('allow');
+        continue;
+      }
+      expect(creates, name).toBe('deny');
+      expect(role.permissions['openagentsy_oa_task_archive']?.[0]?.effect, name).toBe('deny');
+      if (name === 'builder') continue;
+      expect(role.permissions['openagentsy_oa_task_update']?.[0]?.effect, name).toBe('deny');
     }
   });
 });

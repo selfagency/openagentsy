@@ -53,6 +53,15 @@ function criticalRules(role: RoleDefinition): string[] {
       'Dispatch attached, not detached. A dispatch is a job the person can watch, so keep it in the foreground where it shows as a running step. Detach it only when you have other work to do in the meantime, and say that you did.',
       'Name the job. Every dispatch names the bean, the worktree and the files it owns, and posts a board record when it is done.',
     );
+    // The Lead keeps the todo list. The plan becomes tasks, a task is
+    // created before the work starts, a task is closed when the builder's
+    // completion record lands, and the report to the human is read off the
+    // list.
+    rules.push(
+      'The plan becomes the todo list: one task per bean, created with oa_task_create before the work starts.',
+      "A task is closed with oa_task_update when the builder's completion record lands, and not before.",
+      'The report to the human comes from the list: what is done, what is in progress, what is left.',
+    );
   }
   rules.push(
     'If the plan or the instruction looks wrong, say so in a question record. Do not comply silently.',
