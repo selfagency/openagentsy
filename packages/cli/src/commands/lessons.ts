@@ -117,18 +117,25 @@ export function formatLessonsReport(report: LessonsReport): string {
 
 /**
  * The proof a decision rests on, read from the result file.
+ *
+ * A file that cannot be read is an error and not an absent proof: the
+ * person who ran the command has to know which of the two it was.
  */
-async function readEvalResult(path: string): Promise<EvalResult | undefined> {
+async function readEvalResult(path: string): Promise<{ result?: EvalResult; error?: string }> {
   let text: string;
   try {
     text = await readFile(path, 'utf8');
-  } catch {
-    return undefined;
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : `the proof result ${path} could not be read`,
+    };
   }
   try {
-    return JSON.parse(text) as EvalResult;
-  } catch {
-    return undefined;
+    return { result: JSON.parse(text) as EvalResult };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : `the proof result ${path} is not JSON`,
+    };
   }
 }
 
@@ -153,7 +160,17 @@ export async function runLessonDecision(
 
   let evalResult = options.evalResult;
   if (evalResult === undefined && options.evalResultPath !== undefined) {
-    evalResult = await readEvalResult(options.evalResultPath);
+    const read = await readEvalResult(options.evalResultPath);
+    if (read.error !== undefined) {
+      return {
+        ok: false,
+        id,
+        state: '',
+        reason: `the proof result could not be read: ${read.error}`,
+        hint: 'the result file has to be there, and it has to be the JSON the runner wrote',
+      };
+    }
+    evalResult = read.result;
   }
 
   const outcome = await decideLesson(root, {

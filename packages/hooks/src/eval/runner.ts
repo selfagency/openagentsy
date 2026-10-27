@@ -1,8 +1,10 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { isLessonId } from '../lessons/id.js';
 import { isInside, projectName, worktreeRoot } from '../paths.js';
 import {
   EvalArtifact,
@@ -24,7 +26,8 @@ import {
  * - the command is an argv, spawned without a shell;
  * - the child sees only PATH, HOME, TMPDIR and the locale, so a token in the
  *   parent's environment never reaches a proof;
- * - the working directory is inside the workspace or an OpenAgentsy worktree;
+ * - the working directory is inside the workspace or an OpenAgentsy worktree,
+ *   and it is the real path that has to be inside it;
  * - the process is killed at the timeout.
  *
  * The result holds the verdicts and the hashes. It never holds what a
@@ -230,14 +233,124 @@ export function allPassed(assertions: EvalAssertions): boolean {
 }
 
 /**
+ * The directory the results live in.
+ */
+export function evalResultsDir(stateRoot: string): string {
+  return join(stateRoot, '.openagentsy', 'lessons', 'evals');
+}
+
+/**
  * The path a result is written to.
  *
- * The name carries the lesson and the moment, so a result is never written
- * over another one.
+ * The lesson id names the file, so it is checked before it names anything:
+ * an id that is really a path would write the result outside the directory
+ * the results belong in.
  */
 export function evalResultPath(stateRoot: string, lessonId: string, at: Date): string {
+  if (!isLessonId(lessonId)) {
+    throw new ProofError(
+      `"${lessonId}" is not a lesson id`,
+      'a lesson id looks like oa-lesson-abcd1234',
+    );
+  }
+  const dir = evalResultsDir(stateRoot);
   const stamp = at.toISOString().replace(/[:.]/g, '-');
-  return join(stateRoot, '.openagentsy', 'lessons', 'evals', `${lessonId}-${stamp}.json`);
+  const path = join(dir, `${lessonId}-${stamp}.json`);
+  if (!isInside(path, [dir])) {
+    throw new ProofError(
+      'the result path leaves the evaluations directory',
+      'a result belongs to the lesson it is about, and the lesson id is not a path',
+    );
+  }
+  return path;
+}
+
+/**
+ * Refuse a state path that is a symlink.
+ *
+ * The result is written under the state root, and every part of that path
+ * has to be a real directory: a symlinked `.openagentsy` or `lessons` would
+ * put the result somewhere else entirely, and the runner cannot know where.
+ */
+async function assertRealStatePath(stateRoot: string, dir: string): Promise<void> {
+  const rest = relative(stateRoot, dir);
+  if (rest.startsWith('..')) {
+    throw new ProofError(
+      'the results directory is not under the state root',
+      'a result belongs to the project it was run in',
+    );
+  }
+  const realRoot = await realpath(stateRoot);
+  let current = realRoot;
+  for (const segment of rest.split('/').filter((part) => part.length > 0)) {
+    current = join(current, segment);
+    let info: Awaited<ReturnType<typeof lstat>>;
+    try {
+      info = await lstat(current);
+    } catch {
+      return;
+    }
+    if (info.isSymbolicLink()) {
+      throw new ProofError(
+        `the state path ${current} is a symlink`,
+        'the runner refuses to write a result through a symlink',
+      );
+    }
+  }
+}
+
+/**
+ * Write a result.
+ *
+ * The mode is 0600, because a result says what a proof did in a project and
+ * nobody else has a reason to read it. The file is opened with
+ * O_NOFOLLOW, so a symlink at the path is not followed, and with O_EXCL, so
+ * an existing file is never replaced: a result is evidence and evidence is
+ * not overwritten.
+ */
+export async function writeEvalResult(
+  path: string,
+  result: EvalResult,
+  stateRoot: string,
+): Promise<string> {
+  const dir = dirname(path);
+  await assertRealStatePath(stateRoot, dir);
+  await mkdir(dir, { recursive: true });
+
+  const realRoot = await realpath(stateRoot);
+  const realDir = await realpath(dir);
+  if (!isInside(realDir, [join(realRoot, '.openagentsy')])) {
+    throw new ProofError(
+      'the results directory is not inside the state root',
+      'the runner refuses to write a result outside the state root',
+    );
+  }
+
+  let target = path;
+  let counter = 1;
+  while (await exists(target)) {
+    const info = await lstat(target);
+    if (info.isSymbolicLink()) {
+      throw new ProofError(
+        'the result path is a symlink',
+        'the runner refuses to write a result through a symlink',
+      );
+    }
+    counter += 1;
+    target = path.replace(/\.json$/, '').concat(`-${counter}.json`);
+  }
+  const handle = await open(
+    target,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await handle.writeFile(`${JSON.stringify(result, null, 2)}\n`, 'utf8');
+  } finally {
+    await handle.close();
+  }
+  await chmod(target, 0o600);
+  return target;
 }
 
 /**
@@ -250,55 +363,6 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/**
- * Refuse a path that is a symlink.
- *
- * A result that is written through a symlink lands wherever the link points,
- * and the runner cannot know where that is. The link is refused instead.
- */
-async function assertNotSymlink(path: string, what: string): Promise<void> {
-  let info: Awaited<ReturnType<typeof lstat>>;
-  try {
-    info = await lstat(path);
-  } catch {
-    return;
-  }
-  if (info.isSymbolicLink()) {
-    throw new ProofError(
-      `${what} is a symlink`,
-      'the runner refuses to write through a symlink; point the proof at a real directory',
-    );
-  }
-}
-
-/**
- * Write a result.
- *
- * The mode is 0600, because a result says what a proof did in a project and
- * nobody else has a reason to read it. The path it returns is the one it
- * wrote to: a name that is already taken is not overwritten, because a
- * result is evidence and evidence is not replaced.
- */
-export async function writeEvalResult(path: string, result: EvalResult): Promise<string> {
-  await mkdir(dirname(path), { recursive: true });
-  await assertNotSymlink(dirname(path), 'the result directory');
-  await assertNotSymlink(path, 'the result path');
-
-  let target = path;
-  let counter = 1;
-  while (await exists(target)) {
-    counter += 1;
-    target = path.replace(/\.json$/, '').concat(`-${counter}.json`);
-  }
-  await writeFile(target, `${JSON.stringify(result, null, 2)}\n`, {
-    encoding: 'utf8',
-    mode: 0o600,
-    flag: 'wx',
-  });
-  await chmod(target, 0o600);
-  return target;
 }
 
 /**
@@ -360,13 +424,32 @@ export function allowedRoots(options: EvalRunOptions): string[] {
 }
 
 /**
+ * The real path of a root, or the root itself when it is not there.
+ */
+async function realPathOrSelf(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
  * The working directory of a scenario, checked.
  *
  * A relative one resolves against the base and has to land inside one of the
  * roots. An absolute one has to land inside one of them as well, so a proof
  * cannot ask for `/etc` or for a directory that only looks close.
+ *
+ * The check is made on the real paths, because a link inside the workspace
+ * can point out of it: a scenario that names a link would otherwise run
+ * somewhere the workspace does not cover.
  */
-export function resolveScenarioCwd(scenario: EvalScenario, base: string, roots: string[]): string {
+export async function resolveScenarioCwd(
+  scenario: EvalScenario,
+  base: string,
+  roots: string[],
+): Promise<string> {
   const cwd = isAbsolute(scenario.cwd) ? resolve(scenario.cwd) : resolve(base, scenario.cwd);
   if (!isInside(cwd, roots)) {
     throw new ProofError(
@@ -374,7 +457,23 @@ export function resolveScenarioCwd(scenario: EvalScenario, base: string, roots: 
       'point the scenario at a directory inside the workspace or an OpenAgentsy worktree',
     );
   }
-  return cwd;
+  let realCwd: string;
+  try {
+    realCwd = await realpath(cwd);
+  } catch {
+    throw new ProofError(
+      `the working directory of the scenario ${scenario.id} does not exist`,
+      'point the scenario at a directory that is there',
+    );
+  }
+  const realRoots = await Promise.all(roots.map(realPathOrSelf));
+  if (!isInside(realCwd, realRoots)) {
+    throw new ProofError(
+      `the working directory of the scenario ${scenario.id} leaves the workspace through a symlink`,
+      'point the scenario at a real directory inside the workspace or an OpenAgentsy worktree',
+    );
+  }
+  return realCwd;
 }
 
 /**
@@ -424,12 +523,19 @@ export async function runEvalArtifact(options: EvalRunOptions): Promise<EvalResu
   }
 
   const artifact = parseArtifact(text);
+  const lessonId = options.lessonId ?? artifact.lesson_id;
+  if (!isLessonId(lessonId)) {
+    throw new ProofError(
+      `"${lessonId}" is not a lesson id`,
+      'a lesson id looks like oa-lesson-abcd1234',
+    );
+  }
   const base = options.base ?? dirname(resolve(options.artifactPath));
   const roots = allowedRoots(options);
   const scenarios: EvalScenarioResult[] = [];
 
   for (const scenario of artifact.scenarios) {
-    const cwd = resolveScenarioCwd(scenario, base, roots);
+    const cwd = await resolveScenarioCwd(scenario, base, roots);
     const before = now();
     const outcome = await runCommand(scenario.command, cwd, scenario.timeout_ms);
     const after = now();
@@ -448,7 +554,7 @@ export async function runEvalArtifact(options: EvalRunOptions): Promise<EvalResu
 
   const result: EvalResult = {
     schema_version: '1',
-    lesson_id: options.lessonId ?? artifact.lesson_id,
+    lesson_id: lessonId,
     artifact_sha256: hashOf(text),
     started_at: startedAt.toISOString(),
     finished_at: now().toISOString(),
@@ -460,8 +566,8 @@ export async function runEvalArtifact(options: EvalRunOptions): Promise<EvalResu
   assertConsistent(result);
 
   const stateRoot = options.stateRoot ?? options.workspace;
-  const path = evalResultPath(stateRoot, result.lesson_id, startedAt);
-  await writeEvalResult(path, result);
+  const path = evalResultPath(stateRoot, lessonId, startedAt);
+  await writeEvalResult(path, result, stateRoot);
   return result;
 }
 
@@ -482,12 +588,44 @@ async function git(cwd: string, args: string[]): Promise<void> {
 }
 
 /**
+ * Take the worktree and the directory it was made in back.
+ *
+ * A cleanup that fails is reported, because a directory left behind holds a
+ * whole checkout of the project.
+ */
+async function removeWorktree(
+  repo: string,
+  worktree: string,
+  dir: string,
+  added: boolean,
+): Promise<string | undefined> {
+  const problems: string[] = [];
+  if (added) {
+    try {
+      await git(repo, ['worktree', 'remove', '--force', worktree]);
+    } catch (error) {
+      problems.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    await rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    problems.push(error instanceof Error ? error.message : String(error));
+  }
+  return problems.length === 0 ? undefined : problems.join('; ');
+}
+
+/**
  * A temporary worktree, and what to do in it.
  *
  * The worktree is where the candidate change is applied: the baseline
  * scenario has to fail on the current owner and pass with the change, and
  * the change lives in a commit, so the commit is checked out apart from the
  * tree that is being worked in.
+ *
+ * The directory is made before the worktree is added, so the cleanup has to
+ * run whether the add worked or not: a directory left behind holds a
+ * checkout of the project.
  */
 export async function withTemporaryWorktree<T>(options: {
   repo: string;
@@ -496,12 +634,35 @@ export async function withTemporaryWorktree<T>(options: {
 }): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), 'openagentsy-lesson-'));
   const worktree = join(dir, 'worktree');
-  await git(options.repo, ['worktree', 'add', '--detach', worktree, options.ref]);
+  let added = false;
+  let cleaned = false;
+  const cleanup = async (): Promise<string | undefined> => {
+    if (cleaned) return undefined;
+    cleaned = true;
+    return removeWorktree(options.repo, worktree, dir, added);
+  };
   try {
-    return await options.run(worktree);
-  } finally {
-    await git(options.repo, ['worktree', 'remove', '--force', worktree]).catch(() => undefined);
-    await rm(dir, { recursive: true, force: true });
+    await git(options.repo, ['worktree', 'add', '--detach', worktree, options.ref]);
+    added = true;
+    const result = await options.run(worktree);
+    const problem = await cleanup();
+    if (problem !== undefined) {
+      throw new ProofError(
+        'the temporary worktree could not be removed',
+        `the directory ${dir} is still there: ${problem}`,
+      );
+    }
+    return result;
+  } catch (error) {
+    const problem = await cleanup();
+    const message = error instanceof Error ? error.message : String(error);
+    if (problem !== undefined) {
+      throw new ProofError(
+        message,
+        `the temporary worktree could not be removed either: ${problem}`,
+      );
+    }
+    throw error instanceof Error ? error : new Error(message);
   }
 }
 

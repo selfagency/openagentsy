@@ -135,4 +135,18 @@ describe('the lesson decision', () => {
       await remove();
     }
   });
+
+  it('says so when the proof result cannot be read', async () => {
+    const { root, remove } = await stateRoot();
+    try {
+      const lesson = await candidate(root, 'the first lesson', 'session-1');
+      const report = await runLessonDecision(root, lesson.id, 'validate', {
+        evalResultPath: join(root, 'not-there.json'),
+      });
+      expect(report.ok).toBe(false);
+      expect(report.reason).toMatch(/could not be read/);
+    } finally {
+      await remove();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -8,6 +8,7 @@ import {
   reproduceBaseline,
   runCommand,
   runEvalArtifact,
+  withTemporaryWorktree,
 } from './runner.js';
 
 /** The moment every result in this file carries, so the path is known. */
@@ -311,6 +312,84 @@ describe('the baseline in a temporary worktree', () => {
       expect(before?.passed).toBe(false);
       const after = outcome.after?.scenarios.find((scenario) => scenario.phase === 'candidate');
       expect(after?.passed).toBe(true);
+    } finally {
+      await remove();
+    }
+  });
+});
+
+describe('the boundaries of a run', () => {
+  it('refuses a lesson id that is really a path', async () => {
+    const { root, remove } = await workspace();
+    try {
+      const path = await artifactFile(root, [
+        { id: 's', phase: 'candidate', cwd: '.', command: ['cat', 'x'], expect: {} },
+      ]);
+      const raw = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+      raw.lesson_id = '../../../../../../../../tmp/oa-escaped-result';
+      await writeFile(path, JSON.stringify(raw), 'utf8');
+      await expect(
+        runEvalArtifact({ artifactPath: path, workspace: root, now: () => PINNED }),
+      ).rejects.toThrow(/is not a lesson id/);
+    } finally {
+      await remove();
+    }
+  });
+
+  it('refuses a working directory that leaves the workspace through a symlink', async () => {
+    const { root, remove } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), 'openagentsy-outside-'));
+    try {
+      await symlink(outside, join(root, 'link'));
+      const path = await artifactFile(root, [
+        {
+          id: 's',
+          phase: 'candidate',
+          cwd: 'link',
+          command: ['pwd'],
+          expect: { stdout_includes: [outside] },
+        },
+      ]);
+      await expect(
+        runEvalArtifact({ artifactPath: path, workspace: root, now: () => PINNED }),
+      ).rejects.toThrow(/leaves the workspace through a symlink/);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+      await remove();
+    }
+  });
+
+  it('refuses to write a result through a symlinked state directory', async () => {
+    const { root, remove } = await workspace();
+    const outside = await mkdtemp(join(tmpdir(), 'openagentsy-state-'));
+    try {
+      await symlink(outside, join(root, '.openagentsy'));
+      const path = await artifactFile(root, [
+        { id: 's', phase: 'candidate', cwd: '.', command: ['cat', 'x'], expect: {} },
+      ]);
+      await expect(
+        runEvalArtifact({ artifactPath: path, workspace: root, now: () => PINNED }),
+      ).rejects.toThrow(/symlink/);
+      expect(await readdir(outside)).toHaveLength(0);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+      await remove();
+    }
+  });
+
+  it('leaves no worktree behind when the add fails', async () => {
+    const { root, remove } = await workspace();
+    try {
+      await runCommand(['git', 'init', '-q'], root, 30_000);
+      await expect(
+        withTemporaryWorktree({
+          repo: root,
+          ref: 'nosuchref',
+          run: async () => 'never',
+        }),
+      ).rejects.toThrow(/failed/);
+      const list = await runCommand(['git', 'worktree', 'list'], root, 30_000);
+      expect(list.stdout.trim().split('\n')).toHaveLength(1);
     } finally {
       await remove();
     }

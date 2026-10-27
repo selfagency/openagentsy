@@ -167,3 +167,46 @@ describe('the capture', () => {
     }
   });
 });
+
+describe('the evidence of a candidate', () => {
+  it('merges the evidence the caller names into the packet', async () => {
+    const { root, remove } = await temporaryRoot();
+    try {
+      const outcome = await captureCandidate(root, {
+        summary: 'the person corrected the agent',
+        observations: [sighting('session-1')],
+        explicitCorrection: true,
+        evidence: ['ledger-42'],
+      });
+      expect(outcome.ok).toBe(true);
+      if (outcome.ok) expect(outcome.lesson.packet.evidence).toEqual(['ledger-42']);
+    } finally {
+      await remove();
+    }
+  });
+
+  it('keeps a secret out of a session id', async () => {
+    const { root, remove } = await temporaryRoot();
+    try {
+      const secret = ['gh', 'p_', 'c'.repeat(36)].join('');
+      const outcome = await captureCandidate(root, {
+        summary: 'the person corrected the agent',
+        observations: [{ kind: 'missing-file', detail: 'the file', session: `session-${secret}` }],
+        explicitCorrection: true,
+      });
+      expect(outcome.ok).toBe(true);
+      const observations = await readFile(
+        join(root, '.openagentsy', 'lessons', 'observations.json'),
+        'utf8',
+      );
+      expect(observations).not.toContain(secret);
+      const lesson = await readFile(
+        join(root, '.openagentsy', 'lessons', `${outcome.ok ? outcome.lesson.id : ''}.json`),
+        'utf8',
+      );
+      expect(lesson).not.toContain(secret);
+    } finally {
+      await remove();
+    }
+  });
+});

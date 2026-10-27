@@ -132,7 +132,7 @@ describe('the lesson tools', () => {
         reason: 'no proof yet',
       });
       expect(decided.isError).toBe(true);
-      expect(decided.content[0]?.text).toMatch(/passing eval result/);
+      expect(decided.content[0]?.text).toMatch(/proof/);
     } finally {
       await remove();
     }

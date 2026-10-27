@@ -154,8 +154,13 @@ export async function captureCandidate(
   now: () => Date = () => new Date(),
 ): Promise<CaptureOutcome> {
   const summary = redactForStorage(input.summary);
-  const evidence = (input.evidence ?? []).map((entry) => redactForStorage(entry));
-  const packet = redactPacket(input.packet ?? {});
+  // The evidence the caller names is the evidence of the lesson: it goes
+  // into the packet, so the person reads it with the rest of the claim.
+  const evidence = [...(input.packet?.evidence ?? []), ...(input.evidence ?? [])];
+  const packet = redactPacket({
+    ...input.packet,
+    ...(evidence.length > 0 ? { evidence } : {}),
+  });
 
   let redactions = summary.count + packet.count;
   const observations: Observation[] = input.observations.map((observation) => {
@@ -164,8 +169,6 @@ export async function captureCandidate(
     redactions += kind.count + detail.count;
     return { kind: kind.text, detail: detail.text, session: observation.session };
   });
-  redactions += evidence.reduce((total, entry) => total + entry.count, 0);
-
   const history = await readObservations(root);
   const all = [...history, ...observations];
   await writeObservations(root, all);

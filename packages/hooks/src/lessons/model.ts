@@ -185,15 +185,18 @@ export function isWeakOwner(owner: Owner): boolean {
 /**
  * Whether a value says something.
  */
-function hasText(value: string | undefined): boolean {
+function hasContent(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim() !== '';
 }
 
 /**
  * Whether a list holds something.
+ *
+ * An empty entry is nothing: a list of empty strings says no more than an
+ * empty list, and a packet that says no more than nothing is not complete.
  */
 function hasItems(values: string[] | undefined): boolean {
-  return Array.isArray(values) && values.length > 0;
+  return Array.isArray(values) && values.length > 0 && values.every(hasContent);
 }
 
 /**
@@ -205,10 +208,10 @@ function hasItems(values: string[] | undefined): boolean {
 export function packetComplete(packet: Partial<StartPacket>): boolean {
   const owner = packet.owner;
   if (!isOwner(owner)) return false;
-  if (!hasText(packet.futureBehavior) || !hasText(packet.representativeTask)) return false;
+  if (!hasContent(packet.futureBehavior) || !hasContent(packet.representativeTask)) return false;
   if (!hasItems(packet.evidence) || !hasItems(packet.writeBoundary)) return false;
-  if (!hasText(packet.proof)) return false;
-  if (isWeakOwner(owner) && !hasText(packet.ownerJustification)) return false;
+  if (!hasContent(packet.proof)) return false;
+  if (isWeakOwner(owner) && !hasContent(packet.ownerJustification)) return false;
   return true;
 }
 

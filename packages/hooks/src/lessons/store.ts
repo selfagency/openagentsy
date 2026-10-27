@@ -1,7 +1,10 @@
-import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type Lesson, LessonError } from './model.js';
+import { redactForStorage } from '../secrets.js';
+import { isLessonId } from './id.js';
+import { type Lesson, LessonError, type StartPacket } from './model.js';
+
+export { createLessonId, isLessonId } from './id.js';
 
 /**
  * The lesson store.
@@ -14,24 +17,6 @@ import { type Lesson, LessonError } from './model.js';
 /** The directory the lessons live in. */
 export function lessonsDir(root: string): string {
   return join(root, '.openagentsy', 'lessons');
-}
-
-/**
- * The id of a lesson.
- *
- * The shape is checked before a path is built from it, because the id comes
- * from a tool argument and a path is not an argument to trust.
- */
-const LESSON_ID = /^oa-lesson-[a-z0-9]{4,32}$/;
-
-/** Whether a value is a lesson id. */
-export function isLessonId(value: unknown): value is string {
-  return typeof value === 'string' && LESSON_ID.test(value);
-}
-
-/** A new lesson id. */
-export function createLessonId(): string {
-  return `oa-lesson-${randomUUID().replace(/-/g, '').slice(0, 8)}`;
 }
 
 /**
@@ -48,6 +33,70 @@ export function lessonPath(root: string, id: string): string {
 }
 
 /**
+ * A string, redacted.
+ */
+function redacted(value: string): string {
+  return redactForStorage(value).text;
+}
+
+/**
+ * A list of strings, redacted.
+ */
+function redactedList(values: string[]): string[] {
+  return values.map(redacted);
+}
+
+/**
+ * The packet, redacted.
+ */
+function redactedPacket(packet: Partial<StartPacket>): Partial<StartPacket> {
+  return {
+    ...packet,
+    ...(packet.futureBehavior === undefined
+      ? {}
+      : { futureBehavior: redacted(packet.futureBehavior) }),
+    ...(packet.representativeTask === undefined
+      ? {}
+      : { representativeTask: redacted(packet.representativeTask) }),
+    ...(packet.evidence === undefined ? {} : { evidence: redactedList(packet.evidence) }),
+    ...(packet.owner === undefined
+      ? {}
+      : { owner: redacted(packet.owner) as StartPacket['owner'] }),
+    ...(packet.ownerJustification === undefined
+      ? {}
+      : { ownerJustification: redacted(packet.ownerJustification) }),
+    ...(packet.writeBoundary === undefined
+      ? {}
+      : { writeBoundary: redactedList(packet.writeBoundary) }),
+    ...(packet.proof === undefined ? {} : { proof: redacted(packet.proof) }),
+  };
+}
+
+/**
+ * The lesson, redacted.
+ *
+ * The write is the door every string goes through, not only the ones the
+ * capture filled in. A person pastes a token into the reason of a decision
+ * and into the id of a session, and neither may survive on the disk.
+ */
+function redactedLesson(lesson: Lesson): Lesson {
+  return {
+    ...lesson,
+    summary: redacted(lesson.summary),
+    kind: redacted(lesson.kind),
+    detail: redacted(lesson.detail),
+    sessions: redactedList(lesson.sessions),
+    packet: redactedPacket(lesson.packet),
+    history: lesson.history.map((entry) => ({
+      ...entry,
+      decidedBy: redacted(entry.decidedBy),
+      reason: redacted(entry.reason),
+      ...(entry.changeRef === undefined ? {} : { changeRef: redacted(entry.changeRef) }),
+    })),
+  };
+}
+
+/**
  * Write a lesson.
  *
  * The write is atomic in the sense that matters here: the file is written
@@ -57,7 +106,7 @@ export function lessonPath(root: string, id: string): string {
 export async function writeLesson(root: string, lesson: Lesson): Promise<string> {
   const path = lessonPath(root, lesson.id);
   await mkdir(lessonsDir(root), { recursive: true });
-  await writeFile(path, `${JSON.stringify(lesson, null, 2)}\n`, {
+  await writeFile(path, `${JSON.stringify(redactedLesson(lesson), null, 2)}\n`, {
     encoding: 'utf8',
     mode: 0o600,
   });
@@ -195,7 +244,11 @@ export async function readObservations(root: string): Promise<Observation[]> {
 export async function writeObservations(root: string, observations: Observation[]): Promise<void> {
   await mkdir(lessonsDir(root), { recursive: true });
   const path = observationsPath(root);
-  const kept = observations.slice(-MAX_OBSERVATIONS);
+  const kept = observations.slice(-MAX_OBSERVATIONS).map((observation) => ({
+    kind: redacted(observation.kind),
+    detail: redacted(observation.detail),
+    session: redacted(observation.session),
+  }));
   await writeFile(path, `${JSON.stringify(kept, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   await chmod(path, 0o600);
 }

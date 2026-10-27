@@ -132,6 +132,11 @@ describe('the start packet', () => {
     expect(packetComplete({ ...completePacket(), writeBoundary: [] })).toBe(false);
   });
 
+  it('is incomplete with an empty entry in a list', () => {
+    expect(packetComplete({ ...completePacket(), evidence: [''] })).toBe(false);
+    expect(packetComplete({ ...completePacket(), writeBoundary: ['   '] })).toBe(false);
+  });
+
   it('is incomplete without a proof', () => {
     expect(packetComplete({ ...completePacket(), proof: '' })).toBe(false);
   });
