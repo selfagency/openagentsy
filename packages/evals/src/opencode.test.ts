@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { OpencodeClient } from '@opencode-ai/sdk';
@@ -6,19 +6,26 @@ import { describe, expect, it } from 'vitest';
 
 import {
   attributeHostErrors,
+  caseDirsOfRun,
+  createCaseDir,
   HARNESS_SWEEP_AGE_MS,
   hostErrorsIn,
   hostFaults,
+  isCaseDirWatcherFault,
   killSessionWhenItAppears,
+  logFields,
   permissionPatterns,
   readHostErrors,
   readRuntime,
+  removeCaseDir,
   removeHarnessFiles,
   replyPartsOf,
   runtimeBinary,
   selectKillTarget,
   serveArgs,
+  splitHostErrors,
   sweepStaleHarnessFiles,
+  watcherExemptionLine,
 } from './opencode.js';
 
 describe('selectKillTarget', () => {
@@ -415,7 +422,7 @@ describe('host errors', () => {
       await writeFile(log, INFO_LINE, 'utf8');
       // The offset is taken before the case runs, so the INFO line already in
       // the log is not this case's fault.
-      expect(await readHostErrors(log, 0)).toEqual([]);
+      expect((await readHostErrors(log, 0)).faults).toEqual([]);
 
       await writeFile(log, `${INFO_LINE}${ERROR_BLOCK}\n`, 'utf8');
       const appended = await readHostErrors(
@@ -423,8 +430,8 @@ describe('host errors', () => {
         Buffer.byteLength(INFO_LINE),
         new Map([['ses_ec7e1725dffetH2YmTqboowL6x', 'scope push']]),
       );
-      expect(appended).toHaveLength(1);
-      expect(appended[0]?.case).toBe('scope push');
+      expect(appended.faults).toHaveLength(1);
+      expect(appended.faults[0]?.case).toBe('scope push');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -447,9 +454,9 @@ describe('host errors', () => {
         new Map([['ses_ec7e1725dffetH2YmTqboowL6x', 'scope push']]),
       );
 
-      expect(errors).toHaveLength(1);
-      expect(errors[0]?.sessionID).toBe('ses_ec7e1725dffetH2YmTqboowL6x');
-      expect(errors[0]?.case).toBe('scope push');
+      expect(errors.faults).toHaveLength(1);
+      expect(errors.faults[0]?.sessionID).toBe('ses_ec7e1725dffetH2YmTqboowL6x');
+      expect(errors.faults[0]?.case).toBe('scope push');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -603,5 +610,139 @@ describe('host errors the case injected', () => {
     expect(aborted.every((id) => id === 'ses_killed')).toBe(true);
     // The watch is stopped, so nothing fires after it.
     expect(aborted.length).toBe(after);
+  });
+});
+
+/**
+ * The line the server writes when its file watcher cannot attach.
+ *
+ * Measured on 2026-10-27 on macOS: the server opens a watcher on the
+ * directory a case serves, and FSEvents refuses to open a stream for a path
+ * under the OS temp dir. This error was the whole content of the teardown
+ * failure of every run on that machine.
+ */
+function watcherError(directory: string): string {
+  return `timestamp=2026-10-27T15:34:58.573Z level=ERROR run=bc5593e8 message="failed to subscribe" directory=${directory} cause="Error: Error starting FSEvents stream ..."`;
+}
+
+describe('a watcher on a throwaway directory', () => {
+  it('does not treat a watcher that cannot attach to a case directory as a host fault', async () => {
+    const dir = await createCaseDir('watcher-probe');
+    try {
+      // The server logs the path it resolved, and on macOS the temp dir is
+      // behind a symlink.
+      const resolved = await realpath(dir);
+      const split = splitHostErrors(
+        hostErrorsIn(watcherError(join(resolved, '.git'))),
+        new Set<string>(),
+        caseDirsOfRun(),
+      );
+
+      expect(split.faults).toEqual([]);
+      expect(split.exempted).toHaveLength(1);
+      expect(split.exempted[0]?.line).toContain('failed to subscribe');
+    } finally {
+      await removeCaseDir(dir);
+    }
+  });
+
+  it('keeps the same error on a path outside the case directories', () => {
+    const split = splitHostErrors(
+      hostErrorsIn(watcherError('/Users/someone/project/.git')),
+      new Set<string>(),
+      caseDirsOfRun(),
+    );
+
+    expect(split.faults).toHaveLength(1);
+    expect(split.exempted).toEqual([]);
+  });
+
+  it('keeps a different error raised in the same case directory', async () => {
+    const dir = await createCaseDir('watcher-probe');
+    try {
+      const other = `timestamp=2026-10-27T15:34:58.573Z level=ERROR run=bc5593e8 message="prompt_async failed" directory=${join(dir, '.git')} cause="Error: EffectDrizzleQueryError"`;
+      const split = splitHostErrors(hostErrorsIn(other), new Set<string>(), caseDirsOfRun());
+
+      expect(split.faults).toHaveLength(1);
+      expect(split.exempted).toEqual([]);
+    } finally {
+      await removeCaseDir(dir);
+    }
+  });
+
+  it('keeps the error on a directory that only looks like a case directory', async () => {
+    const dir = await createCaseDir('watcher-probe');
+    try {
+      // The exemption is for the directories this run created, not for a
+      // path whose name resembles one.
+      const lookalike = `${dir}-other/.git`;
+      const split = splitHostErrors(
+        hostErrorsIn(watcherError(lookalike)),
+        new Set<string>(),
+        caseDirsOfRun(),
+      );
+
+      expect(split.faults).toHaveLength(1);
+      expect(split.exempted).toEqual([]);
+    } finally {
+      await removeCaseDir(dir);
+    }
+  });
+
+  it('reports the exempted errors: the count and the first one', async () => {
+    const dir = await createCaseDir('watcher-probe');
+    try {
+      const split = splitHostErrors(
+        hostErrorsIn(`${watcherError(join(dir, '.git'))}\n${watcherError(join(dir, '.git'))}`),
+        new Set<string>(),
+        caseDirsOfRun(),
+      );
+      const line = watcherExemptionLine(attributeHostErrors(split.exempted, new Map()));
+
+      expect(line).toContain('2 watcher error(s)');
+      expect(line).toContain('failed to subscribe');
+      expect(line).toContain(join(dir, '.git'));
+    } finally {
+      await removeCaseDir(dir);
+    }
+  });
+
+  it('reads the exempted error out of the log as an exemption, not as a fault', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'openagentsy-host-errors-'));
+    const log = join(root, 'server.log');
+    const dir = await createCaseDir('watcher-probe');
+    try {
+      // The other error in the same log is still a fault: the exemption is
+      // for one message on one path, not for the log.
+      await writeFile(log, `${watcherError(join(dir, '.git'))}\n${ERROR_BLOCK}\n`, 'utf8');
+
+      const report = await readHostErrors(log, 0);
+
+      expect(report.exempted).toHaveLength(1);
+      expect(report.faults).toHaveLength(1);
+      expect(report.faults[0]?.line).toContain('FOREIGN KEY constraint failed');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await removeCaseDir(dir);
+    }
+  });
+
+  it('tells a watcher failure on a case directory from one on any other path', () => {
+    const block = { line: watcherError('/tmp/case/.git') };
+
+    expect(isCaseDirWatcherFault(block, new Set(['/tmp/case']))).toBe(true);
+    expect(isCaseDirWatcherFault(block, new Set(['/tmp/other']))).toBe(false);
+    // The path is inside the directory, not a sibling with the same prefix.
+    expect(isCaseDirWatcherFault(block, new Set(['/tmp/case-other']))).toBe(false);
+  });
+
+  it('reads the fields of a log line, and a field inside a quoted value is not a field', () => {
+    const fields = logFields(
+      'timestamp=2026-10-27T15:34:58.573Z level=ERROR message="failed to subscribe" directory=/tmp/case cause="Error: message=not a field"',
+    );
+
+    expect(fields.get('message')).toBe('failed to subscribe');
+    expect(fields.get('directory')).toBe('/tmp/case');
+    expect(fields.get('cause')).toBe('Error: message=not a field');
   });
 });

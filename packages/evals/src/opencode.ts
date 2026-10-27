@@ -1,8 +1,8 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { closeSync, fstatSync, openSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 import { gitFreeEnv } from './git-env.js';
@@ -41,12 +41,13 @@ export type OpenCodeHarness = {
   watches: { killed: Promise<string | undefined>; stop: () => void }[];
   /**
    * The host errors the server wrote since it started, each with the case it
-   * belongs to. `stop` reads the same list and throws when it is not empty.
+   * belongs to. `stop` reads the same list and throws when it holds a fault.
    *
    * The sessions the harness killed are excluded: their abort is the fault
-   * the case injected, not a host failure.
+   * the case injected, not a host failure. The errors the policy exempts are
+   * reported next to the faults, so the run says what it ignored.
    */
-  hostErrors: (killedSessions?: ReadonlySet<string>) => Promise<HostError[]>;
+  hostErrors: (killedSessions?: ReadonlySet<string>) => Promise<HostErrorReport>;
   /**
    * Say which case a session belongs to, so a host error that names it is
    * attributed instead of falling back to the suite as a whole.
@@ -265,6 +266,25 @@ export type HostError = {
 /** One error block, before it is attributed to a case. */
 export type HostErrorBlock = { line: string; sessionID?: string };
 
+/**
+ * The errors a run keeps, and the ones the policy exempts.
+ *
+ * The exempted ones are kept as well: a run that hides them is a run that
+ * lies about what happened, so they are counted and reported.
+ */
+export type HostErrorReport = {
+  /** The errors that fail the run. */
+  faults: HostError[];
+  /** The errors the policy exempts. */
+  exempted: HostError[];
+};
+
+/** The error blocks that are faults, and the ones the policy exempts. */
+export type HostErrorBlocks = {
+  faults: HostErrorBlock[];
+  exempted: HostErrorBlock[];
+};
+
 /** A line the server wrote, with its level. Continuation lines have none. */
 const LOG_HEADER = /^timestamp=\S+ level=(\S+) /;
 
@@ -318,7 +338,7 @@ export function attributeHostErrors(
 }
 
 /**
- * The host errors that are faults of the run.
+ * The host errors that are faults of the run, and the ones the policy exempts.
  *
  * One error is expected: the case that kills a builder on purpose
  * (`fault builder killed`) aborts the builder's session mid-turn, and the
@@ -330,14 +350,111 @@ export function attributeHostErrors(
  *
  * The killed sessions are the ones the watches resolved to: a watch that gave
  * up resolves undefined and contributes nothing.
+ *
+ * One more class is exempt, and only one: a file watcher that could not
+ * attach to a directory this run created (see `isCaseDirWatcherFault`). It is
+ * reported, but it does not fail the run.
  */
+export function splitHostErrors(
+  blocks: readonly HostErrorBlock[],
+  killedSessions: ReadonlySet<string>,
+  caseDirs: ReadonlySet<string>,
+): HostErrorBlocks {
+  const faults: HostErrorBlock[] = [];
+  const exempted: HostErrorBlock[] = [];
+  for (const block of blocks) {
+    if (block.sessionID !== undefined && killedSessions.has(block.sessionID)) continue;
+    if (isCaseDirWatcherFault(block, caseDirs)) {
+      exempted.push(block);
+      continue;
+    }
+    faults.push(block);
+  }
+  return { faults, exempted };
+}
+
+/** The host errors that are faults of the run. */
 export function hostFaults(
   blocks: readonly HostErrorBlock[],
   killedSessions: ReadonlySet<string>,
+  caseDirs: ReadonlySet<string> = new Set(),
 ): HostErrorBlock[] {
-  return blocks.filter(
-    (block) => block.sessionID === undefined || !killedSessions.has(block.sessionID),
-  );
+  return splitHostErrors(blocks, killedSessions, caseDirs).faults;
+}
+
+/**
+ * The message the server writes when a file watcher cannot attach.
+ *
+ * Measured on 2026-10-27 on macOS: the server opens a watcher on the
+ * directory a case serves, and FSEvents refuses to open a stream for a path
+ * under the OS temp dir, so the server writes this error.
+ */
+const WATCHER_FAILURE = 'failed to subscribe';
+
+/**
+ * The `key=value` fields of a structured log line.
+ *
+ * The server writes the fields in order, and a value with a space in it is
+ * quoted. A `key=value` inside a quoted value belongs to that value, so the
+ * line is walked and not searched.
+ */
+export function logFields(line: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const match of line.matchAll(/([\w.]+)=("(?:[^"\\]|\\.)*"|[^\s]*)/g)) {
+    const key = match[1];
+    const raw = match[2];
+    if (key === undefined || raw === undefined) continue;
+    fields.set(key, raw.startsWith('"') ? raw.slice(1, -1).replace(/\\(["\\])/g, '$1') : raw);
+  }
+  return fields;
+}
+
+/**
+ * Is this error the file watcher failing to attach to a throwaway directory?
+ *
+ * The measured line (2026-10-27, macOS) is:
+ *
+ *   level=ERROR … message="failed to subscribe" directory=/…/openagentsy-eval-seeded-bug-cwZs34/.git cause="Error: Error starting FSEvents stream …"
+ *
+ * A watcher that cannot attach to a directory the harness itself created is
+ * not a failure of the agent's environment in any way the agent could be
+ * measured against: no tool call depends on it, the case's own state is
+ * complete, and the verdict does not change. The same message on any other
+ * path is a real host fault and still fails the run.
+ *
+ * The exemption is bounded by the directories this run created, not by a
+ * shape a path happens to have: a directory that only looks like a case
+ * directory is not one.
+ */
+export function isCaseDirWatcherFault(
+  block: HostErrorBlock,
+  caseDirs: ReadonlySet<string>,
+): boolean {
+  // The fields are on the header line; the lines under it are the stack.
+  const header = block.line.split('\n', 1)[0] ?? '';
+  const fields = logFields(header);
+  if (fields.get('message') !== WATCHER_FAILURE) return false;
+  const directory = fields.get('directory');
+  if (directory === undefined || directory === '') return false;
+  return [...caseDirs].some((dir) => isWithin(dir, directory));
+}
+
+/** Is the path the directory itself, or a path under it? */
+function isWithin(dir: string, path: string): boolean {
+  if (path === dir) return true;
+  return path.startsWith(dir.endsWith(sep) ? dir : `${dir}${sep}`);
+}
+
+/**
+ * The line the run reports the exempted errors with.
+ *
+ * The count and the first error are both in it: a run that hides the errors
+ * it ignored is a run that lies about what happened.
+ */
+export function watcherExemptionLine(exempted: readonly HostError[]): string {
+  const first = exempted[0];
+  const detail = first === undefined ? '' : `\n  ${first.line.replace(/\n/g, '\n  ')}`;
+  return `the opencode server wrote ${exempted.length} watcher error(s) on a throwaway directory this run created; a watcher that cannot attach is not a host fault:${detail}`;
 }
 
 /**
@@ -347,19 +464,23 @@ export function hostFaults(
  * the size the file had when the run started, and only what was appended
  * afterwards is read. A block naming a session the harness killed is the
  * injected fault, not a host error, so it is dropped here.
+ *
+ * The errors the policy exempts are returned next to the faults, because a
+ * run that does not say what it ignored cannot be read.
  */
 export async function readHostErrors(
   logFile: string,
   fromOffset = 0,
   sessions: ReadonlyMap<string, string> = new Map(),
   killedSessions: ReadonlySet<string> = new Set(),
-): Promise<HostError[]> {
+  caseDirs: ReadonlySet<string> = caseDirsOfRun(),
+): Promise<HostErrorReport> {
   let bytes: Buffer;
   try {
     bytes = await readFile(logFile);
   } catch {
     // No log yet is no error: a server that has not started has written none.
-    return [];
+    return { faults: [], exempted: [] };
   }
   // The offset is the size the file had when the run started, and a log that
   // already ended in a partial line leaves it mid-line. Start at the first
@@ -368,13 +489,18 @@ export async function readHostErrors(
   let start = Math.max(0, fromOffset);
   if (start > 0 && start < bytes.length && bytes[start - 1] !== 0x0a) {
     const newline = bytes.indexOf(0x0a, start);
-    if (newline === -1) return [];
+    if (newline === -1) return { faults: [], exempted: [] };
     start = newline + 1;
   }
-  return attributeHostErrors(
-    hostFaults(hostErrorsIn(bytes.subarray(start).toString('utf8')), killedSessions),
-    sessions,
+  const split = splitHostErrors(
+    hostErrorsIn(bytes.subarray(start).toString('utf8')),
+    killedSessions,
+    caseDirs,
   );
+  return {
+    faults: attributeHostErrors(split.faults, sessions),
+    exempted: attributeHostErrors(split.exempted, sessions),
+  };
 }
 
 /**
@@ -585,7 +711,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
 
   const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
   const sessions = new Map<string, string>();
-  const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostError[]> =>
+  const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostErrorReport> =>
     readHostErrors(logFile, logStart, sessions, killedSessions);
 
   return {
@@ -631,9 +757,9 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // can hide an error the server wrote while it was serving them. It reads
       // through `hostErrors`, the same view a caller asking mid-run gets, so
       // the log is read before it is removed.
-      let faults: HostError[] = [];
+      let report: HostErrorReport = { faults: [], exempted: [] };
       try {
-        faults = await hostErrors(killedSessions);
+        report = await hostErrors(killedSessions);
       } finally {
         // This run's database, sidecars and (when it named it) log are garbage
         // once the server is gone. Nothing else is in the list: not the board
@@ -642,12 +768,17 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
         // The server's own directory goes with it.
         await rm(serverCwd, { recursive: true, force: true });
       }
-      if (faults.length > 0) {
-        const detail = faults
+      // The errors the policy exempts are reported: a run that hides the
+      // errors it ignored is a run that lies about what happened.
+      if (report.exempted.length > 0) {
+        process.stdout.write(`${watcherExemptionLine(report.exempted)}\n`);
+      }
+      if (report.faults.length > 0) {
+        const detail = report.faults
           .map((fault) => `[${fault.case}] ${fault.line.replace(/\n/g, '\n  ')}`)
           .join('\n');
         throw new Error(
-          `the opencode server wrote ${faults.length} host error(s); a case that passed while the host failed did not measure the agent:\n${detail}`,
+          `the opencode server wrote ${report.faults.length} host error(s); a case that passed while the host failed did not measure the agent:\n${detail}`,
         );
       }
     },
@@ -1012,9 +1143,37 @@ export function parseModel(model: string): { providerID: string; modelID: string
   };
 }
 
+/**
+ * The throwaway directories this run created.
+ *
+ * The suite makes one per case, under the OS temp dir, and the server names
+ * the directory in the error it writes when its watcher cannot attach. This
+ * list is what tells that error apart from the same error on a path that
+ * belongs to the person running the suite.
+ *
+ * A directory stays in the list after its case is over: the error is written
+ * while the case runs and read at teardown, when the directory is gone.
+ */
+const caseDirs = new Set<string>();
+
+/** The throwaway directories this run created. */
+export function caseDirsOfRun(): ReadonlySet<string> {
+  return caseDirs;
+}
+
 /** A throwaway directory for one case. */
 export async function createCaseDir(prefix: string): Promise<string> {
-  return mkdtemp(join(tmpdir(), `openagentsy-eval-${prefix}-`));
+  const dir = await mkdtemp(join(tmpdir(), `openagentsy-eval-${prefix}-`));
+  // The server logs the path it resolved, and on macOS the temp dir is
+  // behind a symlink. Both forms are kept, so the error names the directory
+  // whichever way it was written.
+  caseDirs.add(dir);
+  try {
+    caseDirs.add(await realpath(dir));
+  } catch {
+    // A directory that cannot be resolved is still the one the harness made.
+  }
+  return dir;
 }
 
 export async function removeCaseDir(path: string): Promise<void> {
