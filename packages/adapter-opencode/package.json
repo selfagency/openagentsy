@@ -14,7 +14,10 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc -b tsconfig.json",
-    "probe:v2-facts": "bun scripts/probe-v2-facts.mjs"
+    "probe:v2-facts": "bun scripts/probe-v2-facts.mjs",
+    "probe:v2-surface": "bun scripts/probe-v2-surface.mjs",
+    "probe:v2-hooks": "bun scripts/probe-v2-hooks.mjs",
+    "probe:v2-e2e": "bun scripts/probe-v2-e2e.mjs"
   },
   "dependencies": {
     "@openagentsy/core": "*",

@@ -1,12 +1,6 @@
 import { join } from 'node:path';
-import {
-  closeDatabase,
-  isRoundStatus,
-  listRecords,
-  openDatabase,
-  type RoundStatus,
-} from '@openagentsy/core';
 import { closeLedger, openLedger } from '@openagentsy/ledger';
+import { boardRoundStatus } from './board-status.js';
 import { type BridgeHooks, createBridge } from './bridge.js';
 import { type ClientLike, type ProviderInventory, sessionAdapter } from './client.js';
 import { defineTool, toolMap } from './define-tool.js';
@@ -24,6 +18,7 @@ import {
   writeRungs,
 } from './guard.js';
 import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
+import { recordIdleFailure } from './idle-failure.js';
 import { claimedStatusOf, observeSessionIdle, recordNoProgressRounds } from './idle-observer.js';
 import { assistantMessageOf, bridgeToLedger, rootSessionOf } from './ledger-bridge.js';
 import { readApprovalFor, readQualityMode } from './project-config.js';
@@ -213,54 +208,6 @@ async function lastTextOf(client: ClientLike, root: string, sessionID: string): 
     if (typeof part.text === 'string') text.push(part.text);
   }
   return text.join('\n');
-}
-
-/**
- * The status the board holds.
- *
- * The board has no table of round statuses, so the status a round was
- * persisted with is the one a record carries: the Lead writes the state of
- * its round down before it reports it. A board that holds no such record
- * holds no status, and the observer finds nothing to contradict.
- */
-function boardRoundStatus(root: string): RoundStatus | undefined {
-  const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
-  try {
-    const { records } = listRecords(db, { limit: 100, markRead: false });
-    for (const record of [...records].reverse()) {
-      if (isRoundStatus(record.state)) return record.state;
-    }
-    return undefined;
-  } finally {
-    closeDatabase(db);
-  }
-}
-
-/**
- * A failure of the idle path, on the record.
- *
- * The `event` hook is not awaited by OpenCode, so a throw there is a broken
- * session and not a failed check. The failure is written down and the
- * session goes on.
- */
-async function recordIdleFailure(
-  root: string,
-  input: { agent: string; sessionID: string; error: unknown },
-): Promise<void> {
-  try {
-    await appendAudit(root, {
-      policyId: POLICIES.eventsFailed.id,
-      policyVersion: POLICIES.eventsFailed.version,
-      actor: input.agent,
-      action: 'idle',
-      resource: input.sessionID,
-      effect: 'deny',
-      detail: input.error instanceof Error ? input.error.message : String(input.error),
-      sessionID: input.sessionID,
-    });
-  } catch {
-    // Nowhere left to record it. The session stays silent rather than throw.
-  }
 }
 
 /**

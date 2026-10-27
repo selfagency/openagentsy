@@ -2,7 +2,13 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { setupV2, type V2Context, type V2ContextEvent } from './v2.js';
+import {
+  setupV2,
+  type V2Context,
+  type V2ContextEvent,
+  type V2PermissionEvent,
+  type V2ToolEvent,
+} from './v2.js';
 
 let root: string;
 
@@ -62,14 +68,41 @@ function fakeContext(
   events: {
     type: string;
     properties?: { sessionID?: string };
-    data?: { sessionID?: string };
+    data?: { sessionID?: string; text?: string };
   }[],
   directory = root,
 ) {
   const created: { title?: string; parentID?: string }[] = [];
   const prompts: { sessionID: string; text: string }[] = [];
   const agents: { sessionID: string; agent: string }[] = [];
+  const removed: string[] = [];
   const contextHooks: ((event: V2ContextEvent) => Promise<void> | void)[] = [];
+  const toolHooks: { name: string; callback: (event: V2ToolEvent) => Promise<void> | void }[] = [];
+  const permissionHooks: {
+    name: string;
+    callback: (event: V2PermissionEvent) => Promise<void> | void;
+  }[] = [];
+  // The sessions the janitor reads. The old harvest children are here.
+  const listed: unknown[] = [
+    {
+      id: 'ses_old',
+      title: 'harvest builder',
+      agent: 'oa-archivist',
+      time: { created: Date.now() - 8 * 24 * 60 * 60 * 1000 },
+    },
+    {
+      id: 'ses_new',
+      title: 'harvest builder',
+      agent: 'oa-archivist',
+      time: { created: Date.now() - 1000 },
+    },
+    {
+      id: 'ses_person',
+      title: 'a session of a person',
+      agent: 'oa-archivist',
+      time: { created: Date.now() - 8 * 24 * 60 * 60 * 1000 },
+    },
+  ];
   // The subscription ends when the events run out, and the idle handler has
   // finished by then: the loop awaits the body before it asks for the next
   // event. A timer would be a guess.
@@ -101,13 +134,24 @@ function fakeContext(
         prompts.push({ sessionID: input.sessionID, text: input.text });
         return {};
       },
+      list: async () => listed,
+      remove: async (input) => {
+        removed.push(input.sessionID);
+        return {};
+      },
     },
     tool: {
-      hook: async () => ({ dispose: async () => {} }),
+      hook: async (name, callback) => {
+        toolHooks.push({ name, callback });
+        return { dispose: async () => {} };
+      },
       transform: async () => ({ dispose: async () => {} }),
     },
     permission: {
-      hook: async () => ({ dispose: async () => {} }),
+      hook: async (name, callback) => {
+        permissionHooks.push({ name, callback });
+        return { dispose: async () => {} };
+      },
     },
     event: {
       subscribe: async function* () {
@@ -120,7 +164,29 @@ function fakeContext(
     },
   };
 
-  return { ctx, created, prompts, agents, contextHooks, done };
+  return { ctx, created, prompts, agents, removed, contextHooks, toolHooks, permissionHooks, done };
+}
+
+/** The tool hook of a name, once the plugin registered it. */
+function toolHook(
+  toolHooks: { name: string; callback: (event: V2ToolEvent) => Promise<void> | void }[],
+  name: string,
+): (event: V2ToolEvent) => Promise<void> | void {
+  const found = toolHooks.find((hook) => hook.name === name);
+  if (found === undefined) throw new Error(`the plugin registered no ${name} hook`);
+  return found.callback;
+}
+
+/** The permission hook, once the plugin registered it. */
+function permissionHook(
+  permissionHooks: {
+    name: string;
+    callback: (event: V2PermissionEvent) => Promise<void> | void;
+  }[],
+): (event: V2PermissionEvent) => Promise<void> | void {
+  const found = permissionHooks.find((hook) => hook.name === 'evaluate');
+  if (found === undefined) throw new Error('the plugin registered no permission hook');
+  return found.callback;
 }
 
 describe('the OpenCode 2 path', () => {
@@ -222,10 +288,10 @@ describe('the OpenCode 2 path', () => {
     expect(prompts).toHaveLength(0);
   });
 
-  it('harvests without the lookup, because the context cannot answer it', async () => {
-    // The reason the check is left out: the context the plugin is given has
-    // no session lookup, and a message list cannot tell a fresh session from
-    // a deleted one. The adapter does not claim a check it did not make.
+  it('harvests without the lookup, because the harvest does not need one', async () => {
+    // The reason the check is left out: the archivist stands on its own, so
+    // the cascade the lookup guarded against does not happen. The adapter
+    // does not claim a check it did not make.
     const { ctx, created, contextHooks, done } = fakeContext([
       { type: 'session.idle', properties: { sessionID: 'ses_1' } },
     ]);
@@ -275,5 +341,187 @@ describe('the OpenCode 2 path', () => {
 
     const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
     expect(audit).toContain('oa.events.failed');
+  });
+
+  it('deletes the harvest children that are older than a week', async () => {
+    // The janitor is the one place the plugin deletes a session, and the
+    // rule is a conjunction: the title, the agent and the age. A session of
+    // a person is never one of ours.
+    const { ctx, removed, contextHooks, done } = fakeContext([
+      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+    await done;
+    // The prune runs beside the harvest and is never awaited.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(removed).toEqual(['ses_old']);
+  });
+});
+
+describe('the rules of the package on the v2 path', () => {
+  it('refuses a call that skips the git hooks', async () => {
+    // The seven blocking rules of the package run in the V2 tool hook, and
+    // a rule that blocks a call blocks it there: the V2 before hook stops
+    // the call when it throws (measured on a live OpenCode 2.2.0 server).
+    const { ctx, toolHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const before = toolHook(toolHooks, 'execute.before');
+    await expect(
+      before({
+        tool: 'shell',
+        sessionID: 'ses_1',
+        id: 'call_1',
+        input: { command: 'git commit -n -m wip' },
+      }),
+    ).rejects.toThrow(/Git hooks/);
+  });
+
+  it('lets a call through that breaks no rule', async () => {
+    const { ctx, toolHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const before = toolHook(toolHooks, 'execute.before');
+    await expect(
+      before({
+        tool: 'shell',
+        sessionID: 'ses_1',
+        id: 'call_1',
+        input: { command: 'echo hello' },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('runs the quality check after a write', async () => {
+    // The quality check is the whole phase-2d line, and it needs the after
+    // hook of the tool. The rules it runs are the ones that need no
+    // compiler, so the plugin does not carry the compiler.
+    await writeFile(join(root, 'style.css'), '.a { transition: all 0.2s; }\n', 'utf8');
+    const { ctx, toolHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const after = toolHook(toolHooks, 'execute.after');
+    const result = { content: [{ type: 'text', text: 'the file was written' }] };
+    await after({
+      tool: 'write',
+      sessionID: 'ses_1',
+      id: 'call_1',
+      input: { path: 'style.css', content: '.a { transition: all 0.2s; }' },
+      status: 'completed',
+      result,
+    });
+
+    expect(result.content[0]?.text).toContain('transition');
+  });
+});
+
+describe('the permission decisions on the v2 path', () => {
+  it('asks a person about a command the project named', async () => {
+    // The V1 path wrote the commands into the permission map of the host.
+    // The V2 path has no map to write, so the approval is asked for where
+    // the decision is made.
+    await writeFile(
+      join(root, 'openagentsy.jsonc'),
+      JSON.stringify({ hooks: { approvalFor: ['git push'] } }),
+      'utf8',
+    );
+    const { ctx, permissionHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const evaluate = permissionHook(permissionHooks);
+    const event: V2PermissionEvent = {
+      sessionID: 'ses_1',
+      agent: 'oa-builder',
+      action: 'shell',
+      resources: ['git push --force origin main'],
+      effect: 'allow',
+    };
+    await evaluate(event);
+
+    expect(event.effect).toBe('ask');
+    expect(event.message).toContain('git push');
+  });
+
+  it('leaves a command nobody asked about alone', async () => {
+    const { ctx, permissionHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const evaluate = permissionHook(permissionHooks);
+    const event: V2PermissionEvent = {
+      sessionID: 'ses_1',
+      agent: 'oa-builder',
+      action: 'shell',
+      resources: ['echo hello'],
+      effect: 'allow',
+    };
+    await evaluate(event);
+
+    expect(event.effect).toBe('allow');
+  });
+
+  it('takes the agent of the session when the event names none', async () => {
+    // The permission event carries the agent of the request, and a request
+    // that names no agent takes the agent of the session the context hook
+    // resolved. A write with neither is refused.
+    const { ctx, permissionHooks, contextHooks } = fakeContext([]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+
+    const evaluate = permissionHook(permissionHooks);
+    const event: V2PermissionEvent = {
+      sessionID: 'ses_1',
+      action: 'edit',
+      resources: ['src/index.ts'],
+      effect: 'allow',
+    };
+    await evaluate(event);
+
+    // No lease covers the path, so the write is refused, and the refusal
+    // names the agent of the session: the rule ran with an agent.
+    expect(event.effect).toBe('deny');
+    expect(event.message).toContain('lease');
+  });
+
+  it('refuses a write when neither the event nor the session names an agent', async () => {
+    const { ctx, permissionHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const evaluate = permissionHook(permissionHooks);
+    const event: V2PermissionEvent = {
+      sessionID: 'ses_1',
+      action: 'edit',
+      resources: ['src/index.ts'],
+      effect: 'allow',
+    };
+    await evaluate(event);
+
+    expect(event.effect).toBe('deny');
+    expect(event.message).toContain('named no agent');
+  });
+});
+
+describe('the output checks on the v2 path', () => {
+  it('records the findings of a reply', async () => {
+    // The V2 path has no `experimental.text.complete` hook: the text of a
+    // reply arrives with the `session.text.ended` event, which is after the
+    // reply is out. The checks run on that text and their findings are
+    // recorded.
+    const { ctx, done } = fakeContext([
+      {
+        type: 'session.text.ended',
+        data: { sessionID: 'ses_1', text: 'Great point, you are absolutely right.' },
+      },
+    ]);
+    await setupV2(ctx);
+    await done;
+
+    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
+    expect(audit).toContain('oa.output.flagged');
   });
 });

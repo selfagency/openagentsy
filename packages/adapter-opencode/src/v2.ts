@@ -1,4 +1,7 @@
+import { join } from 'node:path';
+import { closeLedger, openLedger } from '@openagentsy/ledger';
 import { z } from 'zod';
+import { boardRoundStatus } from './board-status.js';
 import { defineTool, type V2ToolDefinition, v2Tool } from './define-tool.js';
 import {
   appendAudit,
@@ -11,8 +14,20 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
-import { type HarvestSession, harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
+import {
+  type HarvestSession,
+  harvest,
+  harvestEnabled,
+  type PruneSessionRow,
+  pruneHarvestChildren,
+  recordHarvestFailure,
+} from './harvest.js';
+import { recordIdleFailure } from './idle-failure.js';
+import { claimedStatusOf, observeSessionIdle, recordNoProgressRounds } from './idle-observer.js';
 import { assistantMessageOf, bridgeToLedger } from './ledger-bridge.js';
+import { readApprovalFor } from './project-config.js';
+import { applyApproval, SHELL_ACTION } from './v2-approval.js';
+import { createV2Bridge, type V2Bridge, type V2ToolEvent } from './v2-bridge.js';
 import { checkWrite } from './write-guard.js';
 
 /**
@@ -22,19 +37,38 @@ import { checkWrite } from './write-guard.js';
  * with an `id` and a `setup(ctx)`, and `setup` registers hooks, transforms,
  * tools and subscriptions on the context. The V1 hook map does not run here.
  *
- * The mapping from the V1 hooks this plugin uses:
+ * The mapping from the V1 hooks this plugin uses, measured on a live
+ * OpenCode 2.2.0 server (2026-10-27):
  *
  * | V1                    | V2                                        |
  * | --------------------- | ----------------------------------------- |
- * | `tool.execute.before` | `ctx.permission.hook("evaluate", ...)`    |
- * | `chat.params`         | `ctx.session.hook("context", ...)`        |
- * | `event`               | `ctx.event.subscribe({ signal })`         |
- * | `tool` map            | `ctx.tool.transform(...)`                 |
+ * | `tool.execute.before` | `ctx.tool.hook("execute.before", ...)`     |
+ * | `tool.execute.after`  | `ctx.tool.hook("execute.after", ...)`      |
+ * | `tool.execute.before` | `ctx.permission.hook("evaluate", ...)`     |
+ * | `chat.params`         | `ctx.session.hook("context", ...)`         |
+ * | `event`               | `ctx.event.subscribe({ signal })`          |
+ * | `tool` map            | `ctx.tool.transform(...)`                  |
+ *
+ * The V2 tool hook fires with the V1 hook names and carries the tool name,
+ * the arguments, the agent and the call id, and it has the two powers the
+ * V1 hook had: a throw stops the call, and the arguments of the event are
+ * the arguments the tool runs with. So the rules of the package run in the
+ * same places they run on V1, and the bridge is the adapter between the two
+ * shapes rather than a second copy of the rules.
  *
  * The write guard uses the permission hook and not the tool hook, because
  * the permission event carries the agent and the paths, and the tool event
  * carries neither. The rule is the same one the V1 path applies: only
  * `checkWrite` decides.
+ *
+ * Two V1 hooks have no V2 home, and the record says so:
+ *
+ *   - `shell.env` has no hook: the V2 shell domain takes a hook, and none of
+ *     the names fires when a command runs (measured on the same server). The
+ *     shell of an agent runs with the environment of the host.
+ *   - `config` has no domain: the V2 context has no way to write the
+ *     permission map of the host, so the commands a person has to approve
+ *     are asked for through the permission hook instead.
  *
  * This path is verified against `@opencode/cli@2.1.3`.
  */
@@ -68,6 +102,10 @@ export type V2Context = {
     prompt: (input: { sessionID: string; text: string }) => Promise<unknown>;
     /** Change the agent a session runs under. */
     switchAgent: (input: { sessionID: string; agent: string }) => Promise<void>;
+    /** The sessions of the project. The janitor reads them. */
+    list: () => Promise<unknown>;
+    /** Delete a session. The janitor deletes the harvest children. */
+    remove: (input: { sessionID: string }) => Promise<unknown>;
   };
   tool: {
     hook: (
@@ -93,14 +131,11 @@ export type V2Context = {
 export type V2ContextEvent = {
   sessionID?: string;
   agent?: string;
+  model?: unknown;
   options?: Record<string, unknown>;
-};
-
-/** The event of a tool call, the V2 form of `tool.execute.before`. */
-export type V2ToolEvent = {
-  tool: string;
-  input?: unknown;
-  sessionID?: string;
+  system?: unknown;
+  tools?: unknown;
+  messages?: unknown;
 };
 
 /**
@@ -131,13 +166,19 @@ export type V2Event = {
    */
   properties?: { sessionID?: string; info?: unknown; status?: unknown };
   /** The v2 shape: the payload of the event under `data`. */
-  data?: { sessionID?: string; info?: unknown; status?: unknown };
+  data?: {
+    sessionID?: string;
+    info?: unknown;
+    status?: unknown;
+    /** The text of a reply, on `session.text.ended`. */
+    text?: string;
+  };
 };
 
 /** The permission actions that write. The names are the permission map keys. */
 const WRITE_ACTIONS = new Set(['edit', 'write', 'patch', 'apply_patch']);
 
-export type { V2ToolDefinition };
+export type { V2ToolDefinition, V2ToolEvent };
 
 /**
  * The effort ladder tool.
@@ -300,6 +341,132 @@ async function onMessageUpdated(
 }
 
 /**
+ * The tool hook, on the V2 path.
+ *
+ * The V2 tool hook fires with the V1 hook names, so the rules of the package
+ * run in the same places they run on V1: before the call and after it. A
+ * rule that blocks a call throws, and a throw in the V2 before hook stops
+ * the call; a rule that rewrites the arguments rewrites the arguments the
+ * tool runs with. Both measured on a live OpenCode 2.2.0 server.
+ */
+async function registerToolHooks(ctx: V2Context, bridge: V2Bridge): Promise<void> {
+  await ctx.tool.hook('execute.before', async (event) => {
+    await bridge.before(event);
+  });
+  await ctx.tool.hook('execute.after', async (event) => {
+    await bridge.after(event);
+  });
+}
+
+/**
+ * A permission decision, on the V2 path.
+ *
+ * Two things are decided here. The lease rule decides whether a write may
+ * happen, and the approval list decides whether a person is asked about a
+ * command first.
+ */
+async function onPermission(
+  root: string,
+  event: V2PermissionEvent,
+  sessionAgents: Map<string, string>,
+  approvalFor: readonly string[],
+): Promise<void> {
+  // The V1 path wrote the commands a person has to approve into the
+  // permission map of the host. The V2 path has no map to write, so the
+  // approval is asked for here, where the decision is made.
+  if (event.action === SHELL_ACTION) {
+    applyApproval(event, approvalFor);
+    return;
+  }
+  if (!WRITE_ACTIONS.has(event.action)) return;
+  await guardWriteDecision(root, event, sessionAgents);
+}
+
+/**
+ * The lease rule, on the V2 path.
+ *
+ * The agent of a decision is the agent of the session. The permission event
+ * carries the agent of the request, and a request that names no agent takes
+ * the agent of the session the context hook resolved. A write that has
+ * neither is refused: a lease needs a holder, and a write nobody can be
+ * held to is a write the rule cannot judge.
+ */
+async function guardWriteDecision(
+  root: string,
+  event: V2PermissionEvent,
+  sessionAgents: Map<string, string>,
+): Promise<void> {
+  const agent = event.agent ?? sessionAgents.get(event.sessionID);
+  if (agent === undefined) {
+    event.effect = 'deny';
+    event.message =
+      'OpenAgentsy blocked this write. The permission event named no agent and the session names none either, so the lease rule cannot be applied. Ask the Lead to run this session under a role.';
+    await appendAudit(root, {
+      policyId: POLICIES.leaseWrite.id,
+      policyVersion: POLICIES.leaseWrite.version,
+      actor: 'unknown',
+      action: event.action,
+      resource: '(unidentified session)',
+      effect: 'deny',
+      detail:
+        'the permission event named no agent and the session names none either, so no lease can be attributed to it',
+      sessionID: event.sessionID,
+    });
+    return;
+  }
+
+  if (event.resources.length === 0) {
+    // A write action with no resource is a write whose path cannot be
+    // checked. It is refused for the same reason an unknown agent is.
+    event.effect = 'deny';
+    event.message =
+      'OpenAgentsy blocked this write. The action names no path, so the lease rule cannot be applied.';
+    await appendAudit(root, {
+      policyId: POLICIES.leaseWrite.id,
+      policyVersion: POLICIES.leaseWrite.version,
+      actor: agent,
+      action: event.action,
+      resource: '(no readable path)',
+      effect: 'deny',
+      detail: 'the action names no path, so no lease can be checked',
+      sessionID: event.sessionID,
+    });
+    return;
+  }
+
+  for (const resource of event.resources) {
+    const result = await checkWrite(root, {
+      toolName: event.action,
+      path: resource,
+      agent,
+      sessionID: event.sessionID,
+    });
+    if (result?.effect === 'deny') {
+      event.effect = 'deny';
+      event.message = `OpenAgentsy blocked this write. ${result.reason} Ask the Lead for a lease, then retry.`;
+      return;
+    }
+  }
+}
+
+/**
+ * The text of a reply, on the V2 path.
+ *
+ * The V2 path has no `experimental.text.complete` hook: the text of a reply
+ * arrives with the `session.text.ended` event, which is after the reply is
+ * out. The output checks run on that text and their findings are recorded,
+ * but the note the V1 path added to the reply cannot be added to a reply
+ * that is already out.
+ */
+async function onTextEnded(bridge: V2Bridge, event: V2Event): Promise<void> {
+  const text = event.data?.text;
+  if (typeof text !== 'string' || text === '') return;
+  const sessionID = sessionOf(event);
+  if (sessionID === undefined) return;
+  await bridge.reply(sessionID, text);
+}
+
+/**
  * The OpenCode 2 entry point.
  *
  * The cleanup function aborts the event subscription when the plugin
@@ -312,62 +479,30 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
 
   await registerContextHook(root, ctx, sessionAgents, switched);
 
-  // The write guard. The permission event carries the agent and the paths,
-  // so the lease rule can be applied before the action runs.
+  // The rules of the package, on the V2 hook points.
+  const bridge = await createV2Bridge({
+    root,
+    sessionAgents,
+    onFindings: async (findings, sessionID) => {
+      const agent = sessionAgents.get(sessionID) ?? 'unknown';
+      await appendAudit(root, {
+        policyId: POLICIES.outputFlagged.id,
+        policyVersion: POLICIES.outputFlagged.version,
+        actor: agent,
+        action: 'output-check',
+        resource: sessionID,
+        effect: 'allow',
+        detail: findings.map((finding) => `${finding.name}: ${finding.type}`).join(', '),
+        sessionID,
+      });
+    },
+  });
+  await registerToolHooks(ctx, bridge);
+
+  // The write guard and the approval of a command.
+  const approvalFor = await readApprovalFor(root);
   await ctx.permission.hook('evaluate', async (event) => {
-    if (!WRITE_ACTIONS.has(event.action)) return;
-
-    // A write from a session whose agent is not known is a write nobody can
-    // be held to. The rule is a lease rule, and a lease needs a holder.
-    if (event.agent === undefined) {
-      event.effect = 'deny';
-      event.message =
-        'OpenAgentsy blocked this write. The session carries no agent, so the lease rule cannot be applied. Ask the Lead to run this session under a role.';
-      await appendAudit(root, {
-        policyId: POLICIES.leaseWrite.id,
-        policyVersion: POLICIES.leaseWrite.version,
-        actor: 'unknown',
-        action: event.action,
-        resource: '(unidentified session)',
-        effect: 'deny',
-        detail: 'the session carries no agent, so no lease can be attributed to it',
-        sessionID: event.sessionID,
-      });
-      return;
-    }
-
-    if (event.resources.length === 0) {
-      // A write action with no resource is a write whose path cannot be
-      // checked. It is refused for the same reason an unknown agent is.
-      event.effect = 'deny';
-      event.message =
-        'OpenAgentsy blocked this write. The action names no path, so the lease rule cannot be applied.';
-      await appendAudit(root, {
-        policyId: POLICIES.leaseWrite.id,
-        policyVersion: POLICIES.leaseWrite.version,
-        actor: event.agent,
-        action: event.action,
-        resource: '(no readable path)',
-        effect: 'deny',
-        detail: 'the action names no path, so no lease can be checked',
-        sessionID: event.sessionID,
-      });
-      return;
-    }
-
-    for (const resource of event.resources) {
-      const result = await checkWrite(root, {
-        toolName: event.action,
-        path: resource,
-        agent: event.agent,
-        sessionID: event.sessionID,
-      });
-      if (result?.effect === 'deny') {
-        event.effect = 'deny';
-        event.message = `OpenAgentsy blocked this write. ${result.reason} Ask the Lead for a lease, then retry.`;
-        return;
-      }
-    }
+    await onPermission(root, event, sessionAgents, approvalFor);
   });
 
   // The effort tool.
@@ -383,6 +518,10 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
     for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
       if (event.type === 'message.updated') {
         await onMessageUpdated(root, event, sessionAgents);
+        continue;
+      }
+      if (event.type === 'session.text.ended') {
+        await onTextEnded(bridge, event);
         continue;
       }
       // The turn is over. The rungs go back and the archivist takes what the
@@ -418,12 +557,16 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
  * session took the child with it. The archivist now stands on its own, so
  * there is no cascade to survive, and the harvest goes on.
  *
+ * The janitor is here: the V2 session surface can list the sessions of the
+ * project and delete one, so the harvest children that are older than a week
+ * are deleted the way the V1 path deletes them.
+ *
  * The archivist's turn runs in the background. The V1 path says the same with
  * `promptAsync`, and the reason is the same: the session that is closing must
  * not wait for the archivist's whole run, and the V2 event loop must not
  * stop reading events while it waits.
  */
-function v2HarvestSession(ctx: V2Context): HarvestSession {
+function v2HarvestSession(root: string, ctx: V2Context): HarvestSession {
   return {
     messages: async (sessionID) => {
       const messages = await ctx.session.context({ sessionID });
@@ -442,7 +585,34 @@ function v2HarvestSession(ctx: V2Context): HarvestSession {
       // afterwards is the archivist's own business, the same as on V1.
       void ctx.session.prompt({ sessionID, text }).catch(() => {});
     },
+    prune: async () => {
+      await pruneHarvestChildren(
+        {
+          list: async () => pruneRows(await ctx.session.list()),
+          delete: async (sessionID) => {
+            // The V2 session surface takes the session under the name the
+            // rest of the API uses for it (measured on a live OpenCode 2.2.0
+            // server: a delete asked for by an id is refused with a schema
+            // error that names the key it wanted).
+            await ctx.session.remove({ sessionID });
+          },
+        },
+        root,
+      );
+    },
   };
+}
+
+/**
+ * The rows of a session list, in the shape the janitor reads.
+ *
+ * The list is read as a list and as a list under `data`, because the two
+ * shapes are both a list and the janitor must not care which one it got.
+ */
+function pruneRows(listed: unknown): PruneSessionRow[] {
+  if (Array.isArray(listed)) return listed as PruneSessionRow[];
+  if (isRecord(listed) && Array.isArray(listed['data'])) return listed['data'] as PruneSessionRow[];
+  return [];
 }
 
 /**
@@ -458,6 +628,71 @@ function textPartsOf(message: V2SessionMessage): { type: string; text?: string }
   const spoken = parts.filter((part) => part.type === 'text');
   if (spoken.length > 0) return spoken;
   return message.text === undefined ? [] : [{ type: 'text', text: message.text }];
+}
+
+/**
+ * The text the session said last.
+ *
+ * The report of a round is the last thing the Lead says, so the status the
+ * report claims is read out of it.
+ */
+async function lastTextOf(ctx: V2Context, sessionID: string): Promise<string> {
+  const messages = await ctx.session.context({ sessionID });
+  const last = messages.at(-1);
+  if (last === undefined) return '';
+  const text: string[] = [];
+  for (const part of textPartsOf(last)) {
+    if (part.type !== 'text') continue;
+    if (typeof part.text === 'string') text.push(part.text);
+  }
+  return text.join('\n');
+}
+
+/**
+ * The round of the session that went idle (§8.7), on the V2 path.
+ *
+ * Two things are checked: the status the report claims against the status
+ * the board holds, and the rounds that changed nothing.
+ *
+ * Neither may take the session down. The event loop is not awaited by the
+ * host, so a throw there is a broken session and not a failed check: the
+ * throw of the ledger is caught here, and every failure goes on the record.
+ */
+async function observeRound(
+  root: string,
+  ctx: V2Context,
+  sessionID: string,
+  agent: string,
+): Promise<void> {
+  try {
+    const claimed = claimedStatusOf(await lastTextOf(ctx, sessionID));
+    const finding = observeSessionIdle(claimed, () => boardRoundStatus(root), sessionID);
+    if (finding !== undefined) {
+      await appendAudit(root, {
+        policyId: POLICIES.roundStatusMismatch.id,
+        policyVersion: POLICIES.roundStatusMismatch.version,
+        actor: agent,
+        action: 'round-status',
+        resource: sessionID,
+        effect: 'deny',
+        detail: finding.detail,
+        sessionID,
+      });
+    }
+  } catch (error) {
+    await recordIdleFailure(root, { agent, sessionID, error });
+  }
+
+  try {
+    const ledger = openLedger(root);
+    try {
+      recordNoProgressRounds(ledger, join(root, '.openagentsy', 'board.sqlite'));
+    } finally {
+      closeLedger(ledger);
+    }
+  } catch (error) {
+    await recordIdleFailure(root, { agent, sessionID, error });
+  }
 }
 
 /**
@@ -495,6 +730,11 @@ async function onIdle(
     });
   }
 
+  // The round that just finished is checked before the archivist runs: the
+  // archivist may open a session of its own, and the round that went
+  // nowhere is the one that is still open.
+  await observeRound(root, ctx, sessionID, agent);
+
   // A harvest that fails must not break the session that is closing, so it
   // is caught here and put on the record. The V1 path keeps the two
   // failures apart, and so does this one: a rung that cannot be given back
@@ -504,7 +744,7 @@ async function onIdle(
     if (!(await harvestEnabled(root))) return;
     const role = await roleKeyForAgent(root, agent);
     await harvest({
-      session: v2HarvestSession(ctx),
+      session: v2HarvestSession(root, ctx),
       root,
       sessionID,
       role,
