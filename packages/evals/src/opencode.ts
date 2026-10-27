@@ -938,28 +938,35 @@ export async function abortSession(
   await client.session.abort({ path: { id: sessionID }, query: { directory } });
 }
 
-/**
- * Kill a session the moment it appears, and keep watching until it does.
- *
- * A fault that fires between two turns fires after the work is done: the
- * builder had already written its file and posted its completion record
- * before the harness got a turn to kill it, and the agent under test
- * could not tell the difference. A watcher runs while the turn runs, so
- * the kill lands in the middle of the work.
- *
- * The promise settles when the session was killed, or when the watch gave
- * up. It never rejects: a fault that cannot fire is a case that says so,
- * not a run that crashes.
- */
 export function killSessionWhenItAppears(
   client: OpencodeClient,
   directory: string,
   matches: (title: string) => boolean,
-  options: { attempts?: number; intervalMs?: number } = {},
+  options: { attempts?: number; intervalMs?: number; suppressMs?: number } = {},
 ): { killed: Promise<string | undefined>; stop: () => void } {
   const attempts = options.attempts ?? 120;
   const intervalMs = options.intervalMs ?? 500;
+  // An abort cancels the session's in-flight generation, but the session's
+  // loop can resume right after (measured 2026-10-27: a builder child kept
+  // generating for nineteen minutes after its abort, and the transcript it
+  // grew was what the judge could no longer answer). Keep aborting the SAME
+  // session for a while after the first kill: an abort of an idle session
+  // is a no-op, and a resumed one is cut again. Only the killed session is
+  // re-aborted; a builder the Lead legitimately re-dispatches is a new
+  // session id and is never touched.
+  const suppressMs = options.suppressMs ?? 60_000;
   let stopped = false;
+  const suppress = async (id: string): Promise<void> => {
+    for (let elapsed = 0; elapsed < suppressMs && !stopped; elapsed += intervalMs) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      if (stopped) return;
+      try {
+        await client.session.abort({ path: { id }, query: { directory } });
+      } catch {
+        // The session may be gone already; that is the outcome we wanted.
+      }
+    }
+  };
   const killed = (async (): Promise<string | undefined> => {
     for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
       try {
@@ -969,6 +976,7 @@ export function killSessionWhenItAppears(
         );
         if (hit?.id !== undefined) {
           await client.session.abort({ path: { id: hit.id }, query: { directory } });
+          void suppress(hit.id);
           return hit.id;
         }
       } catch {

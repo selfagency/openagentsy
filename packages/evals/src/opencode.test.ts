@@ -315,17 +315,57 @@ describe('host errors the case injected', () => {
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
       intervalMs: 1,
+      suppressMs: 1,
     });
     const killedSession = await watch.killed;
     watch.stop();
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect(killedSession).toBe('ses_killed');
-    expect(aborted).toEqual(['ses_killed']);
+    // The first abort is the kill; the suppression may have added one more of
+    // the SAME session, and never of another one.
+    expect(aborted.length).toBeGreaterThanOrEqual(1);
+    expect(aborted.every((id) => id === 'ses_killed')).toBe(true);
     const faults = hostFaults(
       hostErrorsIn(`${abortBlock('ses_killed')}\n${abortBlock('ses_other')}`),
       new Set(killedSession === undefined ? [] : [killedSession]),
     );
     expect(faults).toHaveLength(1);
     expect(faults[0]?.sessionID).toBe('ses_other');
+  });
+
+  it('keeps aborting the killed session after the first kill', async () => {
+    // The measured defect: one abort cancelled the in-flight generation, the
+    // session's loop resumed, and the child kept generating for nineteen
+    // minutes. The watch must keep cutting the SAME session down until it
+    // stops, while a re-dispatched builder (a new id) is never touched.
+    const aborted: string[] = [];
+    const client = {
+      session: {
+        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
+        abort: async ({ path }: { path: { id: string } }) => {
+          aborted.push(path.id);
+          return {};
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+      suppressMs: 30,
+    });
+    const killedSession = await watch.killed;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    watch.stop();
+    const after = aborted.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(killedSession).toBe('ses_killed');
+    // The kill, then at least two suppression cuts of the same session.
+    expect(aborted.length).toBeGreaterThanOrEqual(3);
+    expect(aborted.every((id) => id === 'ses_killed')).toBe(true);
+    // The watch is stopped, so nothing fires after it.
+    expect(aborted.length).toBe(after);
   });
 });
