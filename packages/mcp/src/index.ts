@@ -199,22 +199,23 @@ function failure(error: unknown): { content: { type: 'text'; text: string }[]; i
  * The board tool names, in one place.
  *
  * The list lives in core, so the vocabulary that resolves a tool name back
- * to its base name and the tools this server offers cannot drift apart. The
- * type says a name has to be one core knows, so a rename in core stops the
- * build here instead of serving a tool nobody can name.
+ * to its base name and the tools this server offers cannot drift apart.
+ * The type says a name has to be one core knows, and that every name core
+ * knows has to be here: a rename in core, or a name added to core, stops
+ * the build here instead of serving a tool nobody can name.
  */
 const BOARD_TOOL = {
-  record: 'board_record',
-  leaseGrant: 'board_lease_grant',
-  lease: 'board_lease',
-  budgetSet: 'board_budget_set',
-  budget: 'board_budget',
-  leaseRevoke: 'board_lease_revoke',
-  classify: 'board_classify',
-} as const satisfies Record<string, (typeof boardToolNames)[number]>;
+  board_record: 'board_record',
+  board_lease_grant: 'board_lease_grant',
+  board_lease: 'board_lease',
+  board_budget_set: 'board_budget_set',
+  board_budget: 'board_budget',
+  board_lease_revoke: 'board_lease_revoke',
+  board_classify: 'board_classify',
+} as const satisfies { [K in (typeof boardToolNames)[number]]: K };
 
 server.registerTool(
-  BOARD_TOOL.record,
+  BOARD_TOOL.board_record,
   {
     description:
       'The records on the board: the hand-off between agents. op=post leaves a typed record for another agent (kind is status, contract, question, blocker or finding; every record carries a confidence: verified, inferred or guess). op=inbox reads the records addressed to you and marks them read, a cursor at a time.',
@@ -340,7 +341,7 @@ async function postRecord(input: {
 // --- leases -----------------------------------------------------------------
 
 server.registerTool(
-  BOARD_TOOL.leaseGrant,
+  BOARD_TOOL.board_lease_grant,
   {
     description:
       'Record the files one agent owns. Each file has exactly one writer at a time. A glob already leased to another agent is refused. The Lead only; every other role has this tool denied by name.',
@@ -408,7 +409,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  BOARD_TOOL.lease,
+  BOARD_TOOL.board_lease,
   {
     description:
       'The leases on the board: which agent may write which file. op=check asks whether one path may be written and reports the holder, or a conflict when another agent holds the file. op=release gives a lease back, and only the holder may release it. op=list lists the leases.',
@@ -511,7 +512,7 @@ async function releaseLeases(input: {
 // --- budgets ----------------------------------------------------------------
 
 server.registerTool(
-  BOARD_TOOL.budgetSet,
+  BOARD_TOOL.board_budget_set,
   {
     description:
       'Set the token budget for a bean. The builder stops at 85 percent of it unless stopAt says otherwise. The Lead only.',
@@ -632,7 +633,7 @@ async function checkOneBudget(bean: string, tokensUsed: number): Promise<BudgetD
 }
 
 server.registerTool(
-  BOARD_TOOL.budget,
+  BOARD_TOOL.board_budget,
   {
     description:
       'The token budgets on the board. op=check reports whether a bean is over its budget and records the usage; at 85 percent the builder stops and posts a blocker. op=list lists the budgets. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.',
@@ -683,7 +684,7 @@ server.registerTool(
  * and the Lead classifies the request itself.
  */
 server.registerTool(
-  BOARD_TOOL.leaseRevoke,
+  BOARD_TOOL.board_lease_revoke,
   {
     description:
       'Take a lease away from an agent that is not using it any more, for example a session that died holding it. The Lead only; every other role has this tool denied by name. A lease is otherwise only ever released by the agent that holds it, so a dead session holds its files until the Lead revokes them.',
@@ -713,7 +714,7 @@ server.registerTool(
 );
 
 server.registerTool(
-  BOARD_TOOL.classify,
+  BOARD_TOOL.board_classify,
   {
     description:
       'Classify a request into the dispatch profiles, with the probability of each and the confidence. The Lead calls this before it spawns anything, and takes the cheaper plan when the confidence is low. Without a System One key it says so, and the Lead classifies the request itself.',

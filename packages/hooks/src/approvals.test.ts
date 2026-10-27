@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -59,6 +59,39 @@ describe('the approval store', () => {
     const store = createApprovalStore(root);
     expect(await store.isApproved('call-1', 2000)).toBe(false);
   });
+
+  it('spends a grant once, even when two callers race', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('dup', 1000, 60_000);
+    const results = await Promise.all([
+      store.consumeApproval('dup', 2000),
+      store.consumeApproval('dup', 2000),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('keeps the other grants when one is added', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('first', 1000, 60_000);
+    await store.approve('second', 1000, 60_000);
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toHaveLength(2);
+  });
+
+  it('refuses to grant on a store it cannot read', async () => {
+    const store = createApprovalStore(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    await writeFile(store.path, '{not json', 'utf8');
+    await expect(store.approve('call-1', 1000, 60_000)).rejects.toThrow();
+  });
+
+  it('does not rewrite a store it cannot read', async () => {
+    const store = createApprovalStore(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    await writeFile(store.path, '{not json', 'utf8');
+    await expect(store.approve('call-1', 1000, 60_000)).rejects.toThrow();
+    expect(await readFile(store.path, 'utf8')).toBe('{not json');
+  });
 });
 
 describe('the approval gate', () => {
@@ -104,5 +137,21 @@ describe('the approval gate', () => {
     const gate = approvalGate(/rm\s+-rf/, store);
     const result = await gate({ toolName: 'bash', args: {}, files: [], command: 'ls -la' });
     expect(continues(result)).toBe(true);
+  });
+
+  it('refuses when the store cannot be read', async () => {
+    const store = createApprovalStore(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    await writeFile(store.path, '{not json', 'utf8');
+    const gate = approvalGate(/rm\s+-rf/, store);
+    const result = await gate({
+      toolName: 'bash',
+      args: {},
+      files: [],
+      command: 'rm -rf /',
+      callID: 'call-7',
+    });
+    expect(continues(result)).toBe(false);
+    expect(reasonOf(result)).toContain('approval store');
   });
 });

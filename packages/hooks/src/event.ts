@@ -32,20 +32,35 @@ export interface PreToolCallEvent {
 }
 
 /**
+ * The argument names a write tool names its file with.
+ *
+ * The names are the ones the host uses: `filePath` is OpenCode's, `path`
+ * and `file` are the ones other tools use.
+ */
+const PATH_ARGS = ['filePath', 'file_path', 'path', 'file'];
+
+/**
  * The event, when it is a tool call.
  *
- * The registry hands every handler the same unknown input, so each rule
- * narrows it first. An input that is not a tool call has no rules to run.
+ * The host hands the raw arguments over, and the rules read the normalised
+ * fields. So the normalisation happens here: a command that is named in the
+ * arguments is the command, and a file that is named in the arguments is
+ * the file the call touches. A host that already normalises (the adapter
+ * does) is not contradicted: the files it supplies are kept, and the
+ * arguments are the fallback.
  */
 export function readPreToolCall(event: unknown): PreToolCallEvent | undefined {
   if (typeof event !== 'object' || event === null) return undefined;
   const candidate = event as Partial<PreToolCallEvent>;
   if (typeof candidate.toolName !== 'string') return undefined;
+  const args = isArgs(candidate.args) ? candidate.args : {};
+  const files = fileRefs(candidate.files);
+  const command = readString(candidate.command) ?? readString(args['command']);
   return {
     toolName: candidate.toolName,
-    args: isArgs(candidate.args) ? candidate.args : {},
-    files: fileRefs(candidate.files),
-    ...(typeof candidate.command === 'string' ? { command: candidate.command } : {}),
+    args,
+    files: files.length > 0 ? files : filesFromArgs(args),
+    ...(command !== undefined ? { command } : {}),
     ...(typeof candidate.callID === 'string' ? { callID: candidate.callID } : {}),
     ...(typeof candidate.role === 'string' ? { role: candidate.role } : {}),
   };
@@ -59,6 +74,13 @@ export function readPreToolCall(event: unknown): PreToolCallEvent | undefined {
  */
 function isArgs(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A string, when the field is one.
+ */
+function readString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 /**
@@ -79,4 +101,18 @@ function fileRefs(value: unknown): FileRef[] {
     });
   }
   return refs;
+}
+
+/**
+ * The file a call writes to, when the arguments name one.
+ *
+ * The arguments are the raw shape of the host, so this is where a path
+ * that was never normalised is found.
+ */
+function filesFromArgs(args: Record<string, unknown>): FileRef[] {
+  for (const key of PATH_ARGS) {
+    const path = readString(args[key]);
+    if (path !== undefined) return [{ path }];
+  }
+  return [];
 }

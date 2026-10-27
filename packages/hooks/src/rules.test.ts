@@ -1,17 +1,19 @@
-import { mkdtemp } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createApprovalStore } from './approvals.js';
-import { projectName } from './paths.js';
 import type { HandlerResult, Rule } from './registry.js';
-import { defaultRules } from './rules.js';
+import { defaultRules, isProtected } from './rules.js';
 
 // The fixture is assembled from segments on purpose: the value is the real
 // shape the rule pins, and the source carries no contiguous secret for a
 // scanner to flag. It is not a credential.
 const SECRET_VALUE = ['aB3dF6hJ', '9kM2nP5rT', '8vW1xZ4cE', '7gH0'].join('');
 const SECRET_CONTENT = `api_key = ${SECRET_VALUE}`;
+
+/** The name of the workspace fixture, so the worktree path can be pinned. */
+const WORKSPACE_NAME = 'oa-workspace-fixture';
 
 /** The reason a result carries, when it stops the call. */
 function reasonOf(result: HandlerResult): string | undefined {
@@ -28,7 +30,9 @@ let stateRoot: string;
 let rules: Rule[];
 
 beforeEach(async () => {
-  workspace = await mkdtemp(join(tmpdir(), 'oa-workspace-'));
+  const base = await mkdtemp(join(tmpdir(), 'oa-wt-'));
+  workspace = join(base, WORKSPACE_NAME);
+  await mkdir(workspace, { recursive: true });
   stateRoot = await mkdtemp(join(tmpdir(), 'oa-state-'));
   rules = defaultRules({ workspace, stateRoot });
 });
@@ -85,6 +89,26 @@ describe('no-skip-git-hooks', () => {
     expect(continues(await decide('no-skip-git-hooks', shell('git commit -n')))).toBe(false);
   });
 
+  it('blocks the -n behind the message', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit -m "wip" -n')))).toBe(
+      false,
+    );
+  });
+
+  it('blocks the -n behind another flag', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit -a -n')))).toBe(false);
+  });
+
+  it('blocks the -n behind an amend', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit --amend -n')))).toBe(
+      false,
+    );
+  });
+
+  it('blocks the -n in a flag cluster', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit -nm "wip"')))).toBe(false);
+  });
+
   it('blocks the husky switch', async () => {
     expect(continues(await decide('no-skip-git-hooks', shell('HUSKY=0 git commit -m "wip"')))).toBe(
       false,
@@ -93,6 +117,14 @@ describe('no-skip-git-hooks', () => {
 
   it('lets a commit that only talks about -n through', async () => {
     const result = await decide('no-skip-git-hooks', shell('git commit -m "fix -n handling"'));
+    expect(continues(result)).toBe(true);
+  });
+
+  it('lets a commit whose message names the long flag through', async () => {
+    const result = await decide(
+      'no-skip-git-hooks',
+      shell('git commit -m "docs: note --no-verify"'),
+    );
     expect(continues(result)).toBe(true);
   });
 
@@ -106,6 +138,19 @@ describe('package-manager', () => {
     expect(continues(await decide('package-manager', shell('pnpm add x')))).toBe(false);
     expect(continues(await decide('package-manager', shell('npm install')))).toBe(false);
     expect(continues(await decide('package-manager', shell('yarn add x')))).toBe(false);
+  });
+
+  it('blocks another package manager behind a path', async () => {
+    expect(continues(await decide('package-manager', shell('/usr/local/bin/pnpm add x')))).toBe(
+      false,
+    );
+    expect(
+      continues(await decide('package-manager', shell('./node_modules/.bin/pnpm add x'))),
+    ).toBe(false);
+  });
+
+  it('blocks another package manager in another case', async () => {
+    expect(continues(await decide('package-manager', shell('PNPM add x')))).toBe(false);
   });
 
   it('lets bun through', async () => {
@@ -125,9 +170,16 @@ describe('workspace-writes-only', () => {
   });
 
   it('lets a write inside a worktree of the project through', async () => {
-    const worktree = join(homedir(), '.openagentsy', 'worktrees', projectName(workspace));
-    const result = await decide('workspace-writes-only', write(join(worktree, 'src/a.ts')));
-    expect(continues(result)).toBe(true);
+    // The path is pinned, so the test fails when the rule looks in the
+    // wrong place, and the home is pinned with it.
+    const local = defaultRules({ workspace, stateRoot, home: '/home/dev' });
+    const rule = local.find((entry) => entry.id === 'workspace-writes-only');
+    const result = await rule?.handler({
+      toolName: 'write',
+      args: { filePath: '/home/dev/.openagentsy/worktrees/oa-workspace-fixture/src/a.ts' },
+      files: [],
+    });
+    expect(continues(result ?? { continue: true })).toBe(true);
   });
 
   it('lets a call that touches no file through', async () => {
@@ -154,6 +206,14 @@ describe('protect-policy', () => {
     ];
     for (const path of protectedPaths) {
       const result = await decide('protect-policy', write(join(workspace, path)));
+      expect(continues(result), path).toBe(false);
+    }
+  });
+
+  it('blocks a directory that is named without its slash', async () => {
+    for (const path of ['.opencode', 'templates', 'roles.yaml/']) {
+      expect(isProtected(path), path).toBe(true);
+      const result = await decide('protect-policy', write(path));
       expect(continues(result), path).toBe(false);
     }
   });
@@ -232,6 +292,24 @@ describe('destructive-needs-approval', () => {
     expect(reasonOf(result)).toContain('/oa approve <callID>');
   });
 
+  it('blocks the destructive flags in any order', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('rm -fr /')))).toBe(false);
+    expect(continues(await decide('destructive-needs-approval', shell('rm -r -f /')))).toBe(false);
+  });
+
+  it('blocks the destructive flags in their long form', async () => {
+    expect(
+      continues(await decide('destructive-needs-approval', shell('rm --recursive --force /'))),
+    ).toBe(false);
+  });
+
+  it('blocks a destructive command behind a separator', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('ls;rm -rf /')))).toBe(false);
+    expect(continues(await decide('destructive-needs-approval', shell('ls && rm -rf /')))).toBe(
+      false,
+    );
+  });
+
   it('blocks a forced push and a hard reset', async () => {
     expect(continues(await decide('destructive-needs-approval', shell('git push --force')))).toBe(
       false,
@@ -256,6 +334,37 @@ describe('destructive-needs-approval', () => {
   });
 
   it('lets an ordinary command through', async () => {
-    expect(continues(await decide('destructive-needs-approval', shell('rm -r build')))).toBe(true);
+    expect(
+      continues(await decide('destructive-needs-approval', shell('rm build/output.txt'))),
+    ).toBe(true);
+  });
+});
+
+describe('the raw host shape', () => {
+  it('reads the command out of the arguments', async () => {
+    const result = await decide('no-skip-git-hooks', {
+      toolName: 'bash',
+      args: { command: 'git commit --no-verify' },
+      files: [],
+    });
+    expect(continues(result)).toBe(false);
+  });
+
+  it('reads the file out of the arguments', async () => {
+    const result = await decide('workspace-writes-only', {
+      toolName: 'write',
+      args: { filePath: '/etc/passwd' },
+      files: [],
+    });
+    expect(continues(result)).toBe(false);
+  });
+
+  it('reads the content out of the arguments', async () => {
+    const result = await decide('secret-scan-writes', {
+      toolName: 'write',
+      args: { content: SECRET_CONTENT },
+      files: [],
+    });
+    expect(continues(result)).toBe(false);
   });
 });

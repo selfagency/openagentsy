@@ -2,7 +2,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { findSecrets } from '@openagentsy/core';
 import { approvalGate, createApprovalStore } from './approvals.js';
 import { type PreToolCallEvent, readPreToolCall } from './event.js';
-import { isInside, projectName, worktreeRoot } from './paths.js';
+import { isInside, pathSegments, projectName, worktreeRoot } from './paths.js';
 import type { HandlerResult, Rule } from './registry.js';
 
 /**
@@ -17,24 +17,54 @@ import type { HandlerResult, Rule } from './registry.js';
 const CONTINUE: HandlerResult = { continue: true };
 
 /**
- * Git hooks cannot be skipped.
+ * The command with its quoted text taken out.
  *
- * `--no-verify` in a git segment, a bare `-n` right after `git commit`,
- * `HUSKY=0` and a `core.hooksPath` override are the same thing: the lint
- * and the typecheck do not run, and the commit is the only proof there
- * was one. The bare `-n` only counts directly after `git commit`, so a
- * commit message that talks about `-n` is not a skip.
+ * A message can hold anything, including the text of the rule that is
+ * looking for it: `git commit -m "docs: note --no-verify"` is a commit
+ * whose message talks about the flag. The quotes are stripped first, so
+ * the rule reads the command and not the message.
  */
-const GIT_SKIP_HOOKS =
-  /\bgit\b[^|;&]*\b(commit|merge|rebase)\b[^|;&]*\s--no-verify\b|\bgit\s+commit\s+-n\b|\bHUSKY=0\b|\bcore\.hooksPath\b/;
+export function stripQuoted(command: string): string {
+  return command.replace(/'[^']*'/g, ' ').replace(/"[^"]*"/g, ' ');
+}
+
+/** A short flag cluster: `-n`, `-nm`, `-an`. */
+const SHORT_FLAG = /(?:^|\s)-([A-Za-z]+)/g;
+
+/**
+ * Whether a command skips the git hooks.
+ *
+ * The `-n` of `git commit` is the short form of `--no-verify`, and it is
+ * caught in any position of the command: `git commit -n`,
+ * `git commit -m "wip" -n`, `git commit -a -n` and `git commit -nm "wip"`
+ * all skip the hooks. The long flag is read in the segment that names the
+ * git command, and the quoted text is taken out first, so a commit whose
+ * message talks about the flag is still a commit.
+ */
+export function skipsGitHooks(command: string): boolean {
+  const bare = stripQuoted(command);
+  if (/\bHUSKY=0\b/.test(bare)) return true;
+  if (/\bcore\.hooksPath\b/.test(bare)) return true;
+  for (const segment of bare.split(/[|;&]/)) {
+    if (!/\bgit\b[^|;&]*\b(commit|merge|rebase)\b/.test(segment)) continue;
+    if (/--no-verify\b/.test(segment)) return true;
+    for (const match of segment.matchAll(SHORT_FLAG)) {
+      const cluster = match[1];
+      if (cluster?.includes('n')) return true;
+    }
+  }
+  return false;
+}
 
 /**
  * The package manager is Bun.
  *
  * A second package manager writes a second lockfile, and the two
- * lockfiles disagree about what the project depends on.
+ * lockfiles disagree about what the project depends on. The name is
+ * caught wherever it is written, so a path to another package manager is
+ * caught too.
  */
-const OTHER_PM = /(^|[\s;&|(])(pnpm|yarn|npx|npm\s+(i|install|ci|add|exec))\b/;
+const OTHER_PM = /(^|[\s;&|(/\\])(pnpm|yarn|npx|npm\s+(i|install|ci|add|exec))\b/i;
 
 /**
  * The files a person changes.
@@ -44,16 +74,62 @@ const OTHER_PM = /(^|[\s;&|(])(pnpm|yarn|npx|npm\s+(i|install|ci|add|exec))\b/;
  * regenerate the agents, and the lessons, the waivers and the approvals
  * are decisions.
  */
-const PROTECTED_FILE =
-  /(^|\/)(roles\.yaml|openagentsy\.models\.lock\.json|openagentsy\.jsonc|biome\.jsonc|turbo\.json|bunfig\.toml|bun\.lock|opencode\.json|opencode\.jsonc)$/;
-const PROTECTED_DIR = /(^|\/)(\.opencode\/|\.husky\/|\.github\/workflows\/|templates\/)/;
-const PROTECTED_STATE =
-  /(^|\/)\.openagentsy\/(lessons\/|quality\/waivers\.json|conformance\.json|memory\.jsonl|approvals\.json)/;
+const PROTECTED_FILES = new Set([
+  'roles.yaml',
+  'openagentsy.models.lock.json',
+  'openagentsy.jsonc',
+  'biome.jsonc',
+  'turbo.json',
+  'bunfig.toml',
+  'bun.lock',
+  'opencode.json',
+  'opencode.jsonc',
+]);
+
+/** The directories a person changes. */
+const PROTECTED_DIRS = ['.opencode', '.husky', '.github/workflows', 'templates'];
+
+/** The state a person changes, under the state root. */
+const PROTECTED_STATE = [
+  '.openagentsy/lessons',
+  '.openagentsy/quality/waivers.json',
+  '.openagentsy/conformance.json',
+  '.openagentsy/memory.jsonl',
+  '.openagentsy/approvals.json',
+];
 
 /**
- * The commands that need a person to approve them.
+ * Whether the segments of a path hold a run of segments.
  */
-const DESTRUCTIVE = /(^|\s)(rm\s+-rf|git\s+push\s+--force|git\s+reset\s+--hard|drop\s+table)\b/i;
+function holdsSegments(segments: string[], wanted: string[]): boolean {
+  if (wanted.length === 0 || wanted.length > segments.length) return false;
+  for (let start = 0; start + wanted.length <= segments.length; start += 1) {
+    if (wanted.every((segment, index) => segments[start + index] === segment)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a path is one a person changes.
+ *
+ * The path is compared on its segments, so a directory is a directory
+ * whether or not the path names it with a trailing slash, and a file is a
+ * file wherever it sits. A delete or a move that names the directory
+ * itself is caught as well.
+ */
+export function isProtected(path: string): boolean {
+  const segments = pathSegments(path);
+  if (segments.length === 0) return false;
+  const last = segments[segments.length - 1] ?? '';
+  if (PROTECTED_FILES.has(last)) return true;
+  for (const dir of PROTECTED_DIRS) {
+    if (holdsSegments(segments, dir.split('/'))) return true;
+  }
+  for (const entry of PROTECTED_STATE) {
+    if (holdsSegments(segments, entry.split('/'))) return true;
+  }
+  return false;
+}
 
 /**
  * The tools a person decides with.
@@ -65,10 +141,48 @@ const DESTRUCTIVE = /(^|\s)(rm\s+-rf|git\s+push\s+--force|git\s+reset\s+--hard|d
 const HUMAN_ONLY_TOOLS = ['oa_lesson_decide', 'oa_quality_waive', 'oa_memory_decide'];
 
 /**
- * Whether a path is one a person changes.
+ * Whether a flag makes a removal destructive.
+ *
+ * `rm` takes its flags in any order and in either spelling: `-rf`, `-fr`,
+ * `-r -f` and `--recursive --force` are the same command.
  */
-export function isProtected(path: string): boolean {
-  return PROTECTED_FILE.test(path) || PROTECTED_DIR.test(path) || PROTECTED_STATE.test(path);
+function isDestructiveFlag(flag: string): boolean {
+  if (flag.startsWith('--')) return flag === '--recursive' || flag === '--force';
+  const letters = flag.slice(1);
+  return letters.includes('r') || letters.includes('f');
+}
+
+/**
+ * Whether a segment holds a destructive `rm`.
+ */
+function hasDestructiveRm(segment: string): boolean {
+  const tokens = segment.split(/\s+/).filter((token) => token.length > 0);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined) continue;
+    if (!/(^|\/)rm$/.test(token)) continue;
+    for (let next = index + 1; next < tokens.length; next += 1) {
+      const flag = tokens[next];
+      if (flag === undefined || !flag.startsWith('-')) break;
+      if (isDestructiveFlag(flag)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a command destroys something.
+ *
+ * The command is split on the separators, so a destructive command behind
+ * a `;`, an `&&` or a `|` is still one, and the flags of `rm` are read in
+ * any order and in either spelling.
+ */
+export function isDestructiveCommand(command: string): boolean {
+  const bare = stripQuoted(command);
+  if (/\bgit\s+push\s+--force\b/i.test(bare)) return true;
+  if (/\bgit\s+reset\s+--hard\b/i.test(bare)) return true;
+  if (/\bdrop\s+table\b/i.test(bare)) return true;
+  return bare.split(/[|;&\n]+/).some((segment) => hasDestructiveRm(segment));
 }
 
 /**
@@ -119,6 +233,8 @@ export interface DefaultRuleOptions {
   workspace: string;
   /** The state root: where the `.openagentsy/` directory lives. */
   stateRoot: string;
+  /** The home directory the worktrees live under; the home of the user by default. */
+  home?: string;
 }
 
 /**
@@ -126,9 +242,9 @@ export interface DefaultRuleOptions {
  *
  * They run in the order they are written, and every one of them blocks.
  */
-export const defaultRules = ({ workspace, stateRoot }: DefaultRuleOptions): Rule[] => {
+export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions): Rule[] => {
   const root = resolve(workspace);
-  const roots = [root, worktreeRoot(projectName(root))];
+  const roots = [root, worktreeRoot(projectName(root), home)];
   const approvals = createApprovalStore(stateRoot);
   return [
     {
@@ -138,7 +254,7 @@ export const defaultRules = ({ workspace, stateRoot }: DefaultRuleOptions): Rule
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined || call.command === undefined) return CONTINUE;
-        if (!GIT_SKIP_HOOKS.test(call.command)) return CONTINUE;
+        if (!skipsGitHooks(call.command)) return CONTINUE;
         return {
           continue: false,
           reason: 'Git hooks (lint, typecheck) cannot be skipped. Fix the reported errors instead.',
@@ -224,7 +340,7 @@ export const defaultRules = ({ workspace, stateRoot }: DefaultRuleOptions): Rule
       block: true,
       handler: (event) => {
         const call = readPreToolCall(event);
-        if (call === undefined || call.files.length === 0) return CONTINUE;
+        if (call === undefined) return CONTINUE;
         const content = contentOf(call);
         if (content === '') return CONTINUE;
         if (findSecrets(content).length === 0) return CONTINUE;
@@ -239,7 +355,7 @@ export const defaultRules = ({ workspace, stateRoot }: DefaultRuleOptions): Rule
       id: 'destructive-needs-approval',
       event: 'PreToolCall',
       block: true,
-      handler: approvalGate(DESTRUCTIVE, approvals),
+      handler: approvalGate(isDestructiveCommand, approvals),
     },
   ];
 };
