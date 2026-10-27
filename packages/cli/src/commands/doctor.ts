@@ -1,4 +1,5 @@
-import { readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import {
   agentIdOf,
@@ -7,10 +8,12 @@ import {
   listLeases,
   loadRoles,
   openDatabase,
+  type RolesFile,
   type Target,
 } from '@openagentsy/core';
 import { parse as parseJsonc } from 'jsonc-parser';
 import { parse as parseYaml } from 'yaml';
+import { agentFileName } from '../generate/agent.js';
 import { lockEntryFor, readModelLock } from '../generate/lock.js';
 import {
   detectOpenCode,
@@ -21,6 +24,7 @@ import {
   targetForVersion,
 } from '../opencode.js';
 import { findPluginBundle } from '../plugin.js';
+import { runBuild } from './build.js';
 
 export type ConfigReport = {
   path: string | undefined;
@@ -55,6 +59,23 @@ export type PluginReport = {
   installed: boolean;
   bundlePath: string;
   bundleBuilt: boolean;
+};
+
+/**
+ * What a fresh render of the roles says about the installed files.
+ *
+ * The generated files are written by a person who runs the generator, so an
+ * out-of-band edit is invisible until something compares the tree with the
+ * generator. The doctor does that comparison, and it never writes into the
+ * project: the render happens in a temporary directory.
+ */
+export type RegenerationReport = {
+  /** The generated files that disagree with a fresh render. */
+  drifted: string[];
+  /** The command that reconciles the tree. */
+  reconcile: string;
+  /** Why the comparison did not run, when it did not run. */
+  error?: string | undefined;
 };
 
 /** One of the five files that decide how this project is configured. */
@@ -98,6 +119,7 @@ export type DoctorReport = {
   roles: RoleReport[];
   skills: FoundSkill[];
   board: BoardReport;
+  regeneration: RegenerationReport;
   warnings: string[];
 };
 
@@ -412,6 +434,90 @@ function staleLeaseWarnings(held: Lease[]): string[] {
   return warnings;
 }
 
+/** The command that reconciles the generated agent files. */
+const RECONCILE_BUILD = 'openagentsy build';
+
+/** The agent files of a directory, by name. */
+async function agentFiles(dir: string): Promise<Map<string, string>> {
+  const files = new Map<string, string>();
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return files;
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.md')) continue;
+    files.set(name, await readFile(join(dir, name), 'utf8'));
+  }
+  return files;
+}
+
+/**
+ * The generated files that disagree with a fresh render of the roles.
+ *
+ * The render happens in a temporary directory: the doctor never writes into
+ * the project it is describing, because the person who runs it may be about
+ * to change that project.
+ */
+async function regenerationDiff(
+  root: string,
+  target: Target,
+  ours: Set<string>,
+): Promise<string[]> {
+  const installedDir = join(root, '.opencode', 'agents');
+  // A tree that was never built has nothing to drift from, and the setup
+  // warning already says the plugin is not installed.
+  if (!(await fileExists(installedDir))) return [];
+
+  const temp = await mkdtemp(join(tmpdir(), 'openagentsy-regeneration-'));
+  try {
+    await runBuild({ root, target, outDir: temp });
+    const fresh = await agentFiles(join(temp, 'agents'));
+    const installed = await agentFiles(installedDir);
+
+    const drifted: string[] = [];
+    for (const [name, content] of fresh) {
+      const current = installed.get(name);
+      if (current === undefined) drifted.push(`${name} is missing`);
+      else if (current !== content) drifted.push(`${name} differs from a fresh render`);
+    }
+    for (const name of installed.keys()) {
+      if (fresh.has(name)) continue;
+      // A file the generator does not write is only a drift when it is one
+      // of ours: a person may keep their own agent file beside ours.
+      if (!ours.has(name) && !name.startsWith('oa-')) continue;
+      drifted.push(`${name} is stale: the generator does not write it any more`);
+    }
+    return drifted;
+  } finally {
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The comparison, and what a failure of it costs.
+ *
+ * A doctor that cannot run the comparison says so rather than pretending
+ * the tree is clean.
+ */
+async function regenerationReport(
+  root: string,
+  target: Target,
+  roles: RolesFile,
+): Promise<RegenerationReport> {
+  const ours = new Set(Object.values(roles.roles).map((role) => agentFileName(role)));
+  try {
+    return { drifted: await regenerationDiff(root, target, ours), reconcile: RECONCILE_BUILD };
+  } catch (error) {
+    return {
+      drifted: [],
+      reconcile: RECONCILE_BUILD,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function runDoctor(root: string): Promise<DoctorReport> {
   const warnings: string[] = [];
   const version = await detectOpenCode();
@@ -434,6 +540,14 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
 
   const roles = await loadRoles(join(root, 'roles.yaml'));
   const lock = await readModelLock(join(root, 'openagentsy.models.lock.json'));
+
+  const regeneration = await regenerationReport(root, target, roles);
+  for (const entry of regeneration.drifted) {
+    warnings.push(`the generated agent file ${entry}, run: ${regeneration.reconcile} to reconcile`);
+  }
+  if (regeneration.error !== undefined) {
+    warnings.push(`the regeneration check did not run: ${regeneration.error}`);
+  }
 
   const roleReports: RoleReport[] = Object.values(roles.roles).map((role) => {
     const entry = lockEntryFor(lock, role.name);
@@ -511,6 +625,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
       ),
       auditEntries: await countAuditLines(auditPath),
     },
+    regeneration,
     warnings,
   };
 }
@@ -578,6 +693,21 @@ function phase2Lines(effective: Phase2Config): string[] {
   ];
 }
 
+/**
+ * The lines about the generated files that disagree with a fresh render.
+ *
+ * A tree the generator wrote has nothing to say here, so the section is
+ * only there when something drifted.
+ */
+function regenerationLines(report: RegenerationReport): string[] {
+  const lines = ['Regeneration'];
+  lines.push(field('drifted', `${report.drifted.length} file(s), run: ${report.reconcile}`));
+  for (const entry of report.drifted) {
+    lines.push(`  - ${entry}`);
+  }
+  return lines;
+}
+
 export function formatDoctorReport(report: DoctorReport): string {
   const lines: string[] = [];
 
@@ -607,6 +737,11 @@ export function formatDoctorReport(report: DoctorReport): string {
     for (const overlap of report.configMap.overlaps) {
       lines.push(`  - ${overlap}`);
     }
+  }
+
+  if (report.regeneration.drifted.length > 0) {
+    lines.push('');
+    lines.push(...regenerationLines(report.regeneration));
   }
 
   if (report.warnings.length > 0) {

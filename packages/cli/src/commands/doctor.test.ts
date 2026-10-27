@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { detectOpenCode, targetForVersion } from '../opencode.js';
+import { runBuild } from './build.js';
 import { formatDoctorReport, runDoctor } from './doctor.js';
 
 let root: string;
@@ -45,6 +47,22 @@ roles:
       startVariant: low
       ceilingVariant: high
       climbTriggers: [test_failed_twice]
+  reviewer:
+    description: Reviews a change
+    mode: subagent
+    writes: false
+    scope: the diff
+    guidance: read it
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: overall
+      hardRequirements: [tool_calls]
+      costStance: quality_first
+    effort:
+      startVariant: medium
+      ceilingVariant: high
+      climbTriggers: [planning]
 `;
 
 beforeEach(async () => {
@@ -190,5 +208,65 @@ describe('the config map', () => {
     expect(report.configMap.effective.tasks.prefix).toBe('b-');
     expect(report.configMap.effective.tasks.idLength).toBe(8);
     expect(report.configMap.overlaps.some((overlap) => overlap.includes('.beans.yml'))).toBe(true);
+  });
+});
+
+/**
+ * Render the agent files the way the project was built.
+ *
+ * The target follows the OpenCode the doctor will find, or the comparison
+ * would flag every file for a difference nobody made.
+ */
+async function buildAgents(root: string): Promise<void> {
+  const version = await detectOpenCode();
+  const target = version ? targetForVersion(version) : 'v1';
+  await runBuild({ root, target, outDir: join(root, '.opencode') });
+}
+
+/** The files of a tree, by name and content. */
+async function tree(dir: string, prefix = ''): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const found: string[] = [];
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...(await tree(path, `${prefix}${entry.name}/`)));
+      continue;
+    }
+    found.push(`${prefix}${entry.name}: ${await readFile(path, 'utf8')}`);
+  }
+  return found.sort();
+}
+
+describe('the regeneration check', () => {
+  it('flags a hand-edited generated agent file with the reconcile command', async () => {
+    await buildAgents(root);
+    const agentFile = join(root, '.opencode', 'agents', 'oa-builder.md');
+    const original = await readFile(agentFile, 'utf8');
+    await writeFile(agentFile, `${original}\nhand edited\n`, 'utf8');
+
+    const report = await runDoctor(root);
+    const warning = report.warnings.find((entry) => entry.includes('oa-builder.md'));
+    expect(warning).toBeDefined();
+    expect(warning).toContain('openagentsy build');
+    expect(report.regeneration.drifted.join(' ')).toContain('oa-builder.md');
+  });
+
+  it('says nothing about a tree the generator wrote', async () => {
+    await buildAgents(root);
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.drifted).toEqual([]);
+    expect(report.warnings.some((entry) => entry.includes('openagentsy build'))).toBe(false);
+  });
+
+  it('never writes into the project it is describing', async () => {
+    await buildAgents(root);
+    const before = await tree(join(root, '.opencode'));
+
+    await runDoctor(root);
+
+    const after = await tree(join(root, '.opencode'));
+    expect(after).toEqual(before);
   });
 });
