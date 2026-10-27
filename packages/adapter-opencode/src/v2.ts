@@ -11,6 +11,7 @@ import {
   rungTarget,
   writeRungs,
 } from './guard.js';
+import { type HarvestSession, harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
 import { assistantMessageOf, bridgeToLedger } from './ledger-bridge.js';
 import { checkWrite } from './write-guard.js';
 
@@ -41,6 +42,10 @@ import { checkWrite } from './write-guard.js';
 /** The message shape the V2 context returns. */
 export type V2SessionMessage = {
   parts?: { type: string; text?: string }[];
+  /** The V2 way of the same thing: the parts of an assistant message. */
+  content?: { type: string; text?: string }[];
+  /** A user message is flat: its text is on the message itself. */
+  text?: string;
 };
 
 /** The V2 context, as far as this plugin uses it. */
@@ -334,7 +339,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       sessionAgents.delete(sessionID);
       switched.delete(sessionID);
       if (!agent) continue;
-      await onIdle(root, sessionID, agent);
+      await onIdle(root, ctx, sessionID, agent);
     }
   })();
 
@@ -342,28 +347,80 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
 }
 
 /**
+ * The harvest, on the V2 path.
+ *
+ * The V2 plugin context is not the server client, so the harvest asks the
+ * context for the three things it needs: the words of the session, a session
+ * for the archivist, and a hand to the archivist.
+ *
+ * There is no lookup. The context carries `create`, `context`, `prompt` and
+ * `switchAgent`, and a message list cannot tell a fresh session from a
+ * deleted one, so the adapter does not claim a check it did not make: the
+ * `exists` of the harvest is left out, and the harvest says so on the
+ * record. The guarantee it gives up is narrow: the archivist used to be
+ * created as a child of the session that was ending, and a delete of that
+ * session took the child with it. The archivist now stands on its own, so
+ * there is no cascade to survive, and the harvest goes on.
+ *
+ * The archivist's turn runs in the background. The V1 path says the same with
+ * `promptAsync`, and the reason is the same: the session that is closing must
+ * not wait for the archivist's whole run, and the V2 event loop must not
+ * stop reading events while it waits.
+ */
+function v2HarvestSession(ctx: V2Context): HarvestSession {
+  return {
+    messages: async (sessionID) => {
+      const messages = await ctx.session.context({ sessionID });
+      return messages.map((message) => ({ parts: textPartsOf(message) }));
+    },
+    create: async (input) => {
+      const created = await ctx.session.create({ title: input.title });
+      return created.id;
+    },
+    prompt: async ({ sessionID, agent, text }) => {
+      // The agent of a turn is the agent of its session, so the archivist is
+      // named on the session before the packet is handed over.
+      await ctx.session.switchAgent({ sessionID, agent });
+      // The turn runs in the background: the harvest is done when the packet
+      // is handed over, not when the archivist answers. A turn that fails
+      // afterwards is the archivist's own business, the same as on V1.
+      void ctx.session.prompt({ sessionID, text }).catch(() => {});
+    },
+  };
+}
+
+/**
+ * The text of a message, in the shape the harvest reads.
+ *
+ * The V2 context carries the words of a message in one of three places: the
+ * parts of an assistant message, the content of the same, or the flat text
+ * of a user message. The packet is a best reading of what the session said,
+ * so all three are read.
+ */
+function textPartsOf(message: V2SessionMessage): { type: string; text?: string }[] {
+  const parts = message.parts ?? message.content ?? [];
+  const spoken = parts.filter((part) => part.type === 'text');
+  if (spoken.length > 0) return spoken;
+  return message.text === undefined ? [] : [{ type: 'text', text: message.text }];
+}
+
+/**
  * A session went idle on the V2 path.
  *
  * The rungs go back, so the next task in that session starts on the rung the
- * role was given.
- *
- * The V2 harvest is off. The context this plugin is given has no way to ask
- * whether a session still exists: `session` carries hook, switchModel,
- * create, context, prompt and switchAgent, and a message list cannot tell a
- * fresh session from a deleted one. The archivist child is created and then
- * prompted, and a parent delete cascades the child away in between, which is
- * the failure the V1 path now checks for. Prompting anyway would claim a
- * check that did not happen; recording a failure would say so once per
- * session. The probe script (scripts/probe-v2.mjs) is what can show what the
- * context answers for a missing session, but it needs a live V2 server and
- * this path is not verified against one yet, so the harvest stays off until
- * the context has a lookup.
+ * role was given, and the archivist takes what the session learned, the same
+ * way the V1 path does.
  *
  * A failure here must not kill the subscription: the rungs would stop being
  * given back and the failure would be a silence, which is the one thing the
  * fault cases exist to catch.
  */
-async function onIdle(root: string, sessionID: string, agent: string): Promise<void> {
+async function onIdle(
+  root: string,
+  ctx: V2Context,
+  sessionID: string,
+  agent: string,
+): Promise<void> {
   try {
     const rungs = await readRungs(root);
     if (rungs[sessionID]) {
@@ -380,5 +437,24 @@ async function onIdle(root: string, sessionID: string, agent: string): Promise<v
       effect: 'deny',
       detail: error instanceof Error ? error.message : String(error),
     });
+  }
+
+  // A harvest that fails must not break the session that is closing, so it
+  // is caught here and put on the record. The V1 path keeps the two
+  // failures apart, and so does this one: a rung that cannot be given back
+  // is a failure of the events, and a harvest that cannot run is a failure
+  // of the harvest.
+  try {
+    if (!(await harvestEnabled(root))) return;
+    const role = await roleKeyForAgent(root, agent);
+    await harvest({
+      session: v2HarvestSession(ctx),
+      root,
+      sessionID,
+      role,
+      agent,
+    });
+  } catch (error) {
+    await recordHarvestFailure(root, { agent, sessionID, error });
   }
 }

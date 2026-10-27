@@ -2187,6 +2187,26 @@ export async function startFaultServer(mode: '429' | 'down'): Promise<FaultServe
 }
 
 /**
+ * How long the kill keeps cutting the session it killed.
+ *
+ * The abort is what stops the generation that is in flight, and one abort is
+ * not always enough: the watch finds the session the moment the dispatch
+ * creates it, which is before its turn is running, and an abort of an idle
+ * session is a no-op. The session is cut again and again for this long, so
+ * a turn that starts after the first abort is cut as well.
+ */
+const KILL_WINDOW_MS = 60_000;
+
+/**
+ * How often the kill cuts the session it killed.
+ *
+ * The cuts are close together on purpose: a builder that is cut has a
+ * window before the next cut, and a window long enough for a tool call is a
+ * window long enough for a completion record.
+ */
+const KILL_INTERVAL_MS = 500;
+
+/**
  * End a session, the way a killed builder stops mid-task.
  *
  * An abort cancels the turn that is running, and the session resumes: the
@@ -2196,27 +2216,66 @@ export async function startFaultServer(mode: '429' | 'down'): Promise<FaultServe
  * abort. Deleting the session ends it: the session is gone, so there is
  * nothing to resume and nothing left to post a record.
  *
- * The abort comes first, because it is what stops the generation that is in
- * flight, and the delete is what makes it stay stopped. A delete the server
- * refuses leaves the abort as the only kill there is, and the watch keeps
- * aborting the same session for a while.
+ * The aborts come first and they are repeated, and the delete comes last.
+ * The order is not a detail. The OpenCode 2 server finds a session by its
+ * row, so an abort of a deleted session answers 404 and stops nothing
+ * (measured against a live OpenCode 2 server, 2026-10-27). The row has to
+ * be there for the aborts to find it, and it has to go in the end, so that
+ * there is nothing left to resume.
+ *
+ * The repeats are not a belt and braces. The watch finds the session the
+ * moment the dispatch creates it, and that is before the turn is running,
+ * so the first abort lands on an idle session and does nothing. A second
+ * abort of a deleted session is worth nothing either, so the aborts have to
+ * come before the delete and keep coming.
+ *
+ * A delete the server refuses leaves the aborts as the only kill there is,
+ * so they go on when the delete fails.
  */
 export async function killSession(
   client: HarnessClient,
   sessionID: string,
   directory: string,
+  options: { windowMs?: number; intervalMs?: number; until?: () => boolean } = {},
 ): Promise<void> {
-  try {
-    await client.interrupt({ sessionID, directory });
-  } catch {
-    // The session may be gone already; that is the outcome we wanted.
-  }
+  const windowMs = options.windowMs ?? KILL_WINDOW_MS;
+  const intervalMs = options.intervalMs ?? KILL_INTERVAL_MS;
+
+  await cutSession(client, sessionID, directory, windowMs, intervalMs, options.until);
+
   try {
     await client.deleteSession({ sessionID, directory });
   } catch (error) {
-    // The server refused the delete, or the client cannot delete: the abort
-    // is all the kill there is, and the watch keeps cutting the same session.
+    // The server refused the delete, or the client cannot delete: the aborts
+    // are all the kill there is, and they go on.
     process.stderr.write(`[kill] the session ${sessionID} was not deleted: ${String(error)}\n`);
+    await cutSession(client, sessionID, directory, windowMs, intervalMs, options.until);
+  }
+}
+
+/**
+ * Cut a session, again and again, for a while.
+ *
+ * Every cut is a separate request and the session may be gone already, in
+ * which case the outcome is the one that was wanted. The cut stops early
+ * when the caller says the case is over.
+ */
+async function cutSession(
+  client: HarnessClient,
+  sessionID: string,
+  directory: string,
+  windowMs: number,
+  intervalMs: number,
+  until?: () => boolean,
+): Promise<void> {
+  for (let elapsed = 0; elapsed < windowMs; elapsed += intervalMs) {
+    if (until?.() === true) return;
+    try {
+      await client.interrupt({ sessionID, directory });
+    } catch {
+      // The session may be gone already; that is the outcome we wanted.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 }
 
@@ -2258,7 +2317,7 @@ export function killSessionWhenItAppears(
   client: HarnessClient,
   directory: string,
   matches: (title: string) => boolean,
-  options: { attempts?: number; intervalMs?: number; suppressMs?: number } = {},
+  options: { attempts?: number; intervalMs?: number; windowMs?: number } = {},
 ): { killed: Promise<string | undefined>; stop: () => void } {
   // The watch lives until the harness stops it, not for a fixed number of
   // polls: the Lead decides when to dispatch, and that can take minutes
@@ -2267,17 +2326,16 @@ export function killSessionWhenItAppears(
   // stops the watches when the suite ends.
   const attempts = options.attempts ?? Number.POSITIVE_INFINITY;
   const intervalMs = options.intervalMs ?? 500;
-  // An abort cancels the session's in-flight generation, but the session's
-  // loop can resume right after (measured 2026-10-27: a builder child kept
-  // generating for nineteen minutes after its abort, and the transcript it
-  // grew was what the judge could no longer answer). The kill deletes the
-  // session, so there is nothing to resume. The abort is kept as a fallback
-  // for a delete the server refuses, and the same session is re-aborted for
-  // a while after the first kill: an abort of an idle session is a no-op,
-  // and a resumed one is cut again. Only the killed session is re-aborted; a
-  // builder the Lead legitimately re-dispatches is a new session id and is
-  // never touched.
-  const suppressMs = options.suppressMs ?? 60_000;
+  // The kill keeps cutting the session it killed, and the window is how
+  // long it does that for. The delete comes at the end of the window, so
+  // the session's row is there for every cut: the OpenCode 2 server finds a
+  // session by its row, and a cut of a deleted session stops nothing
+  // (measured against a live OpenCode 2 server, 2026-10-27). The delete is
+  // what makes the kill stay: the session is gone, so there is nothing to
+  // resume and nothing left to post a record. Only the killed session is
+  // cut; a builder the Lead legitimately re-dispatches is a new session id
+  // and is never touched.
+  const windowMs = options.windowMs ?? KILL_WINDOW_MS;
   // A dispatched child can finish a small task before the server ever gives
   // it a title (measured 2026-10-27: a one-line hello.txt completed with
   // the session still untitled, the title match never fired, and the fault
@@ -2288,17 +2346,6 @@ export function killSessionWhenItAppears(
   // the title test, which covers a child that raced into the baseline.
   let baseline: Set<string> | undefined;
   let stopped = false;
-  const suppress = async (id: string): Promise<void> => {
-    for (let elapsed = 0; elapsed < suppressMs && !stopped; elapsed += intervalMs) {
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-      if (stopped) return;
-      try {
-        await client.interrupt({ sessionID: id, directory });
-      } catch {
-        // The session may be gone already; that is the outcome we wanted.
-      }
-    }
-  };
   const killed = (async (): Promise<string | undefined> => {
     for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
       try {
@@ -2307,8 +2354,14 @@ export function killSessionWhenItAppears(
         if (baseline === undefined) baseline = ids;
         const hit = selectKillTarget(sessions, baseline, matches);
         if (hit !== undefined) {
-          await killSession(client, hit, directory);
-          void suppress(hit);
+          // The kill runs beside the watch: the watch says at once which
+          // session it found, and the kill keeps cutting that session in the
+          // background, because a cut takes a window to be sure.
+          void killSession(client, hit, directory, {
+            windowMs,
+            intervalMs,
+            until: () => stopped,
+          });
           return hit;
         }
       } catch {
