@@ -1,6 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { check, type Finding, formatFindings, MAX_REPORTED_FINDINGS } from '@openagentsy/quality';
+// The narrow paths are the point. The barrel of the quality package carries
+// the comment rules, and the comment rules carry the TypeScript compiler.
+import { check } from '@openagentsy/quality/check';
+import { compilerFreeRegistry } from '@openagentsy/quality/compiler-free';
+import { formatFindings, MAX_REPORTED_FINDINGS } from '@openagentsy/quality/report';
+import type { Finding } from '@openagentsy/quality/rule';
 import { type FileRef, readPreToolCall } from '../event.js';
 import type { HandlerResult, Rule } from '../registry.js';
 import { createFindingsStore, type FindingsStore } from './findings.js';
@@ -13,6 +18,12 @@ import { createFindingsStore, type FindingsStore } from './findings.js';
  * plan's blocking is on the task, not on the write, and a write that has
  * already happened cannot be stopped anyway. What it says is capped, so a
  * check cannot flood the context of the session that wrote the file.
+ *
+ * The rules it runs are the ones that need no compiler. The comment rules
+ * need a TypeScript parse to find the comments of a file, and this rule
+ * runs on every write, so the plugin would carry the compiler and pay for
+ * a parse per write. The comment lint still runs in the `oa_quality_check`
+ * tool and in the audit command, where a parse is paid for on demand.
  */
 
 /** The answer of a rule that lets the call through. */
@@ -123,7 +134,7 @@ async function findingsOf(
   try {
     const design = options.design ?? (await readDesignMd(options.workspace));
     const ctx = design === undefined ? {} : { design };
-    return await run(paths, ctx, { root: options.workspace });
+    return await run(paths, ctx, { root: options.workspace, registry: compilerFreeRegistry });
   } catch {
     return undefined;
   }

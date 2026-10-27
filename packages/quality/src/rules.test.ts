@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cssRules } from './css/rules.js';
-import { allRules, qualityRegistry } from './rules.js';
+import { allRegistry, allRules } from './rules.js';
 
 describe('the registry of every rule', () => {
   it('holds the twenty-three rules of the plan', () => {
@@ -40,7 +40,7 @@ describe('the registry of every rule', () => {
   });
 
   it('is built at load, so a waivable floor rule stops the package', () => {
-    expect(qualityRegistry.rules()).toHaveLength(23);
+    expect(allRegistry.rules()).toHaveLength(23);
   });
 
   it('never lets a floor rule be waived', () => {
@@ -56,7 +56,7 @@ describe('the registry of every rule', () => {
 
 describe('the rules of a file', () => {
   it('picks the stylesheet rules for a stylesheet', () => {
-    expect(qualityRegistry.forFile('src/app.css').map((rule) => rule.id)).toEqual([
+    expect(allRegistry.forFile('src/app.css').map((rule) => rule.id)).toEqual([
       'css/token-only-colour-font',
       'css/no-transition-all',
       'css/no-layout-animation',
@@ -70,7 +70,7 @@ describe('the rules of a file', () => {
   });
 
   it('picks the page rules for a page', () => {
-    expect(qualityRegistry.forFile('src/app.html').map((rule) => rule.id)).toEqual([
+    expect(allRegistry.forFile('src/app.html').map((rule) => rule.id)).toEqual([
       'html/dead-nav',
       'html/inert-control',
       'html/emoji-icon',
@@ -83,7 +83,7 @@ describe('the rules of a file', () => {
   });
 
   it('picks the page rules and the comment rules for a component', () => {
-    expect(qualityRegistry.forFile('src/app.tsx').map((rule) => rule.id)).toEqual([
+    expect(allRegistry.forFile('src/app.tsx').map((rule) => rule.id)).toEqual([
       'html/dead-nav',
       'html/inert-control',
       'html/emoji-icon',
@@ -102,7 +102,7 @@ describe('the rules of a file', () => {
   });
 
   it('picks the comment rules for a source file', () => {
-    expect(qualityRegistry.forFile('src/app.ts').map((rule) => rule.id)).toEqual([
+    expect(allRegistry.forFile('src/app.ts').map((rule) => rule.id)).toEqual([
       'comment/banner-separator',
       'comment/decorative-marker',
       'comment/step-narration',
@@ -113,6 +113,6 @@ describe('the rules of a file', () => {
   });
 
   it('picks no rule for a document', () => {
-    expect(qualityRegistry.forFile('docs/plan.md')).toEqual([]);
+    expect(allRegistry.forFile('docs/plan.md')).toEqual([]);
   });
 });

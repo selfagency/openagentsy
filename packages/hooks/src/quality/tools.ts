@@ -1,4 +1,4 @@
-import { check, type Finding } from '@openagentsy/quality';
+import { allRegistry, check, type Finding } from '@openagentsy/quality';
 import { z } from 'zod';
 import { readDesignMd } from './rule.js';
 
@@ -8,10 +8,12 @@ import { readDesignMd } from './rule.js';
  * The rule shows the agent eight lines, so that a check cannot flood the
  * context of the session that wrote the file. The tool returns all of
  * them: the cap is for the context, not for the answer.
+ *
+ * The tool runs every rule, the comment rules included. A call to the tool
+ * is a call a session made on purpose, and the comment rules need a
+ * TypeScript parse to find the comments of a file. The parse is paid for
+ * on demand here, and it is not paid at all on the write path.
  */
-
-/** The names of the quality tools. */
-export const qualityToolNames = ['oa_quality_check'] as const;
 
 /** A tool, in the shape the server registers it in. */
 export interface QualityTool {
@@ -32,10 +34,13 @@ export function qualityTools(options: { workspace: string }): Record<string, Qua
       args: z.object({
         paths: z.array(z.string().min(1)).default([]),
       }),
-      execute: async (args) => {
+      execute: async (args): Promise<QualityFindingList> => {
         const design = await readDesignMd(options.workspace);
         const ctx = design === undefined ? {} : { design };
-        const findings = await check(pathsOf(args), ctx, { root: options.workspace });
+        const findings = await check(pathsOf(args), ctx, {
+          root: options.workspace,
+          registry: allRegistry,
+        });
         return { findings };
       },
     },
@@ -51,4 +56,4 @@ function pathsOf(args: unknown): string[] {
 }
 
 /** The findings of a check, for the tool to answer with. */
-export type QualityFindingList = { findings: Finding[] };
+type QualityFindingList = { findings: Finding[] };

@@ -1,5 +1,9 @@
 import { type BoardDatabase, listRecords, setRecordState } from '@openagentsy/core';
-import { createFindingsStore, qualityTools } from '@openagentsy/hooks';
+import { createFindingsStore } from '@openagentsy/hooks';
+// The tools carry the whole rule set, and the whole rule set carries the
+// TypeScript compiler. The plugin bundles the hooks package, so the tools
+// are reached by their own path and not by the barrel.
+import { qualityTools } from '@openagentsy/hooks/quality/tools';
 import {
   createMemoryTools,
   MemoryInbox,

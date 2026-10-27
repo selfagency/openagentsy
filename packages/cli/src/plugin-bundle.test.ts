@@ -29,6 +29,17 @@ describe('the plugin bundle', () => {
     expect(relative ?? []).toEqual([]);
   });
 
+  it('does not carry the TypeScript compiler', async () => {
+    const bundle = await readFile(bundlePath, 'utf8');
+    // The comment rules need a TypeScript parse to find the comments of a
+    // file. The plugin runs a check on every write, so the compiler is not
+    // in the bundle: the comment lint runs in the quality tool and in the
+    // audit command, where a parse is paid for on demand. These are names
+    // of the compiler's own API, and nothing else in the bundle has them.
+    expect(bundle).not.toContain('getPreEmitDiagnostics');
+    expect(bundle).not.toContain('createTypeChecker');
+  });
+
   it('is the file the setup command copies out', async () => {
     const source = await readFile(
       fileURLToPath(new URL('../../adapter-opencode/dist/index.js', import.meta.url)),

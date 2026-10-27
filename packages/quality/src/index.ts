@@ -9,6 +9,7 @@
  */
 export * from './check.js';
 export * from './comments/index.js';
+export * from './compiler-free.js';
 export * from './copy/index.js';
 export * from './css/index.js';
 export * from './html/index.js';

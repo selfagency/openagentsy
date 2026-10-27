@@ -58,6 +58,23 @@ describe('the quality rule', () => {
     expect(text).not.toContain('other.css');
   });
 
+  it('runs the rules that need no compiler, and not the comment rules', async () => {
+    const root = await scratch();
+    await writeFile(join(root, 'app.css'), '.a { transition: all 0.2s; }\n', 'utf8');
+    await writeFile(
+      join(root, 'app.ts'),
+      '// Step 1: trim the input\nexport const a = 1;\n',
+      'utf8',
+    );
+    const rule = qualityAfterWrite({ workspace: root, stateRoot: root, mode: 'during' });
+
+    const result = await rule.handler(written(['app.css', 'app.ts']));
+
+    const text = appended(result) ?? '';
+    expect(text).toContain('css/no-transition-all');
+    expect(text).not.toContain('comment/');
+  });
+
   it('shows the agent at most eight lines', async () => {
     const root = await scratch();
     const many = Array.from({ length: 12 }, (_unused, index) => finding({ line: index + 1 }));

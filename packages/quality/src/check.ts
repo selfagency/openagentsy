@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { compilerFreeRegistry } from './compiler-free.js';
 import type { CheckCtx, Finding, QualityRegistry, SourceFile } from './rule.js';
-import { qualityRegistry } from './rules.js';
 
 /**
  * The check: the rules of the registry, run over a set of files.
@@ -18,7 +18,14 @@ export type FileReader = (path: string) => Promise<string | undefined>;
 export interface CheckOptions {
   /** The directory a relative path is read from. */
   root?: string;
-  /** The rules the check runs. */
+  /**
+   * The rules the check runs.
+   *
+   * The default is the set that needs no compiler: the comment rules need a
+   * TypeScript parse to find the comments of a file, and a check that runs
+   * on every write pays for the parse. A caller that wants every rule, the
+   * comment rules included, passes the full registry.
+   */
   registry?: QualityRegistry;
   /** How the text of a file is read. */
   read?: FileReader;
@@ -36,7 +43,7 @@ export async function check(
   ctx: CheckCtx = {},
   options: CheckOptions = {},
 ): Promise<Finding[]> {
-  const registry = options.registry ?? qualityRegistry;
+  const registry = options.registry ?? compilerFreeRegistry;
   const read = options.read ?? readFromDisk;
   const findings: Finding[] = [];
   for (const path of paths) {
