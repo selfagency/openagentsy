@@ -8,6 +8,7 @@ import {
   type HookRegistry,
   type OutputFinding,
   outputCheckRules,
+  type QualityMode,
   type Rule,
   toolVocabulary,
 } from '@openagentsy/hooks';
@@ -149,6 +150,18 @@ export type BridgeOptions = {
   rules?: readonly Rule[];
   /** The commands a person has to approve. */
   approvalFor?: readonly string[];
+  /**
+   * The quality check, when the project runs one.
+   *
+   * The mode says when the check runs, and the task of a session says
+   * where the findings are recorded.
+   */
+  quality?: {
+    /** When the check runs. */
+    mode: QualityMode;
+    /** The task of a session, when the session has one. */
+    taskIdForSession?: (sessionID: string) => string | undefined | Promise<string | undefined>;
+  };
   /** Where the refusal of a permission merge goes. */
   onPermissionRefusal?: (error: Error) => void | Promise<void>;
 };
@@ -327,7 +340,11 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
   // are enforced by the permission map (roles.yaml), and this rule is the
   // defence in depth under it.
   const registry: HookRegistry = createOaRegistry([
-    ...defaultRules({ workspace: options.workspace, stateRoot: options.stateRoot }),
+    ...defaultRules({
+      workspace: options.workspace,
+      stateRoot: options.stateRoot,
+      ...(options.quality === undefined ? {} : { quality: options.quality }),
+    }),
     ...(options.rules ?? []),
   ]);
 

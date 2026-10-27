@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { STATUSES, type Status, type Task } from './model.js';
 import {
   enforceContentRules,
+  enforceQualityRules,
   enforceStatusTransition,
   findCycle,
   InvalidStatusTransitionError,
@@ -157,6 +158,38 @@ describe('the dependency cycles', () => {
 
   it('ignores a relation to a task that is not there', () => {
     expect(findCycle([task({ id: 'a', parent: 'nowhere' })])).toBeUndefined();
+  });
+});
+
+describe('the floor findings of a task', () => {
+  const finding = {
+    ruleId: 'copy/unsourced-claim',
+    file: 'src/page.html',
+    line: 4,
+    message: 'The copy makes a claim with no source.',
+    fix: 'Cite where the claim comes from',
+  };
+
+  it('refuses a task that is completed with an open floor finding', async () => {
+    await expect(
+      enforceQualityRules(task({ status: 'completed' }), { openFloorFindings: () => [finding] }),
+    ).rejects.toThrow(/open floor quality finding/);
+  });
+
+  it('lets a task be completed when no floor finding is open', async () => {
+    await expect(
+      enforceQualityRules(task({ status: 'completed' }), { openFloorFindings: () => [] }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('leaves a task that is not completed alone', async () => {
+    await expect(
+      enforceQualityRules(task({ status: 'in-progress' }), { openFloorFindings: () => [finding] }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('enforces nothing when the reader is not injected', async () => {
+    await expect(enforceQualityRules(task({ status: 'completed' }), {})).resolves.toBeUndefined();
   });
 });
 

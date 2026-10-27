@@ -1,4 +1,5 @@
 import { type BoardDatabase, listRecords, setRecordState } from '@openagentsy/core';
+import { createFindingsStore, qualityTools } from '@openagentsy/hooks';
 import {
   createMemoryTools,
   MemoryInbox,
@@ -42,7 +43,12 @@ export type WorkspaceToolsOptions = {
  * root would read another project's tasks and another project's memories.
  */
 export async function workspaceTools(options: WorkspaceToolsOptions): Promise<ServerTool[]> {
-  const store = await openStore(options.root);
+  const findings = createFindingsStore(options.root);
+  const store = await openStore(options.root, {
+    // A task with an open floor finding cannot be completed, and the
+    // findings are the ones the check recorded in the state root.
+    openFloorFindings: async (taskId) => await findings.openFloor(taskId),
+  });
   const memory = new MemoryStore({ root: options.root });
   const inbox = new MemoryInbox({
     root: options.root,
@@ -56,6 +62,7 @@ export async function workspaceTools(options: WorkspaceToolsOptions): Promise<Se
   const tools: Record<string, PackageTool> = {
     ...taskTools(store),
     ...createMemoryTools({ store: memory, inbox }),
+    ...qualityTools({ workspace: options.root }),
   };
   return Object.entries(tools).map(([name, def]) => serverTool(name, def));
 }

@@ -36,6 +36,34 @@ const harness = async (): Promise<Harness> => {
 };
 
 describe('the store', () => {
+  it('refuses to complete a task with an open floor finding', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'oa-tasks-floor-'));
+    const beans = join(root, '.beans');
+    await mkdir(beans, { recursive: true });
+    const store = new TaskStore(beans, {
+      prefix: 'oa-',
+      openFloorFindings: () => [
+        {
+          ruleId: 'copy/unsourced-claim',
+          file: 'src/page.html',
+          line: 4,
+          message: 'The copy makes a claim with no source.',
+          fix: 'Cite where the claim comes from',
+        },
+      ],
+    });
+    const created = await store.create({ title: 'A task with a finding' });
+    await store.update(created.id, { status: 'in-progress' });
+
+    await expect(
+      store.update(created.id, {
+        status: 'completed',
+        bodyMod: { append: '\n## Summary of Changes\n- did it\n' },
+      }),
+    ).rejects.toThrow(/open floor quality finding/);
+    expect((await store.get(created.id))?.status).toBe('in-progress');
+  });
+
   it('writes a new task and reads it back', async () => {
     const { store } = await harness();
     const created = await store.create({ title: 'A first task', type: 'bug' });

@@ -77,6 +77,62 @@ export function enforceContentRules(task: TaskRules): void {
 }
 
 /**
+ * The parts of a quality finding the rule reads.
+ *
+ * The tasks package does not import the quality package: the findings are
+ * injected, so the shape is declared here and the dependency stops at the
+ * edge of the store.
+ */
+export interface QualityFinding {
+  /** The rule that found it. */
+  ruleId: string;
+  /** The file the finding is in. */
+  file: string;
+  /** The line the finding is on. */
+  line: number;
+  /** What is wrong. */
+  message: string;
+  /** The fix. */
+  fix: string;
+}
+
+/** What the rules may ask the outside for. */
+export interface TransitionDeps {
+  /**
+   * The floor findings that are open for a task.
+   *
+   * The findings are kept by the quality package, and the tasks package
+   * does not know where, so the reader is injected.
+   */
+  openFloorFindings?: (taskId: string) => QualityFinding[] | Promise<QualityFinding[]>;
+}
+
+/**
+ * The rule that keeps a task from being completed.
+ *
+ * A floor finding is an honesty, a function or an accessibility failure,
+ * and a floor rule is never waived, so a task with one open cannot be
+ * completed. The rule is async because the findings are read from another
+ * package's store.
+ */
+export async function enforceQualityRules(
+  task: Pick<Task, 'id' | 'status'>,
+  deps: TransitionDeps,
+): Promise<void> {
+  if (task.status !== 'completed') return;
+  if (deps.openFloorFindings === undefined) return;
+  const open = await deps.openFloorFindings(task.id);
+  if (open.length === 0) return;
+  const named = open
+    .slice(0, 3)
+    .map((f) => `${f.ruleId} ${f.file}:${f.line}`)
+    .join('; ');
+  throw new Error(
+    `${open.length} open floor quality finding(s): ${named}. Fix them; floor rules can't be waived.`,
+  );
+}
+
+/**
  * The rule for a change of status.
  *
  * A task that keeps its status is not a move, so the whitelist does not

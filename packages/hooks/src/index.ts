@@ -16,6 +16,7 @@ export * from './event.js';
 export * from './lessons/index.js';
 export * from './output-checks.js';
 export * from './paths.js';
+export * from './quality/index.js';
 export * from './registry.js';
 export * from './rules.js';
 export * from './secrets.js';

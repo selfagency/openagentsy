@@ -7,10 +7,12 @@
  * It is a library. The hooks package calls it, and nothing here decides
  * on its own what a person decided.
  */
+export * from './check.js';
 export * from './comments/index.js';
 export * from './copy/index.js';
 export * from './css/index.js';
 export * from './html/index.js';
 export * from './markup/index.js';
+export * from './report.js';
 export * from './rule.js';
 export * from './rules.js';

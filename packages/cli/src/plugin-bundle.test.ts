@@ -19,7 +19,13 @@ const bundlePath = fileURLToPath(new URL('../plugin/openagentsy.js', import.meta
 describe('the plugin bundle', () => {
   it('imports nothing from a path next to it', async () => {
     const bundle = await readFile(bundlePath, 'utf8');
-    const relative = bundle.match(/(?:from|import\()\s*['"]\.[^'"]+['"]/g);
+    // The statements that pull in a relative path, and nothing else. The
+    // bundle carries the text of the packages it inlines, and a doc comment
+    // in one of them shows an import of its own; a statement that does not
+    // start a line is prose, not an import.
+    const relative = bundle.match(
+      /^(?!\s*\*)\s*(?:(?:import|export)[^\n;]*?from|import\s*\()\s*['"]\.[^'"]+['"]/gm,
+    );
     expect(relative ?? []).toEqual([]);
   });
 

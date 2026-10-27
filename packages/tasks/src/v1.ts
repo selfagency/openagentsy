@@ -4,7 +4,7 @@ import { toolMap } from '@openagentsy/adapter-opencode';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_LENGTH, DEFAULT_PREFIX } from './ids.js';
 import { primeBlock } from './prime.js';
-import { TaskStore } from './store.js';
+import { TaskStore, type TaskStoreOptions } from './store.js';
 import { taskTools } from './tools.js';
 
 /**
@@ -69,7 +69,10 @@ export const OpenAgentsyTasks = async (input: { directory: string }): Promise<Ta
  * The configuration is found by walking up from the directory, the way the
  * tools that write configuration files find the project they belong to.
  */
-export async function openStore(directory: string): Promise<TaskStore> {
+export async function openStore(
+  directory: string,
+  options: TaskStoreOptions = {},
+): Promise<TaskStore> {
   const config = await findBeansConfig(directory);
   // The store belongs to the project the configuration is in, not to the
   // directory the caller happened to name: a plugin opened on a directory
@@ -78,6 +81,7 @@ export async function openStore(directory: string): Promise<TaskStore> {
   return new TaskStore(root, {
     prefix: config?.prefix ?? DEFAULT_PREFIX,
     ...(config?.idLength === undefined ? {} : { idLength: config.idLength }),
+    ...options,
   });
 }
 

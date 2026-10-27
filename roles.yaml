@@ -218,6 +218,11 @@ roles:
       # call; deciding what is kept is not.
       openagentsy_oa_memory_search: allow
       openagentsy_oa_memory_list: allow
+      # The quality check. The rule shows the agent eight lines of findings
+      # after every write; the tool returns all of them. Reading the
+      # findings is a tool call, and the waiver is not.
+      oa_quality_check: allow
+      openagentsy_oa_quality_check: allow
       # A lesson, a quality waiver and a memory are decisions a person makes.
       # The permission map is the primary enforcement: the hook cannot see an
       # MCP call on the pinned binary, so the tool is taken away here rather
@@ -490,6 +495,11 @@ roles:
       # The memories a person decided to keep.
       openagentsy_oa_memory_search: allow
       openagentsy_oa_memory_list: allow
+      # The quality check. The rule shows the agent eight lines of findings
+      # after every write; the tool returns all of them. Reading the
+      # findings is a tool call, and the waiver is not.
+      oa_quality_check: allow
+      openagentsy_oa_quality_check: allow
       # A lesson, a quality waiver and a memory are decisions a person makes.
       # The permission map is the primary enforcement: the hook cannot see an
       # MCP call on the pinned binary, so the tool is taken away here rather

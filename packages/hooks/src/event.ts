@@ -29,6 +29,8 @@ export interface PreToolCallEvent {
   callID?: string;
   /** The role the call is made for. */
   role?: string;
+  /** The session the call is made in. */
+  sessionID?: string;
 }
 
 /**
@@ -150,6 +152,7 @@ export function readPreToolCall(event: unknown): PreToolCallEvent | undefined {
     ...(command !== undefined ? { command } : {}),
     ...(typeof candidate.callID === 'string' ? { callID: candidate.callID } : {}),
     ...(typeof candidate.role === 'string' ? { role: candidate.role } : {}),
+    ...(typeof candidate.sessionID === 'string' ? { sessionID: candidate.sessionID } : {}),
   };
 }
 

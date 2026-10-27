@@ -11,6 +11,7 @@ import { type BridgeHooks, createBridge } from './bridge.js';
 import { type ClientLike, type ProviderInventory, sessionAdapter } from './client.js';
 import { defineTool, toolMap } from './define-tool.js';
 import {
+  activeBean,
   appendAudit,
   POLICIES,
   planClimb,
@@ -25,7 +26,7 @@ import {
 import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
 import { claimedStatusOf, observeSessionIdle, recordNoProgressRounds } from './idle-observer.js';
 import { assistantMessageOf, bridgeToLedger, rootSessionOf } from './ledger-bridge.js';
-import { readApprovalFor } from './project-config.js';
+import { readApprovalFor, readQualityMode } from './project-config.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
@@ -364,6 +365,16 @@ async function setupServer(
       return statedPathsOf(root, agent);
     },
     approvalFor: await readApprovalFor(root),
+    quality: {
+      mode: await readQualityMode(root),
+      taskIdForSession: async (sessionID) => {
+        // The task of a session is the bean its agent holds a lease on, so
+        // the findings of a write land on the task that asked for it.
+        const agent = sessionAgents.get(sessionID);
+        if (agent === undefined) return undefined;
+        return await activeBean(root, agent);
+      },
+    },
     onFindings: async (findings, sessionID) => {
       const agent = sessionAgents.get(sessionID) ?? 'unknown';
       await appendAudit(root, {

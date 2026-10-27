@@ -164,7 +164,10 @@ describe('the board server over stdio', () => {
     // and only a person may decide one.
     expect(names).toContain('oa_lesson_propose');
     expect(names).toContain('oa_lesson_decide');
-    expect(names.length).toBe(18);
+    // The quality check is a tool of its own: the rule shows the agent
+    // eight lines of findings, and the tool returns all of them.
+    expect(names).toContain('oa_quality_check');
+    expect(names.length).toBe(19);
   });
 
   it('posts a record and reads it back in the inbox', async () => {

@@ -3,6 +3,7 @@ import { findSecrets } from '@openagentsy/core';
 import { approvalGate, createApprovalStore } from './approvals.js';
 import { isReaderTool, isWritingTool, type PreToolCallEvent, readPreToolCall } from './event.js';
 import { isInside, pathSegments, projectName, worktreeRoot } from './paths.js';
+import { type QualityRuleOptions, qualityAfterWrite } from './quality/rule.js';
 import type { HandlerResult, Rule } from './registry.js';
 
 /**
@@ -515,6 +516,13 @@ export interface DefaultRuleOptions {
   stateRoot: string;
   /** The home directory the worktrees live under; the home of the user by default. */
   home?: string;
+  /**
+   * The quality check, when the project runs one.
+   *
+   * A project that names no mode runs no check, so the rule is left out
+   * rather than registered and idle.
+   */
+  quality?: Omit<QualityRuleOptions, 'workspace' | 'stateRoot'>;
 }
 
 /**
@@ -522,11 +530,17 @@ export interface DefaultRuleOptions {
  *
  * They run in the order they are written, and every one of them blocks.
  */
-export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions): Rule[] => {
+export const defaultRules = ({
+  workspace,
+  stateRoot,
+  home,
+  quality,
+}: DefaultRuleOptions): Rule[] => {
   const root = resolve(workspace);
   const roots = [root, worktreeRoot(projectName(root), home)];
   const approvals = createApprovalStore(stateRoot);
   return [
+    ...(quality === undefined ? [] : [qualityAfterWrite({ workspace, stateRoot, ...quality })]),
     {
       id: 'no-skip-git-hooks',
       event: 'PreToolCall',

@@ -106,28 +106,47 @@ function stripJsonc(text: string): string {
  * nothing as well.
  */
 export async function readApprovalFor(root: string): Promise<string[]> {
-  let text: string;
-  try {
-    text = await readFile(join(root, PROJECT_CONFIG_NAME), 'utf8');
-  } catch {
-    // A project that has no config file has no approval list. That is not a
-    // failure: the file is optional.
-    return [];
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonc(text));
-  } catch {
-    // A config that cannot be read asks for nothing. The person who wrote it
-    // is the one who can fix it, and the plugin is not the place to guess.
-    return [];
-  }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [];
-  const hooks = (parsed as { hooks?: unknown }).hooks;
+  const hooks = (await readConfig(root))?.['hooks'];
   if (typeof hooks !== 'object' || hooks === null || Array.isArray(hooks)) return [];
   const approvalFor = (hooks as { approvalFor?: unknown }).approvalFor;
   if (!Array.isArray(approvalFor)) return [];
   return approvalFor.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * The quality mode of a project.
+ *
+ * The mode says when the check runs: `during` runs it after every write,
+ * and `after` leaves the findings to the audit command. A project that
+ * names no mode runs the check after every write, which is the default
+ * the plan's config carries.
+ */
+export async function readQualityMode(root: string): Promise<'during' | 'after'> {
+  const quality = (await readConfig(root))?.['quality'];
+  if (typeof quality !== 'object' || quality === null) return 'during';
+  const mode = (quality as { mode?: unknown }).mode;
+  return mode === 'after' ? 'after' : 'during';
+}
+
+/**
+ * The config of a project, when it has one that can be read.
+ *
+ * The file is optional, and a file that is not JSON is not a config this
+ * bridge can read, so both of them answer with nothing.
+ */
+async function readConfig(root: string): Promise<Record<string, unknown> | undefined> {
+  let text: string;
+  try {
+    text = await readFile(join(root, PROJECT_CONFIG_NAME), 'utf8');
+  } catch {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonc(text));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  return parsed as Record<string, unknown>;
 }

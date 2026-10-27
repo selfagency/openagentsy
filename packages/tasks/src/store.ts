@@ -25,9 +25,11 @@ import {
 import {
   CircularDependencyError,
   enforceContentRules,
+  enforceQualityRules,
   enforceStatusTransition,
   findCycle,
   InvalidStatusTransitionError,
+  type QualityFinding,
 } from './transitions.js';
 
 /**
@@ -50,6 +52,14 @@ export interface TaskStoreOptions {
   idLength?: number;
   /** Where a refused change is written down. */
   onAudit?: (kind: AuditKind, detail: string) => void | Promise<void>;
+  /**
+   * The floor findings that are open for a task.
+   *
+   * The findings belong to the quality package, and a store that is given
+   * none enforces nothing: the rule is the reader's, and the reader is
+   * injected.
+   */
+  openFloorFindings?: (taskId: string) => QualityFinding[] | Promise<QualityFinding[]>;
 }
 
 /** The task a new one is created from. */
@@ -182,6 +192,7 @@ export class TaskStore {
     if (input.blocked_by !== undefined) task.blocked_by = input.blocked_by;
 
     enforceContentRules(task);
+    await enforceQualityRules(task, this.options);
 
     await this.assertNoCycle({ ...task, etag: '' });
     await this.write(task);
@@ -214,6 +225,7 @@ export class TaskStore {
       throw error;
     }
     enforceContentRules(next);
+    await enforceQualityRules(next, this.options);
     try {
       await this.assertNoCycle(next);
     } catch (error) {
