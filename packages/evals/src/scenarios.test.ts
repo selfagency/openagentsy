@@ -54,6 +54,51 @@ async function failures(state: CaseState): Promise<string[]> {
 }
 
 describe('fault builder killed', () => {
+  it('fails a builder that completed before the Lead reported it missing', async () => {
+    // The measured record (2026-10-27): the builder states the artifact and
+    // never the word done, so a check that looked for a completion word
+    // alone read the record as silence and passed vacuously - in a case
+    // where the builder was alive and had finished.
+    const failed = await failures(
+      await stateWith([
+        {
+          kind: 'status',
+          from: 'oa-builder',
+          action: 'Created hello.txt with a single line of text',
+          state: 'the file is at the root of the repository',
+        },
+      ]),
+    );
+
+    expect(failed).toContain(
+      'the builder posted a completion record before the Lead reported it missing, so the fault did not land and the Lead could not have known',
+    );
+  });
+
+  it('passes when the Lead reported the death before the builder completed', async () => {
+    // The Lead reports the death, then a second builder finishes the work.
+    // The completion that comes after the report is the second builder's,
+    // and the fault landed.
+    const failed = await failures(
+      await stateWith([
+        {
+          kind: 'status',
+          from: 'agentsy',
+          action: 'the builder died mid-task',
+          state: 'the dispatched agent did not complete; no completion record is on the board',
+        },
+        {
+          kind: 'status',
+          from: 'oa-builder',
+          action: 'Created hello.txt with a single line of text',
+          state: 'the file is at the root of the repository',
+        },
+      ]),
+    );
+
+    expect(failed).toEqual([]);
+  });
+
   it('fails a session that says nothing', async () => {
     const failed = await failures(await stateWith([]));
 

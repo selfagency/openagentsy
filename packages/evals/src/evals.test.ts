@@ -218,6 +218,7 @@ async function runTrial(
     const state = await prepare(root, scenarioCase, {
       repoRoot: REPO_ROOT,
       headless: true,
+      runtime: harness.runtime,
       ...(MODEL !== undefined ? { model: MODEL } : {}),
       ...(scenarioCase.boardFault !== undefined ? { boardFault: scenarioCase.boardFault } : {}),
       ...(scenarioCase.harvest === true ? { harvest: true } : {}),

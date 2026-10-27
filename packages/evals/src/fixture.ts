@@ -15,8 +15,9 @@ import {
   setBudget,
 } from '@openagentsy/core';
 import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
-import { parse as parseJsonc } from 'jsonc-parser';
+import { type ParseError, parse as parseJsonc } from 'jsonc-parser';
 import { gitFreeEnv } from './git-env.js';
+import type { OpenCodeRuntime } from './opencode.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -274,6 +275,14 @@ export async function prepare(
     model?: string;
     /** Whether the memory pipeline runs in this case. */
     harvest?: boolean;
+    /**
+     * The runtime the harness started.
+     *
+     * The MCP servers the machine already runs are switched off in the
+     * shape that runtime reads, and the runtime is what says which shape
+     * that is.
+     */
+    runtime: OpenCodeRuntime;
   },
 ): Promise<CaseState> {
   const state = await seedCase(root, fixture, { repoRoot: options.repoRoot });
@@ -340,12 +349,23 @@ export async function prepare(
     join(root, '.opencode', 'agents', 'judge.md'),
   );
 
+  // The MCP servers the machine already runs are switched off for the case,
+  // and the shape of that switch follows the runtime the harness started.
+  const mcp = caseMcp(options.runtime);
+  for (const note of mcp.notes) {
+    // The harness's own behaviour about a file it skipped is said out
+    // loud: a global config it could not read is not the same as a global
+    // config that says nothing, and a case that runs with the machine's
+    // servers on is not the case the suite meant to run.
+    process.stderr.write(`[global config] ${note}\n`);
+  }
+
   await writeFile(
     join(root, 'opencode.json'),
     `${JSON.stringify(
       {
         mcp: {
-          ...disabledGlobalServers(),
+          ...mcp.mcp,
           openagentsy: {
             type: 'local',
             command: ['bun', join(options.repoRoot, 'packages', 'mcp', 'dist', 'index.js')],
@@ -355,7 +375,7 @@ export async function prepare(
                 ? { OPENAGENTSY_FAULT: options.boardFault }
                 : {}),
             },
-            enabled: true,
+            ...(options.runtime.major >= 2 ? { disabled: false } : { enabled: true }),
           },
         },
         compaction: { auto: false, prune: false },
@@ -370,59 +390,178 @@ export async function prepare(
 }
 
 /**
- * The MCP servers the machine already runs, switched off for the case.
- *
- * A session sends the tool schemas of every MCP server it can reach, and the
- * global ones are large. Seven of them, the GitHub one alone has sixty
- * tools, is most of the prompt of a case. The case only needs the board.
- *
- * The entry is the global one with the switch off, not a fresh one: the
- * server rejects an entry it cannot read ("Ignoring MCP config entry
- * without type"), and a case that leaves an error in the server's log is a
- * case whose green says nothing about the agent.
+ * The MCP servers one global config file declares, and what was wrong with it.
  */
-function disabledGlobalServers(): Record<string, unknown> {
-  const disabled: Record<string, unknown> = {};
-  for (const path of globalConfigPaths()) {
-    for (const [name, entry] of Object.entries(globalMcpServers(path))) {
-      if (name === 'openagentsy') continue;
-      disabled[name] = { ...entry, enabled: false };
-    }
-  }
-  return disabled;
-}
+export type GlobalMcp = {
+  /** The entries the server can read, keyed by name. */
+  servers: Record<string, Record<string, unknown>>;
+  /**
+   * The lines a person reads: what was dropped, and why.
+   *
+   * A file the harness could not read is said out loud. A parse failure
+   * that became "no MCP servers" would hide the reason a case failed.
+   */
+  notes: string[];
+};
 
 /**
- * The MCP servers one global config file declares, as the server reads them.
+ * The MCP servers one global config file declares.
  *
  * The config is JSON with comments, so it is read as JSONC. The entry keeps
  * its type and its command or url, because the server rejects an entry it
  * cannot read, and it loses its environment, because a server that is
  * switched off needs no key and a case directory is a place a key should
  * not be written.
+ *
+ * Both shapes of the config are read: OpenCode 1 keeps the servers in a
+ * flat map and OpenCode 2 nests them under "servers".
+ *
+ * An entry without a type is dropped. The server ignores such an entry
+ * ("Ignoring MCP config entry without type"), and a case that runs with an
+ * entry the server ignores is a case whose green says nothing about the
+ * agent.
  */
-export function globalMcpServers(path: string): Record<string, Record<string, unknown>> {
+export function globalMcpServers(path: string): GlobalMcp {
+  const read = readGlobalConfig(path);
+  if (read.note !== undefined) return { servers: {}, notes: [read.note] };
+
+  const mcp = (read.parsed as { mcp?: unknown } | undefined)?.mcp;
+  if (mcp === undefined || mcp === null || typeof mcp !== 'object') {
+    return { servers: {}, notes: [] };
+  }
+
+  const servers: Record<string, Record<string, unknown>> = {};
+  const notes: string[] = [];
+  for (const [name, entry] of mcpEntriesOf(mcp as Record<string, unknown>)) {
+    const server = serverEntryOf(entry);
+    if (server.entry === undefined) {
+      notes.push(
+        `the global config ${path} declares the MCP entry "${name}" ${server.reason}; it was not copied into the case`,
+      );
+      continue;
+    }
+    servers[name] = server.entry;
+  }
+  return { servers, notes };
+}
+
+/**
+ * The text of a global config file, or the reason it could not be read.
+ *
+ * jsonc-parser does not throw on a broken file: it collects the errors and
+ * returns what it could parse. Without the errors a config with a missing
+ * comma reads as a config that says nothing, and the run goes on into a
+ * state where every session that starts dies.
+ */
+function readGlobalConfig(path: string): { parsed?: unknown; note?: string } {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    return {
+      note: `the global config ${path} could not be read (${(error as Error).message}); it was skipped`,
+    };
   }
-  let parsed: unknown;
-  try {
-    parsed = parseJsonc(text);
-  } catch {
-    return {};
+
+  const errors: ParseError[] = [];
+  const parsed = parseJsonc(text, errors, { allowTrailingComma: true }) as unknown;
+  const first = errors[0];
+  if (first !== undefined) {
+    return {
+      note: `the global config ${path} is not valid JSONC (${first.error} at offset ${first.offset}); it was skipped, so the MCP servers it declares are not switched off for the case`,
+    };
   }
-  const mcp = (parsed as { mcp?: unknown } | undefined)?.mcp;
-  if (mcp === undefined || mcp === null || typeof mcp !== 'object') return {};
+  return { parsed };
+}
+
+/**
+ * The entries the mcp map of a global config holds.
+ *
+ * OpenCode 2 nests the servers under "servers"; OpenCode 1 keeps them in a
+ * flat map. A flat entry that is itself named "servers" carries a type and
+ * a nested map does not, so the type tells the two apart. Both are read,
+ * because a config may hold the two shapes at once.
+ */
+function mcpEntriesOf(map: Record<string, unknown>): [string, unknown][] {
+  const nested = map.servers;
+  const isNestedMap =
+    nested !== undefined &&
+    nested !== null &&
+    typeof nested === 'object' &&
+    !Array.isArray(nested) &&
+    (nested as Record<string, unknown>).type === undefined;
+
+  const entries: [string, unknown][] = [];
+  for (const [name, entry] of Object.entries(map)) {
+    if (isNestedMap && name === 'servers') continue;
+    entries.push([name, entry]);
+  }
+  if (isNestedMap) {
+    for (const [name, entry] of Object.entries(nested as Record<string, unknown>)) {
+      entries.push([name, entry]);
+    }
+  }
+  return entries;
+}
+
+/**
+ * The server an entry declares, or why the server will not read it.
+ */
+function serverEntryOf(entry: unknown): {
+  entry?: Record<string, unknown>;
+  reason?: string;
+} {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    return { reason: 'that is not an object' };
+  }
+  const { environment: _environment, ...rest } = entry as Record<string, unknown>;
+  if (typeof rest.type !== 'string' || rest.type === '') {
+    return { reason: 'without a type' };
+  }
+  return { entry: rest };
+}
+
+/**
+ * The MCP section of a case's own config.
+ *
+ * The global servers the machine already runs are written next to the case's
+ * own board server, switched off: a session sends the tool schemas of every
+ * MCP server it can reach, and the global ones are large - the GitHub one
+ * alone has sixty tools, and it is most of the prompt of a case.
+ *
+ * The shape follows the runtime. OpenCode 1 reads a flat map and switches a
+ * server off with "enabled": false; OpenCode 2 nests the map under
+ * "servers" and switches a server off with "disabled": true. An entry
+ * without a type is never written: the server ignores such an entry, and a
+ * case that runs with an entry the server ignores is a case whose green
+ * says nothing about the agent.
+ */
+export function caseMcp(runtime: OpenCodeRuntime): {
+  mcp: Record<string, unknown>;
+  notes: string[];
+} {
   const servers: Record<string, Record<string, unknown>> = {};
-  for (const [name, entry] of Object.entries(mcp as Record<string, unknown>)) {
-    if (entry === null || typeof entry !== 'object') continue;
-    const { environment: _environment, ...rest } = entry as Record<string, unknown>;
-    servers[name] = rest;
+  const notes: string[] = [];
+  for (const path of globalConfigPaths()) {
+    const read = globalMcpServers(path);
+    notes.push(...read.notes);
+    for (const [name, entry] of Object.entries(read.servers)) {
+      // The case brings its own board server, and it is never switched off.
+      if (name === 'openagentsy') continue;
+      servers[name] = entry;
+    }
   }
-  return servers;
+
+  const switchedOff: Record<string, unknown> = {};
+  for (const [name, entry] of Object.entries(servers)) {
+    switchedOff[name] =
+      runtime.major >= 2 ? { ...entry, disabled: true } : { ...entry, enabled: false };
+  }
+  return {
+    mcp: runtime.major >= 2 ? { servers: switchedOff } : switchedOff,
+    notes,
+  };
 }
 
 function globalConfigPaths(): string[] {

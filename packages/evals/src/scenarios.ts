@@ -674,6 +674,29 @@ function saysNoCompletion(text: string): boolean {
 }
 
 /**
+ * The files a record names as the work it did.
+ */
+const namesFile = (value: string): boolean => /\b[\w.-]+\.(?:txt|md|ts|js|json)\b/i.test(value);
+
+/**
+ * Whether a builder's record states that the work is done.
+ *
+ * A builder states the artifact, not the word done: "Created hello.txt with
+ * a single line of text" is a completion and never says the word (measured
+ * 2026-10-27). A record counts as a completion when it claims one or names
+ * a file it wrote.
+ *
+ * When the Lead's claim names a file, only that file confirms it: a record
+ * that names another file is not evidence for the file the Lead claimed.
+ */
+function statesCompletion(record: { action: string; state: string }, named?: string): boolean {
+  const text = `${record.action} ${record.state}`;
+  if (claimsCompletion(text)) return true;
+  if (named === undefined) return namesFile(text);
+  return new RegExp(`\\b${named.replace(/\./g, '\\.')}(?![\\w.-])`, 'i').test(text);
+}
+
+/**
  * Whether a record came from the Lead.
  *
  * The Lead has two names and every other role's two names differ only by
@@ -745,10 +768,13 @@ export const FAULT_BUILDER_KILLED: Scenario = {
             /\b(?:builder|agent)\b/i.test(`${record.action} ${record.state}`) &&
             saysNoCompletion(`${record.action} ${record.state}`),
         );
+        // The builder states the artifact, not the word done, so a record
+        // that names the file it wrote is a completion too. A check that
+        // looks for a completion word alone reads that record as silence
+        // and passes vacuously, in a case where the builder was alive and
+        // finished.
         const completionAt = records.findIndex(
-          (record) =>
-            isFrom(record, 'builder') &&
-            /done|complete|finished/i.test(`${record.action} ${record.state}`),
+          (record) => isFrom(record, 'builder') && statesCompletion(record),
         );
         if (completionAt !== -1 && (reportedAt === -1 || completionAt < reportedAt)) {
           return 'the builder posted a completion record before the Lead reported it missing, so the fault did not land and the Lead could not have known';
@@ -795,16 +821,7 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         const builderStatuses = records.filter(
           (record) => isFrom(record, 'oa-builder') && record.kind === 'status',
         );
-        const text = (record: { action: string; state: string }) =>
-          `${record.action} ${record.state}`;
-        const namesFile = (value: string) => /\b[\w.-]+\.(?:txt|md|ts|js|json)\b/i.test(value);
-        const confirmed =
-          builderStatuses.some((record) => claimsCompletion(text(record))) ||
-          (named !== undefined
-            ? builderStatuses.some((record) =>
-                new RegExp(`\\b${named.replace(/\./g, '\\.')}(?![\\w.-])`, 'i').test(text(record)),
-              )
-            : builderStatuses.some((record) => namesFile(text(record))));
+        const confirmed = builderStatuses.some((record) => statesCompletion(record, named));
         if (claimed && !confirmed) return 'the Lead reported a completion nobody confirmed';
         return undefined;
       },

@@ -10,9 +10,12 @@ import {
   hostErrorsIn,
   hostFaults,
   killSessionWhenItAppears,
+  permissionPatterns,
   readHostErrors,
+  readRuntime,
   removeHarnessFiles,
   replyPartsOf,
+  runtimeBinary,
   selectKillTarget,
   serveArgs,
   sweepStaleHarnessFiles,
@@ -64,6 +67,123 @@ describe('selectKillTarget', () => {
   it('takes an untitled session that is new since the baseline', () => {
     const sessions = [{ id: 'fresh', title: '' }];
     expect(selectKillTarget(sessions, new Set(['lead']), isBuilder)).toBe('fresh');
+  });
+});
+
+describe('the kill of a session', () => {
+  it('deletes the session it killed, so the child cannot go on working', async () => {
+    // The measured failure (2026-10-27): an abort cancelled the turn, and
+    // the builder went on working for 59 seconds and posted its completion
+    // record. The session has to go, not only the turn.
+    const aborted: string[] = [];
+    const deleted: string[] = [];
+    const client = {
+      session: {
+        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
+        abort: async ({ path }: { path: { id: string } }) => {
+          aborted.push(path.id);
+          return {};
+        },
+        delete: async ({ path }: { path: { id: string } }) => {
+          deleted.push(path.id);
+          return { data: true };
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+      suppressMs: 1,
+    });
+    const killedSession = await watch.killed;
+    watch.stop();
+
+    expect(killedSession).toBe('ses_killed');
+    expect(deleted).toEqual(['ses_killed']);
+    // The abort comes first: it is what stops the generation in flight.
+    expect(aborted).toContain('ses_killed');
+  });
+
+  it('keeps killing the session when the server refuses the delete', async () => {
+    const aborted: string[] = [];
+    const client = {
+      session: {
+        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
+        abort: async ({ path }: { path: { id: string } }) => {
+          aborted.push(path.id);
+          return {};
+        },
+        delete: async () => ({ error: { message: 'the session is busy' } }),
+      },
+    } as unknown as OpencodeClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+      suppressMs: 30,
+    });
+    const killedSession = await watch.killed;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    watch.stop();
+
+    expect(killedSession).toBe('ses_killed');
+    // The delete was refused, so the abort is the kill there is, and the
+    // same session is cut again and again.
+    expect(aborted.length).toBeGreaterThanOrEqual(3);
+    expect(aborted.every((id) => id === 'ses_killed')).toBe(true);
+  });
+});
+
+describe('permissionPatterns', () => {
+  it('reads the pattern the server sends, as a list', () => {
+    // The server sends the pattern under the key "pattern", as a string or
+    // as a list. A reader that looked for "patterns" saw an empty list for
+    // every request, and a policy that refuses a path by its patterns could
+    // then never refuse one.
+    expect(permissionPatterns({ pattern: 'roles.yaml' })).toEqual(['roles.yaml']);
+    expect(permissionPatterns({ pattern: ['roles.yaml', 'AGENTS.md'] })).toEqual([
+      'roles.yaml',
+      'AGENTS.md',
+    ]);
+    expect(permissionPatterns({})).toEqual([]);
+  });
+});
+
+describe('the runtime the harness starts', () => {
+  it('takes the binary from the environment', () => {
+    const before = process.env.OPENAGENTSY_EVAL_BIN;
+    process.env.OPENAGENTSY_EVAL_BIN = '/tmp/oa-v1/node_modules/.bin/opencode';
+    try {
+      expect(runtimeBinary()).toBe('/tmp/oa-v1/node_modules/.bin/opencode');
+    } finally {
+      if (before === undefined) delete process.env.OPENAGENTSY_EVAL_BIN;
+      else process.env.OPENAGENTSY_EVAL_BIN = before;
+    }
+  });
+
+  it('falls back to the one on the path', () => {
+    const before = process.env.OPENAGENTSY_EVAL_BIN;
+    delete process.env.OPENAGENTSY_EVAL_BIN;
+    try {
+      expect(runtimeBinary()).toBe('opencode');
+    } finally {
+      if (before !== undefined) process.env.OPENAGENTSY_EVAL_BIN = before;
+    }
+  });
+
+  it('reads the version of the binary it is given', async () => {
+    // A run that cannot name its runtime is a run whose result cannot be
+    // read, so the version is read from the binary itself.
+    const runtime = await readRuntime(process.execPath);
+
+    expect(runtime.binary).toBe(process.execPath);
+    expect(runtime.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(runtime.major).toBeGreaterThan(0);
+  });
+
+  it('stops when the runtime cannot be started', async () => {
+    await expect(readRuntime('/no/such/opencode')).rejects.toThrow(/could not be started/);
   });
 });
 
