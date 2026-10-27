@@ -20,7 +20,7 @@ afterEach(async () => {
 /** A session that records what it was asked to do. */
 function fakeSession(
   messages: { parts?: { type: string; text?: string }[] }[] = [],
-  options: { exists?: boolean; existsError?: Error } = {},
+  options: { exists?: boolean; existsError?: Error; noLookup?: boolean } = {},
 ) {
   const prompts: { sessionID: string; agent: string; text: string }[] = [];
   const created: { parentID?: string; title: string }[] = [];
@@ -31,15 +31,18 @@ function fakeSession(
       return 'ses_archivist';
     },
     messages: async () => messages,
-    exists: async (sessionID: string) => {
-      existsCalls.push(sessionID);
-      if (options.existsError !== undefined) throw options.existsError;
-      return options.exists ?? true;
-    },
     prompt: async ({ sessionID, agent, text }) => {
       prompts.push({ sessionID, agent, text });
     },
   };
+  // A runtime with no lookup to ask says so by leaving it out.
+  if (options.noLookup !== true) {
+    session.exists = async (sessionID: string) => {
+      existsCalls.push(sessionID);
+      if (options.existsError !== undefined) throw options.existsError;
+      return options.exists ?? true;
+    };
+  }
   return { session, prompts, created, existsCalls };
 }
 
@@ -209,6 +212,27 @@ describe('harvest', () => {
     expect(failure?.resource).toBe('ses_scout');
   });
 
+  it('prompts the archivist when the runtime has no lookup to ask', async () => {
+    // The V2 plugin context cannot look a session up, so the adapter leaves
+    // the lookup out. The harvest says so on the record and goes on: the
+    // archivist stands on its own, so there is no cascade to survive.
+    const { session, prompts, existsCalls } = fakeSession(
+      [{ parts: [{ type: 'text', text: 'a candidate' }] }],
+      { noLookup: true },
+    );
+    const result = await harvest({
+      session,
+      root,
+      sessionID: 'ses_scout',
+      role: 'scout',
+      agent: 'oa-scout',
+    });
+    expect(result.harvested).toBe(true);
+    expect(existsCalls).toEqual([]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.sessionID).toBe('ses_archivist');
+  });
+
   it('records a failure instead of prompting when the runtime cannot answer', async () => {
     // Guessing is the bug: an empty message list cannot tell a fresh session
     // from a deleted one, so a runtime that cannot answer states that it
@@ -252,12 +276,25 @@ function fakeClient(get: SessionClient['get'], overrides: Partial<SessionClient>
 }
 
 describe('the V1 session adapter', () => {
+  /**
+   * The lookup of a session.
+   *
+   * The lookup is optional on the harvest, because a runtime may have none.
+   * The V1 adapter always has one, and this says so rather than pretending
+   * the harvest has one.
+   */
+  function lookupOf(session: HarvestSession): (sessionID: string) => Promise<boolean> {
+    const exists = session.exists;
+    if (exists === undefined) throw new Error('the V1 adapter has no lookup');
+    return exists;
+  }
+
   it('answers that a session exists when the server returns it', async () => {
     const session = sessionAdapter(
       fakeClient(async () => ({ data: { id: 'ses_1' } })),
       root,
     );
-    await expect(session.exists('ses_1')).resolves.toBe(true);
+    await expect(lookupOf(session)('ses_1')).resolves.toBe(true);
   });
 
   it('answers that a session is gone when the server says not found', async () => {
@@ -265,7 +302,7 @@ describe('the V1 session adapter', () => {
       fakeClient(async () => ({ error: { name: 'NotFoundError' } })),
       root,
     );
-    await expect(session.exists('ses_1')).resolves.toBe(false);
+    await expect(lookupOf(session)('ses_1')).resolves.toBe(false);
   });
 
   it('answers that a session is gone when a wrapped error carries not found under cause', async () => {
@@ -280,7 +317,7 @@ describe('the V1 session adapter', () => {
       }),
       root,
     );
-    await expect(session.exists('ses_1')).resolves.toBe(false);
+    await expect(lookupOf(session)('ses_1')).resolves.toBe(false);
   });
 
   it('does not report an unrelated error as present', async () => {
@@ -288,7 +325,7 @@ describe('the V1 session adapter', () => {
       fakeClient(async () => ({ error: { name: 'BadRequest' } })),
       root,
     );
-    await expect(session.exists('ses_1')).rejects.toThrow('BadRequest');
+    await expect(lookupOf(session)('ses_1')).rejects.toThrow('BadRequest');
   });
 });
 

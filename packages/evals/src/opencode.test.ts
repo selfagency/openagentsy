@@ -106,15 +106,98 @@ describe('the kill of a session', () => {
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
       intervalMs: 1,
-      suppressMs: 1,
+      windowMs: 1,
     });
     const killedSession = await watch.killed;
     watch.stop();
+    // The kill runs beside the watch, so the delete it ends with comes a
+    // moment later.
+    await new Promise((resolve) => setTimeout(resolve, 30));
 
     expect(killedSession).toBe('ses_killed');
     expect(deleted).toEqual(['ses_killed']);
     // The abort comes first: it is what stops the generation in flight.
     expect(aborted).toContain('ses_killed');
+  });
+
+  it('cuts the session before it deletes it, because a cut of a deleted session stops nothing', async () => {
+    // The OpenCode 2 server finds a session by its row, so an interrupt of a
+    // deleted session answers 404 and stops nothing (measured against a live
+    // OpenCode 2 server, 2026-10-27). The row has to be there for the cut
+    // to land, and it has to go in the end.
+    const order: string[] = [];
+    const client = {
+      listSessions: async () => [{ id: 'ses_killed', title: 'eval oa-builder' }],
+      interrupt: async () => {
+        order.push('cut');
+      },
+      deleteSession: async () => {
+        order.push('delete');
+      },
+    } as unknown as HarnessClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+      windowMs: 5,
+    });
+    await watch.killed;
+    // The kill runs beside the watch and cuts the session for its window, so
+    // the watch is only stopped once the kill has ended.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    watch.stop();
+
+    expect(order[0]).toBe('cut');
+    expect(order.at(-1)).toBe('delete');
+  });
+
+  it('stops a builder that is working, so it cannot post a completion record', async () => {
+    // The acceptance of the case: after the kill, the builder must not post a
+    // completion record. The OpenCode 2 server answers an interrupt of an
+    // idle session with interrupted=false and does nothing, and the watch
+    // finds the session before its turn is running, so the first cut lands
+    // on an idle session. A kill that cuts once therefore leaves the builder
+    // working, and the builder posts its record.
+    let cuts = 0;
+    const posts: string[] = [];
+    let working = true;
+    const client = {
+      listSessions: async () => [{ id: 'ses_killed', title: 'eval oa-builder' }],
+      interrupt: async () => {
+        cuts += 1;
+        // The first cut lands on an idle session and does nothing.
+        if (cuts > 1) working = false;
+      },
+      deleteSession: async () => {
+        // The delete is refused, so the session stays and can go on working.
+        throw new Error('the session is busy');
+      },
+    } as unknown as HarnessClient;
+
+    const builder = (async () => {
+      while (working) {
+        posts.push('a completion record');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    })();
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+      windowMs: 50,
+    });
+    await watch.killed;
+    // The builder stops when the second cut lands, which is inside the
+    // window the kill cuts for.
+    await builder;
+    watch.stop();
+    const posted = posts.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    // Nothing was posted after the kill, and the session was cut more than
+    // once, because the first cut can land on an idle session.
+    expect(posts.length).toBe(posted);
+    expect(cuts).toBeGreaterThan(1);
   });
 
   it('keeps killing the session when the server refuses the delete', async () => {
@@ -132,7 +215,7 @@ describe('the kill of a session', () => {
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
       intervalMs: 1,
-      suppressMs: 30,
+      windowMs: 30,
     });
     const killedSession = await watch.killed;
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -494,7 +577,7 @@ describe('host errors the case injected', () => {
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
       intervalMs: 1,
-      suppressMs: 1,
+      windowMs: 1,
     });
     const killedSession = await watch.killed;
     watch.stop();
@@ -534,7 +617,7 @@ describe('host errors the case injected', () => {
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       intervalMs: 1,
-      suppressMs: 1,
+      windowMs: 1,
     });
     const killedSession = await watch.killed;
     watch.stop();
@@ -564,7 +647,7 @@ describe('host errors the case injected', () => {
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 2,
       intervalMs: 1,
-      suppressMs: 1,
+      windowMs: 1,
     });
     const killedSession = await watch.killed;
     watch.stop();
@@ -592,7 +675,7 @@ describe('host errors the case injected', () => {
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
       intervalMs: 1,
-      suppressMs: 30,
+      windowMs: 30,
     });
     const killedSession = await watch.killed;
     await new Promise((resolve) => setTimeout(resolve, 40));

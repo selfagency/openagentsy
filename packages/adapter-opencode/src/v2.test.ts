@@ -12,6 +12,23 @@ protectedPaths: []
 defaults:
   permissions: {}
 roles:
+  lead:
+    description: Runs the board
+    mode: primary
+    writes: false
+    scope: the board
+    guidance: report honestly
+    agentName: agentsy
+    permissions: {}
+    skills: []
+    modelProfile:
+      primarySignal: coding
+      hardRequirements: [tool_calls]
+      costStance: balanced
+    effort:
+      startVariant: default
+      ceilingVariant: high
+      climbTriggers: []
   builder:
     description: Implements a bean
     mode: subagent
@@ -24,6 +41,10 @@ roles:
       primarySignal: coding
       hardRequirements: [tool_calls]
       costStance: balanced
+    effort:
+      startVariant: default
+      ceilingVariant: high
+      climbTriggers: []
 `;
 
 beforeEach(async () => {
@@ -43,6 +64,7 @@ function fakeContext(
 ) {
   const created: { title?: string; parentID?: string }[] = [];
   const prompts: { sessionID: string; text: string }[] = [];
+  const agents: { sessionID: string; agent: string }[] = [];
   const contextHooks: ((event: V2ContextEvent) => Promise<void> | void)[] = [];
   // The subscription ends when the events run out, and the idle handler has
   // finished by then: the loop awaits the body before it asks for the next
@@ -60,7 +82,9 @@ function fakeContext(
         return { dispose: async () => {} };
       },
       switchModel: async () => {},
-      switchAgent: async () => {},
+      switchAgent: async (input) => {
+        agents.push({ sessionID: input.sessionID, agent: input.agent });
+      },
       create: async (input) => {
         created.push({
           ...(input?.title !== undefined ? { title: input.title } : {}),
@@ -92,17 +116,15 @@ function fakeContext(
     },
   };
 
-  return { ctx, created, prompts, contextHooks, done };
+  return { ctx, created, prompts, agents, contextHooks, done };
 }
 
 describe('the OpenCode 2 path', () => {
-  it('does not harvest a session that goes idle, because the context has no lookup', async () => {
-    // The V2 harvest is off: V2Context.session offers no way to ask whether
-    // the archivist child still exists, and a message list cannot tell a
-    // fresh session from a deleted one (v2.ts states the reason). Prompting
-    // anyway would claim a check that did not happen, so nothing is created
-    // and nothing is prompted.
-    const { ctx, created, prompts, contextHooks, done } = fakeContext([
+  it('launches the archivist when a session goes idle', async () => {
+    // The archivist is the one that turns what a session learned into
+    // candidate memories, and the adapter is the only part that knows a
+    // session ended. The V2 path does the same thing the V1 path does.
+    const { ctx, created, prompts, agents, contextHooks, done } = fakeContext([
       { type: 'session.idle', properties: { sessionID: 'ses_1' } },
     ]);
     await setupV2(ctx);
@@ -114,10 +136,66 @@ describe('the OpenCode 2 path', () => {
     }
     await done;
 
-    // The reason: the context the plugin is given has no session lookup.
-    expect('get' in ctx.session).toBe(false);
+    // The archivist stands on its own: a child of the harvested session dies
+    // with it, and the delete is a delete the server does without asking.
+    expect(created).toEqual([{ title: 'harvest builder' }]);
+    // The agent of a turn is the agent of its session, so the archivist is
+    // named on the session before the packet is handed over.
+    expect(agents).toEqual([{ sessionID: 'ses_archivist', agent: 'oa-archivist' }]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.sessionID).toBe('ses_archivist');
+    // The packet carries what the session said and where a candidate goes.
+    expect(prompts[0]?.text).toContain('what the session said');
+    expect(prompts[0]?.text).toContain('the candidate in the action');
+  });
+
+  it('does not launch the archivist when the harvest is off', async () => {
+    // The harvest is a real agent run per finished session, and a project
+    // that does not want it says so in a file.
+    await writeFile(join(root, '.openagentsy', 'harvest'), 'off\n', 'utf8');
+
+    const { ctx, created, prompts, contextHooks, done } = fakeContext([
+      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+    await done;
+
     expect(created).toHaveLength(0);
     expect(prompts).toHaveLength(0);
+  });
+
+  it('does not harvest the Lead, which keeps its own history', async () => {
+    const { ctx, created, prompts, contextHooks, done } = fakeContext([
+      { type: 'session.idle', properties: { sessionID: 'ses_lead' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_lead', agent: 'agentsy' });
+    }
+    await done;
+
+    expect(created).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
+  });
+
+  it('harvests without the lookup, because the context cannot answer it', async () => {
+    // The reason the check is left out: the context the plugin is given has
+    // no session lookup, and a message list cannot tell a fresh session from
+    // a deleted one. The adapter does not claim a check it did not make.
+    const { ctx, created, contextHooks, done } = fakeContext([
+      { type: 'session.idle', properties: { sessionID: 'ses_1' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+    await done;
+
+    expect('get' in ctx.session).toBe(false);
+    expect(created).toHaveLength(1);
   });
 
   it('leaves a session it does not know alone', async () => {

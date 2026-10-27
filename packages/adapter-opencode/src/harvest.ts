@@ -75,15 +75,23 @@ export type HarvestSession = {
   /**
    * Whether a session still exists, asked of the server.
    *
-   * It is required, not optional: a runtime that cannot answer must say so
-   * rather than leave the harvest to guess. A message list cannot answer
-   * this: a session that exists and has not been spoken in yet and a session
-   * that was deleted both answer with no messages, so an empty list proves
-   * neither. The archivist is created as a child of the session that is
-   * ending; when that session is deleted the child goes with it, and the
-   * server's own lookup is the only answer that can tell the two apart.
+   * It is optional. A runtime that cannot look a session up leaves it out,
+   * and the harvest then prompts the archivist without the check. The check
+   * exists because the archivist used to be created as a child of the
+   * session that is ending: when that session was deleted the child went
+   * with it, and the message insert failed the foreign key instead of
+   * reaching the archivist. The archivist now stands on its own, so the
+   * check is a guard and not a requirement, and a runtime with no lookup to
+   * ask does not have to fake one.
+   *
+   * A message list cannot answer this: a session that exists and has not
+   * been spoken in yet and a session that was deleted both answer with no
+   * messages, so an empty list proves neither. A runtime that has a lookup
+   * must use it, and a runtime that cannot answer must say so rather than
+   * leave the harvest to guess: a lookup that throws is a failure on the
+   * record, not a prompt.
    */
-  exists: (sessionID: string) => Promise<boolean>;
+  exists?: (sessionID: string) => Promise<boolean>;
   /**
    * Delete the harvest children the janitor owns.
    *
@@ -162,20 +170,13 @@ export async function harvest(
   //
   // A runtime that cannot answer is never guessed at: prompting a session
   // that may be gone is the failure this check exists to prevent. A lookup
-  // that throws is a failure on the record, not a prompt.
-  let present: boolean;
-  try {
-    present = await session.exists(archivistSession);
-  } catch (error) {
-    const failure =
-      error instanceof Error
-        ? error
-        : new Error('the runtime cannot confirm that a session still exists');
-    await recordHarvestFailure(root, { agent, sessionID, error: failure });
-    return { harvested: false, reason: failure.message };
-  }
-  if (!present) {
-    const error = new Error(`the archivist session ${archivistSession} no longer exists`);
+  // that throws is a failure on the record, not a prompt. A runtime with no
+  // lookup at all is a runtime that says so, and the harvest goes on: the
+  // archivist stands on its own and the cascade it guarded against does not
+  // happen.
+  const promptable = await mayPrompt(session, archivistSession);
+  if (!promptable.ok) {
+    const error = new Error(promptable.reason);
     await recordHarvestFailure(root, { agent, sessionID, error });
     return { harvested: false, reason: error.message };
   }
@@ -200,6 +201,36 @@ export async function harvest(
   if (pruning !== undefined) void pruning.catch(() => {});
 
   return { harvested: true, reason: `the archivist was given the packet of ${sessionID}` };
+}
+
+/**
+ * The answer of the lookup: the harvest may go on, or it may not.
+ */
+type PromptCheck = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Whether the harvest may prompt the archivist.
+ *
+ * A runtime with no lookup to ask says so by leaving the lookup out, and
+ * the harvest goes on: the archivist stands on its own, so the cascade the
+ * lookup guarded against does not happen. A lookup that says the session is
+ * gone is the same end state: the prompt would fail instead of reaching the
+ * archivist. A lookup that throws is a failure on the record, not a prompt.
+ */
+async function mayPrompt(session: HarvestSession, sessionID: string): Promise<PromptCheck> {
+  if (session.exists === undefined) return { ok: true };
+  try {
+    if (await session.exists(sessionID)) return { ok: true };
+    return { ok: false, reason: `the archivist session ${sessionID} no longer exists` };
+  } catch (error) {
+    return {
+      ok: false,
+      reason:
+        error instanceof Error
+          ? error.message
+          : 'the runtime cannot confirm that a session still exists',
+    };
+  }
 }
 
 /**
