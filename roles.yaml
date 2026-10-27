@@ -17,7 +17,9 @@
 #                 `openagentsy_oa_task_create` to the host. The bare names
 #                 are kept beside them: the hook resolves a tool name to
 #                 its base name, and the map is read by people as well.
-#   skills        skill allowlist. [] means every skill is allowed.
+#   skills        skill allowlist. [] means every skill is allowed. A mapping
+#                 carries the routing too: allow is the list of skill names,
+#                 routing is the text that says which skill a change loads.
 #   modelProfile  what the model selector scores candidates against.
 #   effort        reasoning-effort ladder, see PLAN.md V.5.
 
@@ -245,7 +247,13 @@ roles:
       openagentsy_oa_lesson_decide: deny
       openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
-    skills: []
+    skills:
+      allow: []
+      routing: |
+        For UI, copy or comment work, load oa-ui / oa-copy / oa-comments. Mechanical checks run automatically.
+        oa-ui: .css, .html, .htm, .tsx, .jsx, .vue, .svelte, DESIGN.md.
+        oa-copy: user-facing copy or agent prose.
+        oa-comments: comment edits.
     modelProfile:
       primarySignal: agentic
       hardRequirements: [tool_calls, reasoning_variants, large_context]
@@ -527,7 +535,13 @@ roles:
       openagentsy_oa_lesson_decide: deny
       openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
-    skills: [openagentsy-handoff]
+    skills:
+      allow: [openagentsy-handoff, oa-ui, oa-copy, oa-comments]
+      routing: |
+        For UI, copy or comment work, load oa-ui / oa-copy / oa-comments. Mechanical checks run automatically.
+        oa-ui: .css, .html, .htm, .tsx, .jsx, .vue, .svelte, DESIGN.md.
+        oa-copy: user-facing copy or agent prose.
+        oa-comments: comment edits.
     modelProfile:
       primarySignal: coding
       hardRequirements: [tool_calls]
