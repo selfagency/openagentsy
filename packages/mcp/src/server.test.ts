@@ -158,6 +158,94 @@ describe('the board server over stdio', () => {
     expect(inbox.unread).toBe(1);
   });
 
+  it('refuses a delegation that has no return condition', async () => {
+    // A delegated item names the agent that does the work and what has to
+    // come back (plan 8.7). The board refuses the half that is missing.
+    const result = await client.callTool({
+      name: 'board_record',
+      arguments: {
+        op: 'post',
+        bean: 'proj-42',
+        from: 'lead',
+        kind: 'contract',
+        action: 'Dispatched the search handler',
+        state: 'the builder owns it',
+        confidence: 'verified',
+        to: 'oa-builder',
+        contract: {
+          id: 'search',
+          owner: 'oa-builder',
+          status: 'running',
+          bean: 'proj-42',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
+    expect(text).toContain('return condition');
+  });
+
+  it('refuses a delegation that has no owner', async () => {
+    const result = await client.callTool({
+      name: 'board_record',
+      arguments: {
+        op: 'post',
+        bean: 'proj-42',
+        from: 'lead',
+        kind: 'contract',
+        action: 'Dispatched the search handler',
+        state: 'the builder owns it',
+        confidence: 'verified',
+        to: 'oa-builder',
+        contract: {
+          id: 'search',
+          returnCondition: 'a completion record naming the file',
+          status: 'running',
+          bean: 'proj-42',
+        },
+      },
+    });
+    expect(result.isError).toBe(true);
+    const text = (result.content as { type: string; text: string }[])[0]?.text ?? '';
+    expect(text).toContain('owner');
+  });
+
+  it('posts a delegation that has both halves, and an interface that has neither', async () => {
+    const dispatch = await call('board_record', {
+      op: 'post',
+      bean: 'proj-42',
+      from: 'lead',
+      kind: 'contract',
+      action: 'Dispatched the search handler',
+      state: 'the builder owns it',
+      confidence: 'verified',
+      to: 'oa-builder',
+      contract: {
+        id: 'search',
+        owner: 'oa-builder',
+        returnCondition: 'a completion record naming the file',
+        status: 'running',
+        bean: 'proj-42',
+      },
+    });
+    expect(dispatch.id).toBeTypeOf('number');
+
+    // An interface is not a delegation: it names no owner, and the board
+    // does not ask one of it.
+    const contract = await call('board_record', {
+      op: 'post',
+      bean: 'proj-42',
+      from: 'lead',
+      kind: 'contract',
+      action: 'The search interface is fixed',
+      state: 'GET /search -> [{id,title,url}]',
+      confidence: 'verified',
+      to: 'oa-builder',
+      contract: { 'GET /search': '-> [{id,title,url}]' },
+    });
+    expect(contract.id).toBeTypeOf('number');
+  });
+
   it('marks the record read for the agent that fetched it', async () => {
     const inbox = await call('board_record', { op: 'inbox', agent: 'lead' });
     expect(inbox.records).toHaveLength(0);

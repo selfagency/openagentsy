@@ -12,6 +12,7 @@ import {
   checkBudget,
   checkLease,
   createRecord,
+  type Dispatch,
   dispatchProfileCriteria,
   grantLeases,
   type Lease,
@@ -28,6 +29,7 @@ import {
   revokeLease,
   rotateAudit,
   setBudget,
+  validateDispatch,
 } from '@openagentsy/core';
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
@@ -279,6 +281,25 @@ server.registerTool(
 );
 
 /**
+ * Whether a contract payload is a delegation.
+ *
+ * A delegation names the agent that does the work and what has to come back.
+ * The payload is one when it carries EITHER half - a dispatch that is missing
+ * its owner still has a return condition, and one that is missing its return
+ * condition still has an owner, and the board has to be able to refuse both.
+ * An interface - the shape another agent will call - carries neither, so the
+ * board does not ask an interface for an owner.
+ */
+function isDelegation(contract: unknown): contract is Dispatch {
+  return (
+    typeof contract === 'object' &&
+    contract !== null &&
+    !Array.isArray(contract) &&
+    ('owner' in contract || 'returnCondition' in contract)
+  );
+}
+
+/**
  * Post a record.
  *
  * The record is the hand-off between agents, so it carries what was done,
@@ -312,6 +333,14 @@ async function postRecord(input: {
       `The board does not know an agent called ${from}.`,
       'Use the role key, the agent id, or the oa- form of the key.',
     );
+  }
+
+  // A delegated item has an owner and a return condition (plan 8.7). A
+  // contract record that names an owner IS a delegation, so the board refuses
+  // it when either half is missing; a contract that names neither is an
+  // interface, and an interface needs no owner.
+  if (input.kind === 'contract' && isDelegation(input.contract)) {
+    validateDispatch(input.contract as Dispatch);
   }
 
   const record = createRecord(db, {

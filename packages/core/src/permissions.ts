@@ -43,6 +43,17 @@ const V2_DROPPED_ACTIONS = new Set(['list', 'lsp']);
  * the named agent and refused an unlisted one. An OpenCode permission pattern
  * is a wildcard where a single asterisk matches zero or more of any
  * character, so a double asterisk matches every agent id as well.
+ *
+ * Upstream fixed the plugin in 0.49.24 (cortexkit/magic-context#777): it now
+ * moves the wildcard only when it stands alone, so a named allow survives.
+ * The workaround stays on purpose. A single asterisk is the canonical shape
+ * and this is not: but the double asterisk behaves identically under both the
+ * fixed and the unfixed plugin, the OpenCode server caches the agent
+ * definitions it reads, and an agent that loses its Task tool cannot dispatch
+ * anything at all - so the shape that is safe on every version wins until the
+ * plugin version in use is known to be 0.49.24 or newer. Changing this back
+ * is a one-line edit plus `openagentsy build`, and it wants a server restart
+ * and a dispatch that works, in that order.
  */
 const V1_TASK_CATCH_ALL = '**';
 

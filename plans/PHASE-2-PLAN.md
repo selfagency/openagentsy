@@ -1364,8 +1364,15 @@ export function changedFiles(tool: string, args: ToolArgs): FileChange[] {
 
 ```ts
 // packages/hooks/src/rules.ts
-// --no-verify anywhere in a git commit/merge/rebase segment; bare `-n` only when it directly
-// follows `git commit` (revision 1's /\s-n\b/ false-positived on `git commit -m "fix -n handling"`).
+// Amendment (2026-10-27, after the 2c-1 review): revision 1's matcher was too
+// narrow. `-n` is now caught wherever it appears among the git subcommand's own
+// arguments (a flag cluster, any position, stopping at `--`), because
+// `git commit -m "wip" -n` skips the hooks exactly as `git commit -n` does;
+// git's long-option abbreviation is caught too (`--no-verif`), while the
+// unambiguous spelling of a message flag is a message, not a flag
+// (`git commit -m "fix -n handling"` and `git commit -m "docs: note
+// --no-verify"` must not fire). A command that hides its payload in a
+// substitution is caught by scanning the substitution's own text.
 const GIT_SKIP_HOOKS =
   /\bgit\b[^|;&]*\b(commit|merge|rebase)\b[^|;&]*\s--no-verify\b|\bgit\s+commit\s+-n\b|\bHUSKY=0\b|\bcore\.hooksPath\b/;
 const OTHER_PM = /(^|[\s;&|(])(pnpm|yarn|npx|npm\s+(i|install|ci|add|exec))\b/;
@@ -1416,6 +1423,15 @@ export const defaultRules = ({ workspace }: { workspace: string }): Rule[] => [
       : { continue: true } },
 
   { id: 'destructive-needs-approval', event: 'PreToolCall', block: true,
+    // Amendment (2026-10-27, after the 2c-1 review): the pattern below is the
+    // plan's first sketch. The landed matcher tokenises the command and asks
+    // for a REMOVAL THAT IS BOTH RECURSIVE AND FORCED, in any order and
+    // wherever the flags sit (`rm -fr /`, `rm -r -f /`, `rm build -rf`),
+    // across a segment boundary (`ls; rm -rf /`), inside a subshell
+    // (`(rm -rf /)`, `bash -c "rm -rf /"`) and inside a substitution
+    // (`echo $(rm -rf /)`), while an ordinary `rm build` or `rm -r build` is
+    // not a destructive command. The rule asks a human, and the human's
+    // answer is one callID that passes once.
     handler: approvalGate(/(^|\s)(rm\s+-rf|git\s+push\s+--force|git\s+reset\s+--hard|drop\s+table)\b/i) },
 ];
 ```
