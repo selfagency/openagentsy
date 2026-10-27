@@ -1,0 +1,6 @@
+/* Fails: a literal colour and a font family outside the token block. */
+.button {
+  background: #ff0055;
+  color: white;
+  font-family: "Comic Sans MS", sans-serif;
+}

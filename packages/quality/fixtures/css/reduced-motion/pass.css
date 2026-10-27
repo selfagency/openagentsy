@@ -1,0 +1,10 @@
+/* Passes: the animation has a reduced-motion fallback. */
+.button {
+  transition: opacity 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+}

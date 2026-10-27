@@ -1,0 +1,4 @@
+/* Fails: the button has no focus-visible style. */
+.button {
+  background: #333333;
+}

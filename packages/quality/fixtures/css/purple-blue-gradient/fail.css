@@ -1,0 +1,4 @@
+/* Fails: the stock purple-to-blue gradient. */
+.hero {
+  background: linear-gradient(135deg, #a855f7 0%, #3b82f6 100%);
+}

@@ -13,6 +13,7 @@
     { "path": "packages/evals" },
     { "path": "packages/tasks" },
     { "path": "packages/offload" },
-    { "path": "packages/hooks" }
+    { "path": "packages/hooks" },
+    { "path": "packages/quality" }
   ]
 }

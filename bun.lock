@@ -191,6 +191,17 @@
         "typescript": "^5.9.2",
       },
     },
+    "packages/quality": {
+      "name": "@openagentsy/quality",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openagentsy/core": "workspace:^",
+      },
+      "devDependencies": {
+        "@types/node": "^24.3.0",
+        "typescript": "^5.9.2",
+      },
+    },
     "packages/tasks": {
       "name": "@openagentsy/tasks",
       "version": "0.1.0",
@@ -409,6 +420,8 @@
     "@openagentsy/models": ["@openagentsy/models@workspace:packages/models"],
 
     "@openagentsy/offload": ["@openagentsy/offload@workspace:packages/offload"],
+
+    "@openagentsy/quality": ["@openagentsy/quality@workspace:packages/quality"],
 
     "@openagentsy/tasks": ["@openagentsy/tasks@workspace:packages/tasks"],
 

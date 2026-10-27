@@ -1,0 +1,5 @@
+/* Fails: the token pair is 4.48:1, which rounds to 4.5 but is under it. */
+:root {
+  --color-bg: #ffffff;
+  --color-text: #777777;
+}

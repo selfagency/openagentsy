@@ -1,0 +1,6 @@
+/* Passes: the page root does not clip its overflow. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+}

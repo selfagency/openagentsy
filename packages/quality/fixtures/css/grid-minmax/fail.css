@@ -1,0 +1,5 @@
+/* Fails: the image tracks keep their automatic minimum. */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+}
