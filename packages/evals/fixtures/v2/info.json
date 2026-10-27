@@ -1,0 +1,8 @@
+{
+  "version": "2.2.0",
+  "pid": 19126,
+  "hostname": "selfagency-m1mb.munchkin-mamba.ts.net",
+  "urls": ["http://127.0.0.1:41999"],
+  "paths": { "tmp": "/private/var/folders/vp/1khdyg6j3pzg_pqkxd4cdjg80000gn/T/opencode" },
+  "capabilities": { "persistentPty": true }
+}

@@ -1,0 +1,11 @@
+{
+  "data": {
+    "id": "ses_e81a0ec08ffehgOio28jqJun5M",
+    "projectID": "5ac72e3cf881410bae5223efbaee540df63d6c40",
+    "cost": 0,
+    "tokens": { "input": 0, "output": 0, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
+    "time": { "created": 1793121522681, "updated": 1793121522681 },
+    "title": "probe session",
+    "location": { "directory": "/private/tmp/oa-v2probe" }
+  }
+}
