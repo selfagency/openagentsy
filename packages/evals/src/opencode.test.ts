@@ -384,6 +384,39 @@ describe('host errors the case injected', () => {
     expect(faults[0]?.sessionID).toBe('ses_other');
   });
 
+  it('keeps watching past a hundred polls, because the Lead decides when to dispatch', async () => {
+    // The measured failure (2026-10-27): the watch gave up after 120 polls
+    // of 500ms, and the Lead took two minutes to dispatch, so the fault never
+    // landed. The watch lives until the harness stops it.
+    let polls = 0;
+    const aborted: string[] = [];
+    const client = {
+      session: {
+        list: async () => {
+          polls += 1;
+          return polls < 200
+            ? { data: [{ id: 'ses_lead', title: 'eval agentsy' }] }
+            : { data: [{ id: 'ses_lead', title: 'eval agentsy' }, { id: 'ses_child' }] };
+        },
+        abort: async ({ path }: { path: { id: string } }) => {
+          aborted.push(path.id);
+          return {};
+        },
+      },
+    } as unknown as OpencodeClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      intervalMs: 1,
+      suppressMs: 1,
+    });
+    const killedSession = await watch.killed;
+    watch.stop();
+
+    expect(polls).toBeGreaterThan(120);
+    expect(killedSession).toBe('ses_child');
+    expect(aborted).toContain('ses_child');
+  });
+
   it('kills an untitled child that is new since the watch started', async () => {
     // The measured race: a dispatched builder finished a one-line task before
     // the server gave its session a title, so the title match never fired. A

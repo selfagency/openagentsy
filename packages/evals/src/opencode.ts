@@ -993,7 +993,12 @@ export function killSessionWhenItAppears(
   matches: (title: string) => boolean,
   options: { attempts?: number; intervalMs?: number; suppressMs?: number } = {},
 ): { killed: Promise<string | undefined>; stop: () => void } {
-  const attempts = options.attempts ?? 120;
+  // The watch lives until the harness stops it, not for a fixed number of
+  // polls: the Lead decides when to dispatch, and that can take minutes
+  // (measured 2026-10-27: a watch that gave up after sixty seconds expired
+  // before the child appeared, and the fault did not land). The harness
+  // stops the watches when the suite ends.
+  const attempts = options.attempts ?? Number.POSITIVE_INFINITY;
   const intervalMs = options.intervalMs ?? 500;
   // An abort cancels the session's in-flight generation, but the session's
   // loop can resume right after (measured 2026-10-27: a builder child kept
