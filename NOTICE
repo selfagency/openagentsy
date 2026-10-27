@@ -22,11 +22,20 @@ the terms noted:
   long-task-coordinator designs.
 - miqdadbadjuber/anti-slop (MIT): the quality rules in packages/quality/
   are adapted from its rules, keeping the R-XX identifiers in rule
-  metadata.
+  metadata. The skills in templates/.opencode/skills/ adapt the same
+  upstream rules: oa-ui carries the purpose test, oa-copy the
+  anti-slop-copywriting rules, and oa-comments the anti-slop-code tells
+  and their preserve list.
 - Nutlope/hallmark (MIT): the floor rules and the tier system in
   packages/quality/ are adapted from its rules, keeping the Floor numbers.
-  Its sloplint.mjs is called as an external check when installed, not
-  vendored.
+  The material inventory in templates/.opencode/skills/oa-ui/ is adapted
+  from its rules as well. Its sloplint.mjs is called as an external check
+  when installed, not vendored: the bridge in packages/quality/src/sloplint.ts
+  looks for it, runs it over the pages and the stylesheets of the change,
+  and keeps the static findings when it is not there. The linter is
+  optional, and none of it is bundled. The license of the scripts is not
+  stated here, because it has not been read: it is unknown, and it needs a
+  check against an installed copy of the linter.
 - junhoyeo/tokscale (MIT) and xiufengsun/TokenTracker (MIT): ideas only —
   OpenCode database discovery, the pricing fallback chain, the outcomes
   sidecar and the privacy rule. No code copied.

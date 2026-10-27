@@ -29,6 +29,7 @@ import { detectOpenCode, targetForVersion } from './opencode.js';
 const USAGE = `openagentsy <command> [options]
 
 Commands:
+  audit              Report the quality findings of the change, and say which path ran
   board              Show the records, leases and budgets, for a human to read
   build              Generate the agent, command and skill files for a target OpenCode version
   doctor             Report what is installed, where it came from, and what is missing
@@ -49,6 +50,8 @@ Commands:
 
 Options:
   --root <dir>        Project root (default: current directory)
+  --all               Audit the whole project instead of the changed files
+  --base <ref>        The ref the changed files are measured against (default: HEAD)
   --since <when>      How far back to look (default: 30 days ago)
   --target v1|v2      OpenCode version to generate for (default: detected)
   --out <dir>         Output directory for build (default: <root>/.opencode)
@@ -80,6 +83,8 @@ export type Values = {
   config?: string | undefined;
   providers?: string | undefined;
   key?: string | undefined;
+  all?: boolean | undefined;
+  base?: string | undefined;
   'dry-run'?: boolean | undefined;
   'magic-context'?: boolean | undefined;
   'prefer-flash'?: boolean | undefined;
@@ -114,6 +119,23 @@ async function buildCommand(root: string, values: Values): Promise<number> {
     process.stdout.write(`  warning: ${warning}\n`);
   }
   return 0;
+}
+
+/**
+ * The audit of the change.
+ *
+ * The command is loaded on demand. The audit runs the whole rule set, and
+ * the whole rule set carries the TypeScript compiler; the other commands
+ * must not pay for it.
+ */
+async function auditCommand(root: string, values: Values): Promise<number> {
+  const { formatAuditReport, runAudit } = await import('./commands/audit.js');
+  const report = await runAudit(root, {
+    scope: values.all === true ? 'all' : 'changed',
+    ...(values.base === undefined ? {} : { base: values.base }),
+  });
+  process.stdout.write(formatAuditReport(report));
+  return report.exitCode;
 }
 
 async function boardCommand(root: string): Promise<number> {
@@ -353,6 +375,7 @@ const COMMANDS: Record<
   (root: string, values: Values, positionals: string[]) => Promise<number>
 > = {
   build: buildCommand,
+  audit: auditCommand,
   board: boardCommand,
   doctor: doctorCommand,
   ledger: ledgerCommand,
@@ -395,6 +418,8 @@ export async function main(argv: string[]): Promise<number> {
       'dry-run': { type: 'boolean' },
       'magic-context': { type: 'boolean' },
       providers: { type: 'string' },
+      all: { type: 'boolean' },
+      base: { type: 'string' },
       'prefer-flash': { type: 'boolean' },
       'allow-training': { type: 'boolean' },
       'allow-retention': { type: 'boolean' },
