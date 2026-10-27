@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRegistry, defineRule, type QualityRule } from './rule.js';
+import { createRegistry, defineRule, designTurnsOff, isEnabled, type QualityRule } from './rule.js';
 
 function rule(overrides: Partial<QualityRule> = {}): QualityRule {
   return {
@@ -87,5 +87,54 @@ describe('a rule built by defineRule', () => {
         fix: 'a fix',
       },
     ]);
+  });
+
+  it('keeps a rule that is off by default off', () => {
+    const built = defineRule({
+      id: 'copy/example',
+      source: 'antislop',
+      tier: 'finish',
+      appliesTo: ['**/*.html'],
+      waivable: true,
+      offByDefault: true,
+      check: () => [{ line: 3, message: 'a message', fix: 'a fix' }],
+    });
+
+    expect(built.check({ path: 'src/app.html', text: '' }, {})).toEqual([]);
+    expect(
+      built.check({ path: 'src/app.html', text: '' }, { config: { enable: ['copy/example'] } }),
+    ).toHaveLength(1);
+  });
+});
+
+describe('a rule the configuration turns on', () => {
+  it('is off without the configuration', () => {
+    expect(isEnabled({}, 'copy/example')).toBe(false);
+  });
+
+  it('is on when the configuration names it', () => {
+    expect(isEnabled({ config: { enable: ['copy/example'] } }, 'copy/example')).toBe(true);
+  });
+
+  it('is off when the configuration names another rule', () => {
+    expect(isEnabled({ config: { enable: ['copy/other'] } }, 'copy/example')).toBe(false);
+  });
+});
+
+describe('the design file', () => {
+  it('turns a taste rule off when it names the rule', () => {
+    expect(designTurnsOff('we use css/example on purpose', 'css/example', 'finish')).toBe(true);
+  });
+
+  it('never turns a floor rule off', () => {
+    expect(designTurnsOff('css/example is fine here', 'css/example', 'floor')).toBe(false);
+  });
+
+  it('never turns a reflex rule off, which needs a person and a reason', () => {
+    expect(designTurnsOff('css/example is fine here', 'css/example', 'reflex')).toBe(false);
+  });
+
+  it('turns nothing off without a design file', () => {
+    expect(designTurnsOff(undefined, 'css/example', 'finish')).toBe(false);
   });
 });
