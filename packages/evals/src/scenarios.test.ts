@@ -62,6 +62,38 @@ describe('fault builder killed', () => {
     expect(failed).toContain('the Lead never reported that the builder did not complete');
   });
 
+  it('passes a recovery where the Lead claims completion backed by a builder record', async () => {
+    // The measured shape (2026-10-27): the fault lands, the Lead reports it,
+    // a fresh builder finishes the work, and the Lead claims completion
+    // with the artifact named in its ACTION column while the state carries
+    // verification notes. The builder's record names the file in its action
+    // and never says the word done. The confirmation must find both.
+    const failed = await failures(
+      await stateWith([
+        {
+          kind: 'status',
+          from: 'agentsy',
+          action: 'builder-1 was killed before it wrote anything',
+          state: 'the dispatched agent did not complete; no completion record is on the board',
+        },
+        {
+          kind: 'status',
+          from: 'builder',
+          action: 'Wrote hello.txt at repo root containing exactly one line',
+          state: 'acceptance 1-3 pass: file exists at root; read-back shows 1 line',
+        },
+        {
+          kind: 'status',
+          from: 'agentsy',
+          action: 'Bean hello-1 complete: hello.txt written with one line',
+          state: 'verified by lead independently of builder: file exists at repo root, 14 bytes',
+        },
+      ]),
+    );
+
+    expect(failed).toEqual([]);
+  });
+
   it('passes when the Lead posted the non-completion record', async () => {
     const failed = await failures(
       await stateWith([

@@ -778,8 +778,12 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         // hello.txt, content one line" is a completion and never says the
         // word - so the confirmation reads the artifact being named, not a
         // keyword. The record has to name the file that was the bean's
-        // business (the state column carries it, the Lead's plan named it).
-        const artifact = claimed?.state ?? '';
+        // business. The Lead's claim names it where the claim put it: the
+        // action column carries it as often as the state does (measured
+        // 2026-10-27: the Lead's claim said "hello.txt written" in the
+        // action and kept its state for the verification notes), so both
+        // columns are read.
+        const artifact = `${claimed?.action ?? ''} ${claimed?.state ?? ''}`;
         const named = artifact.match(/\b([\w.-]+\.(?:txt|md|ts|js|json))\b/i)?.[1];
         const confirmed =
           records.some(
