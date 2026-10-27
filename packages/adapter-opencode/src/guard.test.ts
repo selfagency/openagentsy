@@ -11,6 +11,7 @@ import {
   roleKeyForAgent,
   roleNameOf,
   rungTarget,
+  statedPathsOf,
 } from './guard.js';
 
 let root: string;
@@ -110,6 +111,37 @@ async function publishLease(agent: string, glob: string): Promise<void> {
   grantLeases(db, { bean: 'proj-1', agent, globs: [glob] });
   closeDatabase(db);
 }
+
+describe('statedPathsOf', () => {
+  it('names the directory a lease covers', async () => {
+    // The lease is an absolute glob and a reply names a relative path, so
+    // the glob is cut at its wildcard and the directory in front of it is
+    // what a reply can be compared against.
+    await publishLease('oa-builder', join(root, 'src/**'));
+    expect(await statedPathsOf(root, 'oa-builder')).toEqual(['src']);
+  });
+
+  it('names the file a lease covers', async () => {
+    await publishLease('oa-builder', join(root, 'src/app.ts'));
+    expect(await statedPathsOf(root, 'oa-builder')).toEqual(['src/app.ts']);
+  });
+
+  it('states nothing when the lease holds the whole workspace', async () => {
+    // The whole workspace is in scope, and then nothing is out of scope of
+    // it, so there is no path to state.
+    await publishLease('oa-builder', join(root, '**'));
+    expect(await statedPathsOf(root, 'oa-builder')).toEqual([]);
+  });
+
+  it('states nothing when the lease is elsewhere', async () => {
+    await publishLease('oa-builder', '/somewhere/else/**');
+    expect(await statedPathsOf(root, 'oa-builder')).toEqual([]);
+  });
+
+  it('states nothing when the agent holds no lease', async () => {
+    expect(await statedPathsOf(root, 'oa-builder')).toEqual([]);
+  });
+});
 
 describe('roleNameOf', () => {
   it('strips the agent prefix', () => {

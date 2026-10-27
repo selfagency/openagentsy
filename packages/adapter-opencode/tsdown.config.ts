@@ -13,7 +13,14 @@ export default defineConfig({
   target: 'node22',
   dts: false,
   clean: true,
-  noExternal: ['zod', '@openagentsy/core', '@openagentsy/ledger'],
+  noExternal: [
+    'zod',
+    '@openagentsy/core',
+    '@openagentsy/hooks',
+    '@openagentsy/ledger',
+    '@openagentsy/memory',
+    '@openagentsy/tasks',
+  ],
   outputOptions: {
     minify: false,
     // The bundle is copied out as one file, so a dynamic import has to be

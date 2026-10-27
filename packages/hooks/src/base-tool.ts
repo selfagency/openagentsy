@@ -1,6 +1,4 @@
-import { boardToolNames } from '@openagentsy/core';
-import { memoryToolNames } from '@openagentsy/memory';
-import { taskToolNames } from '@openagentsy/tasks';
+import { boardToolNames, memoryToolNames, taskToolNames } from '@openagentsy/core';
 
 /**
  * The base name of a tool.

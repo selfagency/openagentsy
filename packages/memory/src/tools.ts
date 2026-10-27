@@ -1,4 +1,5 @@
 import { defineTool, type ToolDef } from '@openagentsy/adapter-opencode';
+import { memoryToolNames } from '@openagentsy/core';
 import { z } from 'zod';
 import type { MemoryInbox } from './inbox.js';
 import type { MemoryEntry } from './model.js';
@@ -13,8 +14,14 @@ import type { MemoryStore } from './store.js';
  * the command that will call this same code, decides what is kept.
  */
 
-/** The tool names, for the base-tool vocabulary. */
-export const memoryToolNames = ['oa_memory_search', 'oa_memory_list', 'oa_memory_decide'] as const;
+/**
+ * The tool names, for the base-tool vocabulary.
+ *
+ * The list lives in core, with the other tool names, so that the vocabulary
+ * which resolves a tool name back to its base name and the tools the
+ * server offers are one list.
+ */
+export { memoryToolNames };
 
 /** The most results a search may return. */
 export const MAX_SEARCH_LIMIT = 8;

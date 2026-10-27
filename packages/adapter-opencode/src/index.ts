@@ -1,3 +1,13 @@
+import { join } from 'node:path';
+import {
+  closeDatabase,
+  isRoundStatus,
+  listRecords,
+  openDatabase,
+  type RoundStatus,
+} from '@openagentsy/core';
+import { closeLedger, openLedger } from '@openagentsy/ledger';
+import { type BridgeHooks, createBridge } from './bridge.js';
 import { type ClientLike, type ProviderInventory, sessionAdapter } from './client.js';
 import { defineTool, toolMap } from './define-tool.js';
 import {
@@ -9,10 +19,13 @@ import {
   refuseClimb,
   roleKeyForAgent,
   rungTarget,
+  statedPathsOf,
   writeRungs,
 } from './guard.js';
 import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
+import { claimedStatusOf, observeSessionIdle, recordNoProgressRounds } from './idle-observer.js';
 import { assistantMessageOf, bridgeToLedger, rootSessionOf } from './ledger-bridge.js';
+import { readApprovalFor } from './project-config.js';
 import { tool } from './tool.js';
 import { setupV2, type V2Context } from './v2.js';
 import { guardWrite } from './write-guard.js';
@@ -119,18 +132,10 @@ const effortTool = (root: string, client: ClientLike) =>
     },
   });
 
-export type ServerHooks = {
+export type ServerHooks = BridgeHooks & {
   'chat.params'?: (
     input: { sessionID: string; agent: string },
     output: { options: Record<string, unknown> },
-  ) => Promise<void>;
-  'chat.message'?: (
-    input: { sessionID: string; agent?: string | undefined },
-    output: unknown,
-  ) => Promise<void>;
-  'tool.execute.before'?: (
-    input: { tool: string; sessionID: string },
-    output: { args: unknown },
   ) => Promise<void>;
   event?: (input: {
     event: {
@@ -144,6 +149,10 @@ export type ServerHooks = {
 /**
  * A session ended. It gives its effort rung back, and the archivist takes
  * what it learned.
+ *
+ * The whole path is caught. The `event` hook is not awaited by OpenCode, so
+ * a throw here is an unhandled rejection and a broken session, not a failed
+ * check. Every failure goes on the record and the session goes on.
  */
 async function onSessionIdle(
   client: ClientLike,
@@ -151,27 +160,153 @@ async function onSessionIdle(
   sessionID: string,
   agent: string,
 ): Promise<void> {
-  const role = await roleKeyForAgent(root, agent);
+  try {
+    const role = await roleKeyForAgent(root, agent);
 
-  const rungs = await readRungs(root);
-  if (rungs[sessionID]) {
-    delete rungs[sessionID];
-    await writeRungs(root, rungs);
+    const rungs = await readRungs(root);
+    if (rungs[sessionID]) {
+      delete rungs[sessionID];
+      await writeRungs(root, rungs);
+    }
+
+    // The round the session just finished is checked before the archivist
+    // runs: the archivist may open a session of its own, and the round that
+    // went nowhere is the one that is still open.
+    await observeIdle(client, root, sessionID, agent);
+
+    // A harvest that fails must not break the session that is closing, so it
+    // is caught here and put on the record.
+    if (!(await harvestEnabled(root))) return;
+    try {
+      await harvest({
+        session: sessionAdapter(client, root),
+        root,
+        sessionID,
+        role,
+        agent,
+      });
+    } catch (error) {
+      await recordHarvestFailure(root, { agent, sessionID, error });
+    }
+  } catch (error) {
+    await recordIdleFailure(root, { agent, sessionID, error });
+  }
+}
+
+/**
+ * The text the session said last.
+ *
+ * The report of a round is the last thing the Lead says, so the status the
+ * report claims is read out of it.
+ */
+async function lastTextOf(client: ClientLike, root: string, sessionID: string): Promise<string> {
+  const messages = await client.session.messages({
+    path: { id: sessionID },
+    query: { directory: root },
+  });
+  const last = messages.data?.at(-1);
+  const parts = last?.parts ?? [];
+  const text: string[] = [];
+  for (const part of parts) {
+    if (part.type !== 'text') continue;
+    if (typeof part.text === 'string') text.push(part.text);
+  }
+  return text.join('\n');
+}
+
+/**
+ * The status the board holds.
+ *
+ * The board has no table of round statuses, so the status a round was
+ * persisted with is the one a record carries: the Lead writes the state of
+ * its round down before it reports it. A board that holds no such record
+ * holds no status, and the observer finds nothing to contradict.
+ */
+function boardRoundStatus(root: string): RoundStatus | undefined {
+  const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
+  try {
+    const { records } = listRecords(db, { limit: 100, markRead: false });
+    for (const record of [...records].reverse()) {
+      if (isRoundStatus(record.state)) return record.state;
+    }
+    return undefined;
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/**
+ * A failure of the idle path, on the record.
+ *
+ * The `event` hook is not awaited by OpenCode, so a throw there is a broken
+ * session and not a failed check. The failure is written down and the
+ * session goes on.
+ */
+async function recordIdleFailure(
+  root: string,
+  input: { agent: string; sessionID: string; error: unknown },
+): Promise<void> {
+  try {
+    await appendAudit(root, {
+      policyId: POLICIES.eventsFailed.id,
+      policyVersion: POLICIES.eventsFailed.version,
+      actor: input.agent,
+      action: 'idle',
+      resource: input.sessionID,
+      effect: 'deny',
+      detail: input.error instanceof Error ? input.error.message : String(input.error),
+      sessionID: input.sessionID,
+    });
+  } catch {
+    // Nowhere left to record it. The session stays silent rather than throw.
+  }
+}
+
+/**
+ * The round of the session that went idle (§8.7).
+ *
+ * Two things are checked: the status the report claims against the status
+ * the board holds, and the rounds that changed nothing.
+ *
+ * Neither may take the session down. The `event` hook is not awaited by
+ * OpenCode, so a throw there is a broken session and not a failed check:
+ * the throw of the ledger is caught here, and every failure goes on the
+ * record.
+ */
+async function observeIdle(
+  client: ClientLike,
+  root: string,
+  sessionID: string,
+  agent: string,
+): Promise<void> {
+  try {
+    const claimed = claimedStatusOf(await lastTextOf(client, root, sessionID));
+    const finding = observeSessionIdle(claimed, () => boardRoundStatus(root), sessionID);
+    if (finding !== undefined) {
+      await appendAudit(root, {
+        policyId: POLICIES.roundStatusMismatch.id,
+        policyVersion: POLICIES.roundStatusMismatch.version,
+        actor: agent,
+        action: 'round-status',
+        resource: sessionID,
+        effect: 'deny',
+        detail: finding.detail,
+        sessionID,
+      });
+    }
+  } catch (error) {
+    await recordIdleFailure(root, { agent, sessionID, error });
   }
 
-  // A harvest that fails must not break the session that is closing, so it
-  // is caught here and put on the record.
-  if (!(await harvestEnabled(root))) return;
   try {
-    await harvest({
-      session: sessionAdapter(client, root),
-      root,
-      sessionID,
-      role,
-      agent,
-    });
+    const ledger = openLedger(root);
+    try {
+      recordNoProgressRounds(ledger, join(root, '.openagentsy', 'board.sqlite'));
+    } finally {
+      closeLedger(ledger);
+    }
   } catch (error) {
-    await recordHarvestFailure(root, { agent, sessionID, error });
+    await recordIdleFailure(root, { agent, sessionID, error });
   }
 }
 
@@ -211,6 +346,50 @@ async function setupServer(
   // every model call of a climbed session, so it is asked for once.
   let inventory: Promise<ProviderInventory> | undefined;
 
+  // The guardrails of the package, at the hook points the pinned binary
+  // fires (§8.2).
+  const bridge = createBridge({
+    workspace: root,
+    stateRoot: root,
+    roleForSession: async (sessionID) => {
+      const agent = sessionAgents.get(sessionID);
+      return agent === undefined ? undefined : roleKeyForAgent(root, agent);
+    },
+    statedPathsForSession: async (sessionID) => {
+      // The scope of the task a session is working on is the set of files
+      // the task holds a lease on: the board says which files the work may
+      // touch, and the leases are that statement.
+      const agent = sessionAgents.get(sessionID);
+      if (agent === undefined) return [];
+      return statedPathsOf(root, agent);
+    },
+    approvalFor: await readApprovalFor(root),
+    onFindings: async (findings, sessionID) => {
+      const agent = sessionAgents.get(sessionID) ?? 'unknown';
+      await appendAudit(root, {
+        policyId: POLICIES.outputFlagged.id,
+        policyVersion: POLICIES.outputFlagged.version,
+        actor: agent,
+        action: 'output-check',
+        resource: sessionID,
+        effect: 'allow',
+        detail: findings.map((finding) => `${finding.name}: ${finding.type}`).join(', '),
+        sessionID,
+      });
+    },
+    onPermissionRefusal: async (error) => {
+      await appendAudit(root, {
+        policyId: POLICIES.permissionRefused.id,
+        policyVersion: POLICIES.permissionRefused.version,
+        actor: 'openagentsy',
+        action: 'permission',
+        resource: 'config',
+        effect: 'deny',
+        detail: error.message,
+      });
+    },
+  });
+
   return {
     'chat.params': async (input, output) => {
       sessionAgents.set(input.sessionID, input.agent);
@@ -224,9 +403,20 @@ async function setupServer(
     },
 
     'tool.execute.before': async (input, output) => {
+      // The lease guard is the security property: it decides who may write,
+      // and it is the layer that does not depend on a hook firing. The rules
+      // of the package are the second layer, and they run after it.
       const agent = sessionAgents.get(input.sessionID);
       await guardWrite(root, input.tool, output.args, agent, input.sessionID);
+      await bridge['tool.execute.before'](input, output);
     },
+
+    'tool.execute.after': bridge['tool.execute.after'],
+    'chat.message': bridge['chat.message'],
+    'experimental.session.compacting': bridge['experimental.session.compacting'],
+    'experimental.text.complete': bridge['experimental.text.complete'],
+    'shell.env': bridge['shell.env'],
+    config: bridge.config,
 
     event: async ({ event }) => {
       if (event.type === 'message.updated') {

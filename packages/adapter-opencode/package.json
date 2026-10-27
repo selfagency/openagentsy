@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@openagentsy/core": "*",
+    "@openagentsy/hooks": "workspace:^",
     "@openagentsy/ledger": "workspace:^",
     "zod": "^4.1.8"
   },
