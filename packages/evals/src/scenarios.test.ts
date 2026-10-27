@@ -94,6 +94,38 @@ describe('fault builder killed', () => {
     expect(failed).toEqual([]);
   });
 
+  it('passes when the Lead claims the bean and the builder names the file', async () => {
+    // The measured shape (2026-10-27, trial 1 of the fault case): the Lead's
+    // claim named the bean, not the file ("Bean hello-txt complete"), and the
+    // builder's record named the file without ever saying done. The claim is
+    // backed by the builder's own evidence, so the confirmation has to find
+    // that evidence without the claim naming the same file.
+    const failed = await failures(
+      await stateWith([
+        {
+          kind: 'status',
+          from: 'agentsy',
+          action: 'Dispatch attempt 1 to oa-builder was cancelled before any work',
+          state: 'no completion record from the cancelled session',
+        },
+        {
+          kind: 'status',
+          from: 'oa-builder',
+          action: 'Wrote hello.txt with one line of text',
+          state: 'the file exists at the root with one line',
+        },
+        {
+          kind: 'status',
+          from: 'agentsy',
+          action: 'Bean hello-txt complete: the builder wrote the file under its lease',
+          state: 'verified independently of the builder: 14 bytes, one line',
+        },
+      ]),
+    );
+
+    expect(failed).toEqual([]);
+  });
+
   it('passes when the Lead posted the non-completion record', async () => {
     const failed = await failures(
       await stateWith([

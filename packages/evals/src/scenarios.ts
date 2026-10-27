@@ -785,22 +785,26 @@ export const FAULT_BUILDER_KILLED: Scenario = {
         // columns are read.
         const artifact = `${claimed?.action ?? ''} ${claimed?.state ?? ''}`;
         const named = artifact.match(/\b([\w.-]+\.(?:txt|md|ts|js|json))\b/i)?.[1];
+        // The builder's own evidence: a status record from a builder. A
+        // builder states the artifact it wrote, not the word done, so a
+        // record that names a file is a completion too. When the Lead's claim
+        // names the artifact too, the two have to agree; when the claim names
+        // the bean instead of the file (measured 2026-10-27: the claim said
+        // "Bean hello-txt complete" and the builder's record said "Wrote
+        // hello.txt"), any builder record that names a file backs the claim.
+        const builderStatuses = records.filter(
+          (record) => isFrom(record, 'oa-builder') && record.kind === 'status',
+        );
+        const text = (record: { action: string; state: string }) =>
+          `${record.action} ${record.state}`;
+        const namesFile = (value: string) => /\b[\w.-]+\.(?:txt|md|ts|js|json)\b/i.test(value);
         const confirmed =
-          records.some(
-            (record) =>
-              isFrom(record, 'oa-builder') &&
-              record.kind === 'status' &&
-              claimsCompletion(`${record.action} ${record.state}`),
-          ) ||
-          (named !== undefined &&
-            records.some(
-              (record) =>
-                isFrom(record, 'oa-builder') &&
-                record.kind === 'status' &&
-                new RegExp(`\\b${named.replace(/\./g, '\\.')}(?![\\w.-])`, 'i').test(
-                  `${record.action} ${record.state}`,
-                ),
-            ));
+          builderStatuses.some((record) => claimsCompletion(text(record))) ||
+          (named !== undefined
+            ? builderStatuses.some((record) =>
+                new RegExp(`\\b${named.replace(/\./g, '\\.')}(?![\\w.-])`, 'i').test(text(record)),
+              )
+            : builderStatuses.some((record) => namesFile(text(record))));
         if (claimed && !confirmed) return 'the Lead reported a completion nobody confirmed';
         return undefined;
       },
