@@ -2,7 +2,14 @@ import { mkdir, mkdtemp, readdir, readFile, stat, utimes, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { approvalGate, approvalsPath, createApprovalStore, withLock } from './approvals.js';
+import {
+  approvalGate,
+  approvalsPath,
+  createApprovalStore,
+  releaseLock,
+  restoreLock,
+  withLock,
+} from './approvals.js';
 import type { HandlerResult } from './registry.js';
 
 /** The reason a result carries, when it stops the call. */
@@ -241,5 +248,37 @@ describe('the approval gate', () => {
     });
     expect(continues(result)).toBe(false);
     expect(reasonOf(result)).toContain('approval store');
+  });
+});
+
+describe('the release of a lock', () => {
+  it('does not put a foreign lock over a lock that is held now', async () => {
+    const path = approvalsPath(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${path}.lock`;
+    const privatePath = `${lockPath}.release.ours`;
+    await writeFile(privatePath, 'foreign', 'utf8');
+    await writeFile(lockPath, 'new-holder', 'utf8');
+    await restoreLock(privatePath, lockPath);
+    expect(await readFile(lockPath, 'utf8')).toBe('new-holder');
+  });
+
+  it('puts a foreign lock back when the path is free', async () => {
+    const path = approvalsPath(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${path}.lock`;
+    const privatePath = `${lockPath}.release.ours`;
+    await writeFile(privatePath, 'foreign', 'utf8');
+    await restoreLock(privatePath, lockPath);
+    expect(await readFile(lockPath, 'utf8')).toBe('foreign');
+  });
+
+  it('does not remove a lock that is not the writer’s', async () => {
+    const path = approvalsPath(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${path}.lock`;
+    await writeFile(lockPath, 'foreign', 'utf8');
+    await releaseLock(lockPath, 'ours');
+    expect(await readFile(lockPath, 'utf8')).toBe('foreign');
   });
 });

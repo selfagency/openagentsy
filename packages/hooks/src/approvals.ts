@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
-import { mkdir, open, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { link, mkdir, open, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { readPreToolCall } from './event.js';
@@ -200,7 +200,7 @@ async function takeStaleLock(lockPath: string, timing: ResolvedTiming): Promise<
  * writer and given to another one is not removed by mistake, and the lock
  * of the other writer is put back.
  */
-async function releaseLock(lockPath: string, token: string): Promise<void> {
+export async function releaseLock(lockPath: string, token: string): Promise<void> {
   const privatePath = `${lockPath}.release.${token}`;
   try {
     await rename(lockPath, privatePath);
@@ -217,8 +217,27 @@ async function releaseLock(lockPath: string, token: string): Promise<void> {
   }
   if (content !== token) {
     // The lock is not this writer's: it goes back where it was.
-    await rename(privatePath, lockPath).catch(() => undefined);
+    await restoreLock(privatePath, lockPath);
     return;
+  }
+  await rm(privatePath, { force: true });
+}
+
+/**
+ * A lock that was moved aside goes back where it was.
+ *
+ * It is not put over a lock that is held now: the writer that holds that
+ * one would lose it. The link is one atomic step, so a lock that is taken
+ * in the window between the move and the restore is not lost either.
+ */
+export async function restoreLock(privatePath: string, lockPath: string): Promise<void> {
+  try {
+    await link(privatePath, lockPath);
+  } catch (error) {
+    // A lock that is held now is not overwritten, and a lock that is
+    // gone cannot be restored.
+    if (isFileError(error, 'EEXIST') || isFileError(error, 'ENOENT')) return;
+    throw error;
   }
   await rm(privatePath, { force: true });
 }

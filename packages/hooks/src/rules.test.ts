@@ -622,3 +622,40 @@ describe('the tools a host composes', () => {
     expect(continues(result)).toBe(false);
   });
 });
+
+describe('the removals in a subshell', () => {
+  it('blocks a removal behind the punctuation of the shell', async () => {
+    const commands = [
+      '(rm -rf /tmp/victim)',
+      'bash -c "(rm -rf /tmp/victim)"',
+      "sh -c '(rm -rf /tmp/victim)'",
+      'time (rm -rf /tmp/victim)',
+      '\\rm -rf /tmp/victim',
+      '( rm -rf /tmp/victim )',
+    ];
+    for (const command of commands) {
+      const result = await decide('destructive-needs-approval', shell(command));
+      expect(continues(result), command).toBe(false);
+    }
+  });
+});
+
+describe('a name the matcher does not know', () => {
+  it('treats a call that carries files as a writer', async () => {
+    const result = await decide('protect-policy', {
+      toolName: 'some_new_tool',
+      args: { filePath: '.opencode/skills/openagentsy-review/SKILL.md' },
+      files: [{ path: '.opencode/skills/openagentsy-review/SKILL.md' }],
+    });
+    expect(continues(result)).toBe(false);
+  });
+
+  it('treats a call that carries content as a writer', async () => {
+    const result = await decide('secret-scan-writes', {
+      toolName: 'some_new_tool',
+      args: { content: SECRET_CONTENT },
+      files: [],
+    });
+    expect(continues(result)).toBe(false);
+  });
+});

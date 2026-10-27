@@ -17,15 +17,15 @@ import type { HandlerResult, Rule } from './registry.js';
 const CONTINUE: HandlerResult = { continue: true };
 
 /**
- * The command, split into tokens.
+ * The command, read in pieces.
  *
- * A quoted span is one token, so a command that is passed as a quoted
- * argument stays one thing: `bash -c "git commit -n"` is three tokens and
- * the third one holds the command. The quotes are kept, so the caller can
- * tell a value from an argument.
+ * A quoted span is one piece, so a command that is passed as a quoted
+ * argument stays one thing. The pieces are cut at the given characters,
+ * and the quotes are kept, so the caller can tell a value from an
+ * argument.
  */
-export function tokenise(command: string): string[] {
-  const tokens: string[] = [];
+function scanCommand(command: string, cuts: (char: string) => boolean): string[] {
+  const pieces: string[] = [];
   let current = '';
   let quote: string | undefined;
   for (const char of command) {
@@ -39,17 +39,27 @@ export function tokenise(command: string): string[] {
       current += char;
       continue;
     }
-    if (/\s/.test(char)) {
-      if (current !== '') {
-        tokens.push(current);
-        current = '';
-      }
+    if (cuts(char)) {
+      if (current !== '') pieces.push(current);
+      current = '';
       continue;
     }
     current += char;
   }
-  if (current !== '') tokens.push(current);
-  return tokens;
+  if (current !== '') pieces.push(current);
+  return pieces;
+}
+
+/**
+ * The command, split into tokens.
+ *
+ * A quoted span is one token, so a command that is passed as a quoted
+ * argument stays one thing: `bash -c "git commit -n"` is three tokens and
+ * the third one holds the command. The quotes are kept, so the caller can
+ * tell a value from an argument.
+ */
+export function tokenise(command: string): string[] {
+  return scanCommand(command, (char) => /\s/.test(char));
 }
 
 /**
@@ -75,7 +85,7 @@ const MESSAGE_FLAG_PREFIXES = ['-m=', '--message=', '-F=', '--file='];
 const GIT_SUBCOMMANDS = new Set(['commit', 'merge', 'rebase']);
 
 /** The characters that end a command. */
-const SEPARATOR_CHARS = new Set([';', '&', '|', '\n']);
+const SEPARATOR_CHARS = new Set([';', '&', '|', '(', ')', '\n']);
 
 /**
  * Whether a token is a quoted span.
@@ -95,29 +105,9 @@ function isQuoted(token: string): boolean {
  * argument.
  */
 export function commandSegments(command: string): string[] {
-  const segments: string[] = [];
-  let current = '';
-  let quote: string | undefined;
-  for (const char of command) {
-    if (quote !== undefined) {
-      current += char;
-      if (char === quote) quote = undefined;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      current += char;
-      continue;
-    }
-    if (SEPARATOR_CHARS.has(char)) {
-      if (current.trim() !== '') segments.push(current);
-      current = '';
-      continue;
-    }
-    current += char;
-  }
-  if (current.trim() !== '') segments.push(current);
-  return segments;
+  return scanCommand(command, (char) => SEPARATOR_CHARS.has(char)).filter(
+    (piece) => piece.trim() !== '',
+  );
 }
 
 /**
@@ -373,9 +363,12 @@ function isForceFlag(flag: string): boolean {
 
 /**
  * Whether a token names the removal.
+ *
+ * The name may follow the punctuation of the shell: `(rm`, `\rm` and
+ * `;rm` are the removal, and a subshell runs it.
  */
 function isRmToken(token: string): boolean {
-  return /(^|\/)rm$/.test(token);
+  return /(^|[/\\();|&])rm$/.test(token);
 }
 
 /**
