@@ -18,6 +18,7 @@ export type QualitySource =
   | `hallmark:floor-${number}`
   | `antislop:R-${number}`
   | 'hallmark'
+  | 'antislop'
   | `antislop-code:${string}`
   | 'openagentsy';
 
@@ -32,6 +33,23 @@ export interface SourceFile {
   text: string;
 }
 
+/** What a person configured. */
+export interface QualityConfig {
+  /**
+   * The words `copy/buzzwords` rejects.
+   *
+   * The rule's own list is used when this is absent, so a project that
+   * wants a different list names the words it objects to.
+   */
+  buzzwords?: readonly string[];
+  /**
+   * The rules that are off by default and are wanted anyway.
+   *
+   * A rule names itself, by its id: `copy/em-dash`.
+   */
+  enable?: readonly string[];
+}
+
 /** What a check is told besides the file. */
 export interface CheckCtx {
   /**
@@ -41,6 +59,16 @@ export interface CheckCtx {
    * floor rule, and it is never read as an instruction.
    */
   design?: string;
+  /** What a person configured. */
+  config?: QualityConfig;
+  /**
+   * The routes the project has.
+   *
+   * A rule that judges a link to a route can only judge it against this
+   * set. When it is absent, the rule says it cannot see the routes
+   * instead of guessing which ones exist.
+   */
+  routes?: readonly string[];
 }
 
 /** A rule: what must hold, where it applies and how strict it is. */
@@ -57,6 +85,13 @@ export interface QualityRule {
   check: (file: SourceFile, ctx: CheckCtx) => Finding[];
   /** False for every floor rule; the registry refuses the other case. */
   waivable: boolean;
+  /**
+   * True for a rule that only runs when the configuration turns it on.
+   *
+   * A taste rule that is off by default stays off until a person asks for
+   * it, so the default run of the registry never warns about it.
+   */
+  offByDefault?: boolean;
 }
 
 /** What a rule found. */
@@ -104,31 +139,45 @@ export function defineRule(
   const { check, ...meta } = definition;
   return {
     ...meta,
-    check: (file, ctx) =>
-      check(file, ctx).map((found) => ({
+    check: (file, ctx) => {
+      if (meta.offByDefault === true && !isEnabled(ctx, meta.id)) return [];
+      return check(file, ctx).map((found) => ({
         ...found,
         ruleId: meta.id,
         source: sourceOf(meta),
         tier: meta.tier,
         file: file.path,
-      })),
+      }));
+    },
   };
+}
+
+/**
+ * Whether a rule that is off by default has been turned on.
+ *
+ * The configuration names the rule, by its id, and that is the only way
+ * such a rule runs.
+ */
+export function isEnabled(ctx: CheckCtx, ruleId: string): boolean {
+  return ctx.config?.enable?.includes(ruleId) === true;
 }
 
 /**
  * Whether the design file turns a rule off.
  *
  * The design file is data, not instructions: the only thing it can do is
- * name a rule, by the rule's id, and turn it off. It can never turn off a
- * floor rule, and the registry refuses a waivable floor rule whatever the
- * design file says.
+ * name a taste rule, by the rule's id, and turn it off. A `finish` rule is
+ * taste, so it is the only kind the design file can turn off. A `reflex`
+ * rule needs a person and a reason, and a floor rule cannot be turned off
+ * at all; the registry refuses a waivable floor rule whatever the design
+ * file says.
  */
 export function designTurnsOff(
   design: string | undefined,
   ruleId: string,
   tier: QualityTier,
 ): boolean {
-  if (design === undefined || tier === 'floor') return false;
+  if (design === undefined || tier !== 'finish') return false;
   return design.toLowerCase().includes(ruleId.toLowerCase());
 }
 

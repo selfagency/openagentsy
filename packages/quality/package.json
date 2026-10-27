@@ -34,11 +34,13 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "The OpenAgentsy quality rules: the registry, and the static CSS checks.",
+  "description": "The OpenAgentsy quality rules: the registry, and the static CSS, HTML and copy checks.",
   "keywords": [
     "agents",
     "quality",
     "css",
+    "html",
+    "copy",
     "accessibility",
     "guardrails"
   ],
