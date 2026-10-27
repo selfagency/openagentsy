@@ -227,6 +227,107 @@ describe('the kill of a session', () => {
     expect(aborted.length).toBeGreaterThanOrEqual(3);
     expect(aborted.every((id) => id === 'ses_killed')).toBe(true);
   });
+
+  it('never kills a session of another case', async () => {
+    // The server's own filter is a query, and a query is a thing the server
+    // can change: the list route of a live OpenCode 2.2.0 server ignored the
+    // location query and answered with every session on the server, so the
+    // kill of one case landed on another case's session and the case under
+    // test never saw its fault (measured 2026-10-27). The watch drops the
+    // sessions of another directory before it looks for a target.
+    const cut: string[] = [];
+    const client = {
+      listSessions: async () => [
+        { id: 'ses_other', title: 'eval oa-builder', directory: '/other-case' },
+        { id: 'ses_here', title: 'eval oa-builder', directory: '/case' },
+      ],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        cut.push(sessionID);
+      },
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 1,
+      intervalMs: 1,
+      windowMs: 1,
+    });
+    const killedSession = await watch.killed;
+    watch.stop();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(killedSession).toBe('ses_here');
+    expect(cut).toContain('ses_here');
+    expect(cut).not.toContain('ses_other');
+  });
+
+  it('kills every builder the Lead dispatches, so the work cannot be done', async () => {
+    // A builder that dies once can be replaced, and a Lead that replaces it
+    // finishes the work (measured 2026-10-27: the first builder was
+    // cancelled with no record, the Lead dispatched a second one, and the
+    // second one posted a completion record - the case then failed on a
+    // completion the fault had nothing to do with). A watch that repeats
+    // kills every builder, and the run has to know all of them: the server
+    // writes an error for every session it aborts, and those errors are the
+    // fault the case injected.
+    let dispatched = 0;
+    const cut: string[] = [];
+    const client = {
+      listSessions: async () => {
+        dispatched += 1;
+        return [
+          { id: 'lead', title: 'eval agentsy' },
+          { id: `builder_${dispatched}`, title: 'Write hello.txt', parentID: 'lead' },
+        ];
+      },
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        cut.push(sessionID);
+      },
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 4,
+      intervalMs: 1,
+      windowMs: 1,
+      repeat: true,
+    });
+    // The watch runs until its attempts are spent, and then it answers with
+    // every session it killed.
+    const all = await watch.all;
+    const killedSession = await watch.killed;
+    watch.stop();
+
+    expect(killedSession).toBe('builder_1');
+    expect(all.length).toBeGreaterThan(1);
+    expect(all).toContain('builder_1');
+    expect(cut).toContain('builder_1');
+  });
+
+  it('never kills the archivist, which is a root and carries the word builder', async () => {
+    // The harvest session is a root whose title says what it is, and a kill
+    // that took it would take the memory of the session it was harvesting.
+    const cut: string[] = [];
+    const client = {
+      listSessions: async () => [{ id: 'ses_harvest', title: 'harvest builder' }],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        cut.push(sessionID);
+      },
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
+
+    const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
+      attempts: 2,
+      intervalMs: 1,
+      windowMs: 1,
+    });
+    const killedSession = await watch.killed;
+    watch.stop();
+    await watch.all;
+
+    expect(killedSession).toBeUndefined();
+    expect(cut).toEqual([]);
+  });
 });
 
 describe('permissionPatterns', () => {
