@@ -13,11 +13,11 @@
     "typecheck": "tsc -b tsconfig.json"
   },
   "dependencies": {
-    "@openagentsy/core": "workspace:^"
+    "@openagentsy/core": "workspace:^",
+    "typescript": "^5.9.2"
   },
   "devDependencies": {
-    "@types/node": "^24.3.0",
-    "typescript": "^5.9.2"
+    "@types/node": "^24.3.0"
   },
   "license": "GPL-3.0-or-later",
   "repository": {

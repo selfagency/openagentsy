@@ -3,7 +3,7 @@ import { cssRules } from './css/rules.js';
 import { allRules, qualityRegistry } from './rules.js';
 
 describe('the registry of every rule', () => {
-  it('holds the seventeen rules of the plan', () => {
+  it('holds the twenty-three rules of the plan', () => {
     expect(allRules.map((rule) => rule.id)).toEqual([
       'css/token-only-colour-font',
       'css/no-transition-all',
@@ -22,18 +22,25 @@ describe('the registry of every rule', () => {
       'copy/generic-cta',
       'copy/buzzwords',
       'copy/em-dash',
+      'comment/banner-separator',
+      'comment/decorative-marker',
+      'comment/step-narration',
+      'comment/empty-label',
+      'comment/empty-todo',
+      'comment/redundant-jsdoc',
     ]);
   });
 
-  it('holds the nine CSS rules and the eight of the plan', () => {
-    expect(allRules).toHaveLength(17);
+  it('holds the nine CSS rules, the eight of the plan and the six of the comments', () => {
+    expect(allRules).toHaveLength(23);
     expect(allRules.filter((rule) => rule.id.startsWith('css/'))).toHaveLength(9);
     expect(allRules.filter((rule) => rule.id.startsWith('html/'))).toHaveLength(4);
     expect(allRules.filter((rule) => rule.id.startsWith('copy/'))).toHaveLength(4);
+    expect(allRules.filter((rule) => rule.id.startsWith('comment/'))).toHaveLength(6);
   });
 
   it('is built at load, so a waivable floor rule stops the package', () => {
-    expect(qualityRegistry.rules()).toHaveLength(17);
+    expect(qualityRegistry.rules()).toHaveLength(23);
   });
 
   it('never lets a floor rule be waived', () => {
@@ -75,7 +82,7 @@ describe('the rules of a file', () => {
     ]);
   });
 
-  it('picks the page rules for a component', () => {
+  it('picks the page rules and the comment rules for a component', () => {
     expect(qualityRegistry.forFile('src/app.tsx').map((rule) => rule.id)).toEqual([
       'html/dead-nav',
       'html/inert-control',
@@ -85,6 +92,23 @@ describe('the rules of a file', () => {
       'copy/generic-cta',
       'copy/buzzwords',
       'copy/em-dash',
+      'comment/banner-separator',
+      'comment/decorative-marker',
+      'comment/step-narration',
+      'comment/empty-label',
+      'comment/empty-todo',
+      'comment/redundant-jsdoc',
+    ]);
+  });
+
+  it('picks the comment rules for a source file', () => {
+    expect(qualityRegistry.forFile('src/app.ts').map((rule) => rule.id)).toEqual([
+      'comment/banner-separator',
+      'comment/decorative-marker',
+      'comment/step-narration',
+      'comment/empty-label',
+      'comment/empty-todo',
+      'comment/redundant-jsdoc',
     ]);
   });
 

@@ -2,11 +2,12 @@
  * @openagentsy/quality
  *
  * The anti-slop checks: the rule registry, and the static rules that read
- * a stylesheet, a page and its copy.
+ * a stylesheet, a page, its copy and the comments of a source file.
  *
  * It is a library. The hooks package calls it, and nothing here decides
  * on its own what a person decided.
  */
+export * from './comments/index.js';
 export * from './copy/index.js';
 export * from './css/index.js';
 export * from './html/index.js';

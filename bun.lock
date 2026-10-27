@@ -198,10 +198,10 @@
       "version": "0.1.0",
       "dependencies": {
         "@openagentsy/core": "workspace:^",
+        "typescript": "^5.9.2",
       },
       "devDependencies": {
         "@types/node": "^24.3.0",
-        "typescript": "^5.9.2",
       },
     },
     "packages/tasks": {
