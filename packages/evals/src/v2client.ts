@@ -53,6 +53,13 @@ export type V2Session = {
   title?: string;
   /** The directory the session belongs to. */
   directory?: string;
+  /**
+   * The session that dispatched this one.
+   *
+   * A dispatched child carries the id of its parent, and that is the signal
+   * the harness uses to tell a child from a root.
+   */
+  parentID?: string;
   /** How the last turn ended: `succeeded`, `failed` or `interrupted`. */
   outcome?: string;
   /** The times of the session. */
@@ -81,6 +88,14 @@ export type V2MessageError = {
   status?: number;
 };
 
+/** The tokens a message used. */
+export type V2TokenUsage = {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cache?: { read?: number; write?: number };
+};
+
 /** A message in a session. */
 export type V2Message = {
   id: string;
@@ -96,6 +111,10 @@ export type V2Message = {
   outcome?: string;
   /** The error of a failed turn. */
   error?: V2MessageError;
+  /** The tokens the turn used, when the server counted them. */
+  tokens?: V2TokenUsage;
+  /** What the turn cost, in dollars. */
+  cost?: number;
 };
 
 /** The answer to a question: the user message the server accepted. */
@@ -110,14 +129,36 @@ export type V2PromptResult = {
   text?: string;
 };
 
+/**
+ * The model a session runs on.
+ *
+ * The model of a turn is the model of its session: the prompt body has no
+ * model, and the route that changes it is `POST /api/session/{id}/model`.
+ */
+export type V2Model = {
+  /** The id of the model. */
+  id: string;
+  /** The provider the model belongs to. */
+  providerID: string;
+  /** The variant of the model, when the provider has more than one. */
+  variant?: string;
+};
+
 /** The question the harness asks a session. */
 export type V2PromptInput = {
   /** The text of the question. */
   text: string;
   /** The agents the question is put to. */
   agents?: { name: string }[];
-  /** The model the turn runs on. */
-  model?: { id: string; providerID: string; variant?: string };
+  /**
+   * The model of the turn.
+   *
+   * The server does not read it: the prompt body has no `model` key, and the
+   * model of a turn is the model of its session, which `setModel` changes.
+   * The field stays because a caller that names a model should not have to
+   * know that the server ignores it.
+   */
+  model?: V2Model;
 };
 
 /** How a permission request is answered. */
@@ -272,9 +313,20 @@ export class V2Client {
     return parseInfo(parseJson(body), body);
   }
 
-  /** Create a session in the directory. */
+  /**
+   * Create a session in the directory.
+   *
+   * The location of the session is in the body, not in the query: the query
+   * says which directory a call reads, and a session is created where the
+   * body says. A session created without it lands in the working directory
+   * of the server, and the case then runs in the wrong project with the
+   * board and the leases of another one.
+   */
   async createSession(input: { title?: string } = {}): Promise<V2Session> {
-    const body = await this.send('POST', '/session', input);
+    const body = await this.send('POST', '/session', {
+      ...input,
+      location: { directory: this.directory },
+    });
     return parseSession(envelopeOf(parseJson(body), body).data, body);
   }
 
@@ -282,6 +334,29 @@ export class V2Client {
   async prompt(sessionID: string, input: V2PromptInput): Promise<V2PromptResult> {
     const body = await this.send('POST', `/session/${encodeURIComponent(sessionID)}/prompt`, input);
     return parsePromptResult(envelopeOf(parseJson(body), body).data, body);
+  }
+
+  /**
+   * Switch the agent a session runs.
+   *
+   * The prompt body of the 2.x server names the agents a message is put to,
+   * not the agent the session runs: the agent of a turn is the agent of its
+   * session, and this is the route that changes it. A turn that runs under
+   * the default agent is a turn under test that never used the role.
+   */
+  async attachAgent(sessionID: string, agent: string): Promise<void> {
+    await this.send('POST', `/session/${encodeURIComponent(sessionID)}/agent`, { agent });
+  }
+
+  /**
+   * Set the model a session runs on.
+   *
+   * The prompt body has no model: the model of a turn is the model of its
+   * session, and this is the route that changes it. The server answers 204
+   * with an empty body.
+   */
+  async setModel(sessionID: string, model: V2Model): Promise<void> {
+    await this.send('POST', `/session/${encodeURIComponent(sessionID)}/model`, { model });
   }
 
   /**
@@ -546,6 +621,8 @@ function parseSession(value: unknown, body: string): V2Session {
   if (title !== undefined) session.title = title;
   const directory = nestedString(object, 'location', 'directory');
   if (directory !== undefined) session.directory = directory;
+  const parentID = readOptionalString(object, 'parentID');
+  if (parentID !== undefined) session.parentID = parentID;
   const outcome = readOptionalString(object, 'outcome');
   if (outcome !== undefined) session.outcome = outcome;
   const time = readOptionalObject(object, 'time');
@@ -599,7 +676,35 @@ function parseMessage(value: unknown, body: string): V2Message {
   if (content !== undefined) message.content = content.map((part) => parsePart(part, body));
   const error = readOptionalObject(object, 'error');
   if (error !== undefined) message.error = parseMessageError(error);
+  const tokens = readOptionalObject(object, 'tokens');
+  if (tokens !== undefined) message.tokens = parseTokenUsage(tokens);
+  const cost = readOptionalNumber(object, 'cost');
+  if (cost !== undefined) message.cost = cost;
   return message;
+}
+
+/** Read the tokens a message used. */
+function parseTokenUsage(object: Record<string, unknown>): V2TokenUsage {
+  const usage: V2TokenUsage = {};
+  const input = readOptionalNumber(object, 'input');
+  if (input !== undefined) usage.input = input;
+  const output = readOptionalNumber(object, 'output');
+  if (output !== undefined) usage.output = output;
+  const reasoning = readOptionalNumber(object, 'reasoning');
+  if (reasoning !== undefined) usage.reasoning = reasoning;
+  const cache = readOptionalObject(object, 'cache');
+  if (cache !== undefined) usage.cache = parseCacheUsage(cache);
+  return usage;
+}
+
+/** Read the cache the tokens of a message used. */
+function parseCacheUsage(object: Record<string, unknown>): { read?: number; write?: number } {
+  const cache: { read?: number; write?: number } = {};
+  const read = readOptionalNumber(object, 'read');
+  if (read !== undefined) cache.read = read;
+  const write = readOptionalNumber(object, 'write');
+  if (write !== undefined) cache.write = write;
+  return cache;
 }
 
 /** Read the times of a message. */

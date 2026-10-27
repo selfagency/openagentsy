@@ -16,6 +16,7 @@ import {
 } from '@openagentsy/core';
 import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
 import { type ParseError, parse as parseJsonc } from 'jsonc-parser';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { gitFreeEnv } from './git-env.js';
 import type { OpenCodeRuntime } from './opencode.js';
 
@@ -259,6 +260,74 @@ export async function waitForRecord(
 }
 
 /**
+ * The judge agent, in the shape the runtime reads.
+ *
+ * The judge is not a role, so the CLI does not write it: the suite copies the
+ * template into the case directory. The template is an OpenCode 1 file, and
+ * the 2.x server reads a different frontmatter: the permission map becomes
+ * an ordered list of rules and the tools carry the 2.x names. A file the 2.x
+ * server cannot read is an agent that does not exist, and the judge then
+ * answers without its instructions: measured on 2026-10-27, the judge of the
+ * budget stop case answered in prose and the case failed on the answer.
+ */
+async function judgeAgent(repoRoot: string, runtime: OpenCodeRuntime): Promise<string> {
+  const template = await readFile(
+    join(repoRoot, 'packages', 'evals', 'templates', 'judge.md'),
+    'utf8',
+  );
+  if (runtime.major < 2) return template;
+  return v2JudgeAgent(template);
+}
+
+/** The tools of the 2.x server under the names the 1.x server used. */
+const V2_TOOL_NAMES: Record<string, string> = { bash: 'shell', task: 'subagent' };
+
+/** The tools the 2.x server has no action for. */
+const V2_DROPPED_TOOLS = new Set(['lsp', 'list']);
+
+/**
+ * The judge file of the 2.x server.
+ *
+ * The permission map of the template becomes a list of rules, the tools are
+ * renamed, and the model is left out: the model of the judge's session is
+ * the one the harness set, and a model in the file would argue with it.
+ */
+function v2JudgeAgent(template: string): string {
+  const parts = splitAgentFile(template);
+  if (parts === undefined) return template;
+  const permission = (parts.frontmatter['permission'] ?? {}) as Record<string, string>;
+  const rules = Object.entries(permission)
+    .filter(([tool]) => !V2_DROPPED_TOOLS.has(tool))
+    .map(([tool, effect]) => ({
+      action: V2_TOOL_NAMES[tool] ?? tool,
+      resource: '*',
+      effect,
+    }));
+  const frontmatter = {
+    description: parts.frontmatter['description'],
+    mode: parts.frontmatter['mode'],
+    steps: parts.frontmatter['steps'],
+    permissions: rules,
+  };
+  return `---\n${stringifyYaml(frontmatter, { lineWidth: 0 }).trimEnd()}\n---\n\n${parts.body}`;
+}
+
+/** The frontmatter of an agent file, and the body under it. */
+function splitAgentFile(
+  text: string,
+): { frontmatter: Record<string, unknown>; body: string } | undefined {
+  if (!text.startsWith('---\n')) return undefined;
+  const end = text.indexOf('\n---', 3);
+  if (end === -1) return undefined;
+  const parsed = parseYaml(text.slice(4, end)) as unknown;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  return {
+    frontmatter: parsed as Record<string, unknown>,
+    body: text.slice(end + 4).replace(/^\n+/, ''),
+  };
+}
+
+/**
  * Wire a directory the way a real project is wired: the agents, the plugin,
  * the board server and the leases.
  *
@@ -321,8 +390,10 @@ export async function prepare(
       'build',
       '--root',
       root,
+      // The agents are built for the runtime that will read them: the two
+      // runtimes read different permission keys.
       '--target',
-      'v1',
+      options.runtime.major >= 2 ? 'v2' : 'v1',
     ],
     { cwd: root },
   );
@@ -344,9 +415,10 @@ export async function prepare(
   }
   // The judge agent, which has no tools and answers with one JSON object.
   await mkdir(join(root, '.opencode', 'agents'), { recursive: true });
-  await copyFile(
-    join(options.repoRoot, 'packages', 'evals', 'templates', 'judge.md'),
+  await writeFile(
     join(root, '.opencode', 'agents', 'judge.md'),
+    await judgeAgent(options.repoRoot, options.runtime),
+    'utf8',
   );
 
   // The MCP servers the machine already runs are switched off for the case,

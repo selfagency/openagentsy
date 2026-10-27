@@ -6,8 +6,646 @@ import { basename, join, sep } from 'node:path';
 import { promisify } from 'node:util';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 import { gitFreeEnv } from './git-env.js';
+import {
+  mcpServer,
+  V2Client,
+  type V2EventStream,
+  type V2Message,
+  type V2MessagePart,
+  type V2Transport,
+} from './v2client.js';
+
+/**
+ * A model, as the server names it.
+ */
+export type HarnessModel = {
+  /** The provider the model belongs to. */
+  providerID: string;
+  /** The id of the model. */
+  modelID: string;
+};
+
+/**
+ * A part of a message.
+ *
+ * A text part carries its text, a tool part carries the name of the tool and
+ * the arguments of the call, and a part the server made by itself is marked.
+ */
+export type HarnessPart = {
+  /** What the part is: `text`, `tool` and so on. */
+  type: string;
+  /** The text of a text part. */
+  text?: string;
+  /** The name of the tool of a tool part. */
+  tool?: string;
+  /** The state of a tool part, with the arguments of the call. */
+  state?: { input?: unknown };
+  /** Whether the server made the part by itself. */
+  synthetic?: boolean;
+  /** Whether the server ignored the part. */
+  ignored?: boolean;
+};
+
+/**
+ * The times of a message, in the shape the harness reads.
+ */
+export type HarnessTime = { created?: number; completed?: number };
+
+/**
+ * A message of a session, in the shape the harness reads.
+ *
+ * The harness reads one shape, whatever the runtime sent: an `info` with the
+ * role, the times and the error, and a list of parts. OpenCode 1 sends that
+ * shape. OpenCode 2 sends a union of tagged messages instead, so the v2
+ * client reads the union and answers with this shape, and the readers of the
+ * harness are written once and cannot tell the two runtimes apart.
+ */
+export type HarnessMessage = {
+  info: {
+    /** The role of the message: `user`, `assistant` and so on. */
+    role: string;
+    /** The times of the message. */
+    time?: HarnessTime;
+    /** The error of a failed turn. */
+    error?: { message?: string; data?: { statusCode?: number } };
+    /** The tokens the turn used, when the server counted them. */
+    tokens?: {
+      input: number;
+      output: number;
+      reasoning: number;
+      cache: { read: number; write: number };
+    };
+    /** What the turn cost, in dollars. */
+    cost?: number;
+  };
+  /** The parts of the message. */
+  parts: HarnessPart[];
+};
+
+/**
+ * One event of the server's stream.
+ *
+ * The shape is the runtime's own: OpenCode 1 sends `{type, properties}` and
+ * OpenCode 2 sends the envelope `{id, created, type, data}`. The readers
+ * below take both, the way the idle reader does, so the pump is written once.
+ */
+export type HarnessEvent = {
+  /** What happened. */
+  type: string;
+  /** The payload of an OpenCode 1 event. */
+  properties?: unknown;
+  /** The payload of an OpenCode 2 event. */
+  data?: unknown;
+};
+
+/**
+ * How a permission request is answered.
+ */
+export type PermissionDecision = 'once' | 'always' | 'reject';
+
+/**
+ * The state of an MCP server, as the harness reads it.
+ */
+export type HarnessMcpStatus = {
+  /** The state of the server: `connected`, `failed`, `pending` and so on. */
+  status: string;
+  /** What the server said when it failed. */
+  error?: string;
+};
+
+/**
+ * A session of a directory, as the harness reads it.
+ */
+export type HarnessSession = {
+  /** The id of the session. */
+  id: string;
+  /** The title the session carries. */
+  title?: string;
+  /** The session that dispatched this one. */
+  parentID?: string;
+};
+
+/**
+ * The question the harness puts to a session.
+ */
+export type HarnessPrompt = {
+  /** The session the question is put to. */
+  sessionID: string;
+  /** The directory the session lives in. */
+  directory: string;
+  /** The agent the question is put to. */
+  agent: string;
+  /** The model the turn runs on. */
+  model?: HarnessModel;
+  /** The text of the question. */
+  text: string;
+};
+
+/**
+ * The calls the harness makes on the OpenCode server.
+ *
+ * The harness asks the same questions of both runtimes, and the two servers
+ * answer them in different words: OpenCode 1 serves `/session` and OpenCode
+ * 2 serves `/api/session`, and the shapes they answer with are not the same.
+ * This interface is the boundary. The harness's logic sits on this side of
+ * it, and the two implementations sit on the other side, where a call is
+ * made and a shape is read.
+ */
+export type HarnessClient = {
+  /** Create a session in a directory. */
+  createSession(input: { title: string; directory: string }): Promise<string>;
+  /** Put a question to a session. The turn runs in the background. */
+  prompt(input: HarnessPrompt): Promise<void>;
+  /** The messages of a session, oldest first. */
+  messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]>;
+  /** The sessions the server is working on. */
+  busySessions(input: { directory: string }): Promise<ReadonlySet<string>>;
+  /** The events of the server, for a directory. */
+  events(input: { directory: string }): Promise<AsyncIterable<HarnessEvent>>;
+  /** Answer a permission request. */
+  replyPermission(input: {
+    sessionID: string;
+    permissionID: string;
+    directory: string;
+    decision: PermissionDecision;
+  }): Promise<void>;
+  /** The state of the board server, when the directory has one. */
+  boardStatus(input: { directory: string }): Promise<HarnessMcpStatus | undefined>;
+  /** Interrupt the turn a session is running. */
+  interrupt(input: { sessionID: string; directory: string }): Promise<void>;
+  /** Delete a session. */
+  deleteSession(input: { sessionID: string; directory: string }): Promise<void>;
+  /** The sessions of a directory. */
+  listSessions(input: { directory: string }): Promise<HarnessSession[]>;
+};
 
 const execFileAsync = promisify(execFile);
+/**
+ * The harness on OpenCode 1.
+ *
+ * The server speaks the SDK's own API, so the calls are the SDK's calls and
+ * the shapes are the SDK's shapes. The work here is the boundary: the
+ * message list becomes the shape the harness reads, and the busy map becomes
+ * the set of the sessions the server is working on.
+ */
+export class V1HarnessClient implements HarnessClient {
+  constructor(private readonly client: OpencodeClient) {}
+
+  async createSession(input: { title: string; directory: string }): Promise<string> {
+    const created = await this.client.session.create({
+      body: { title: input.title },
+      query: { directory: input.directory },
+    });
+    if (created.error) {
+      throw new Error(`could not create a session: ${JSON.stringify(created.error)}`);
+    }
+    const id = created.data?.id;
+    if (id === undefined) throw new Error('the server created a session without an id');
+    return id;
+  }
+
+  async prompt(input: HarnessPrompt): Promise<void> {
+    const asked = await this.client.session.promptAsync({
+      path: { id: input.sessionID },
+      body: {
+        agent: input.agent,
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        parts: [{ type: 'text', text: input.text }],
+      },
+      query: { directory: input.directory },
+    });
+    if (asked.error) throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
+  }
+
+  async messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]> {
+    const listed = await this.client.session.messages({
+      path: { id: input.sessionID },
+      query: { directory: input.directory },
+    });
+    return (listed.data ?? []).map(v1Message);
+  }
+
+  async busySessions(input: { directory: string }): Promise<ReadonlySet<string>> {
+    const status = await this.client.session.status({ query: { directory: input.directory } });
+    const busy = asObject(status.data) ?? {};
+    return new Set(Object.keys(busy));
+  }
+
+  async events(input: { directory: string }): Promise<AsyncIterable<HarnessEvent>> {
+    const subscription = await this.client.event.subscribe({
+      query: { directory: input.directory },
+    });
+    return v1Events(subscription.stream);
+  }
+
+  async replyPermission(input: {
+    sessionID: string;
+    permissionID: string;
+    directory: string;
+    decision: PermissionDecision;
+  }): Promise<void> {
+    await this.client.postSessionIdPermissionsPermissionId({
+      path: { id: input.sessionID, permissionID: input.permissionID },
+      body: { response: input.decision },
+      query: { directory: input.directory },
+    });
+  }
+
+  async boardStatus(input: { directory: string }): Promise<HarnessMcpStatus | undefined> {
+    const status = await this.client.mcp.status({ query: { directory: input.directory } });
+    const servers = asObject(status.data) ?? {};
+    const board = asObject(servers['openagentsy']);
+    if (board === undefined) return undefined;
+    const state = board['status'];
+    return { status: typeof state === 'string' ? state : 'unknown' };
+  }
+
+  async interrupt(input: { sessionID: string; directory: string }): Promise<void> {
+    await this.client.session.abort({
+      path: { id: input.sessionID },
+      query: { directory: input.directory },
+    });
+  }
+
+  async deleteSession(input: { sessionID: string; directory: string }): Promise<void> {
+    const deleted = await this.client.session.delete({
+      path: { id: input.sessionID },
+      query: { directory: input.directory },
+    });
+    if (deleted.error !== undefined) {
+      throw new Error(`the server refused the delete: ${JSON.stringify(deleted.error)}`);
+    }
+  }
+
+  async listSessions(input: { directory: string }): Promise<HarnessSession[]> {
+    const listed = await this.client.session.list({ query: { directory: input.directory } });
+    return (listed.data ?? []).map((session) => ({
+      id: session.id,
+      title: session.title,
+      ...(session.parentID === undefined ? {} : { parentID: session.parentID }),
+    }));
+  }
+}
+
+/**
+ * The harness on OpenCode 2.
+ *
+ * The 2.x server moved every route under `/api`, renamed the shapes it
+ * answers with, and a client of it is scoped to one directory. The
+ * implementation keeps one client per directory the suite asks about, and
+ * reads the 2.x shapes into the shape the harness reads.
+ */
+export class V2HarnessClient implements HarnessClient {
+  private readonly clients = new Map<string, V2Client>();
+
+  constructor(
+    private readonly options: { baseUrl: string; password?: string; transport?: V2Transport },
+  ) {}
+
+  /** The client of a directory, made when the directory is asked about first. */
+  private client(directory: string): V2Client {
+    const known = this.clients.get(directory);
+    if (known !== undefined) return known;
+    const options = {
+      baseUrl: this.options.baseUrl,
+      directory,
+      ...(this.options.password !== undefined ? { password: this.options.password } : {}),
+    };
+    const client =
+      this.options.transport === undefined
+        ? new V2Client(options)
+        : new V2Client(options, this.options.transport);
+    this.clients.set(directory, client);
+    return client;
+  }
+
+  async createSession(input: { title: string; directory: string }): Promise<string> {
+    const session = await this.client(input.directory).createSession({ title: input.title });
+    return session.id;
+  }
+
+  async prompt(input: HarnessPrompt): Promise<void> {
+    const client = this.client(input.directory);
+    // The agent of a turn is the agent of its session: the prompt body names
+    // the agents a message is put to, and the route below is the one that
+    // switches the agent of the session. A turn that runs under the default
+    // agent is a turn under test that never used the role.
+    await client.attachAgent(input.sessionID, input.agent);
+    // The model of a turn is the model of its session: the prompt body has no
+    // model, and the route that changes it is the one below.
+    if (input.model !== undefined) {
+      await client.setModel(input.sessionID, {
+        id: input.model.modelID,
+        providerID: input.model.providerID,
+      });
+    }
+    await client.prompt(input.sessionID, {
+      text: input.text,
+      agents: [{ name: input.agent }],
+    });
+  }
+
+  async messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]> {
+    const list = await this.client(input.directory).messages(input.sessionID);
+    return v2Messages(list.messages);
+  }
+
+  async busySessions(input: { directory: string }): Promise<ReadonlySet<string>> {
+    const active = await this.client(input.directory).activeSessions();
+    return new Set(Object.keys(active));
+  }
+
+  async events(input: { directory: string }): Promise<AsyncIterable<HarnessEvent>> {
+    const stream = await this.client(input.directory).events();
+    return v2Events(stream);
+  }
+
+  async replyPermission(input: {
+    sessionID: string;
+    permissionID: string;
+    directory: string;
+    decision: PermissionDecision;
+  }): Promise<void> {
+    await this.client(input.directory).replyPermission(input.sessionID, input.permissionID, {
+      decision: input.decision,
+    });
+  }
+
+  async boardStatus(input: { directory: string }): Promise<HarnessMcpStatus | undefined> {
+    const status = await this.client(input.directory).mcpStatus();
+    const server = mcpServer(status, 'openagentsy');
+    if (server === undefined) return undefined;
+    return {
+      status: server.status.status,
+      ...(server.status.error !== undefined ? { error: server.status.error } : {}),
+    };
+  }
+
+  async interrupt(input: { sessionID: string; directory: string }): Promise<void> {
+    await this.client(input.directory).interrupt(input.sessionID);
+  }
+
+  async deleteSession(input: { sessionID: string; directory: string }): Promise<void> {
+    // The server answers 204 with an empty body, and the client says so.
+    await this.client(input.directory).deleteSession(input.sessionID);
+  }
+
+  async listSessions(input: { directory: string }): Promise<HarnessSession[]> {
+    const list = await this.client(input.directory).listSessions();
+    return list.sessions.map((session) => ({
+      id: session.id,
+      ...(session.title !== undefined ? { title: session.title } : {}),
+      ...(session.parentID !== undefined ? { parentID: session.parentID } : {}),
+    }));
+  }
+}
+
+/**
+ * The messages of an OpenCode 2 session, in the shape the harness reads.
+ *
+ * The 2.x server sends a union of tagged messages. A user message is flat:
+ * its text is on the message itself and it has no parts. Only an assistant
+ * message carries parts, and the text of a part is on the part while the
+ * name of a tool and the arguments of its call are on the part's state.
+ *
+ * The idle message is the 2.x way of saying that the turn is over, and the
+ * harness has no message for it: the error it carries is the error of the
+ * turn, so it is folded into the last assistant message and the message
+ * itself is dropped. A session that answered then reads exactly like a
+ * session of the 1.x server answered.
+ */
+export function v2Messages(messages: readonly V2Message[]): HarnessMessage[] {
+  const mapped: HarnessMessage[] = [];
+  for (const message of messages) {
+    if (message.type === 'idle') {
+      foldIdleError(mapped, message);
+      continue;
+    }
+    mapped.push(v2Message(message));
+  }
+  return mapped;
+}
+
+/** The error of the turn, folded into the last assistant message. */
+function foldIdleError(mapped: HarnessMessage[], idle: V2Message): void {
+  const error = v2Error(idle);
+  if (error === undefined) return;
+  const last = mapped.at(-1);
+  if (last === undefined || last.info.role !== 'assistant' || last.info.error !== undefined) return;
+  last.info.error = error;
+}
+
+/** One message of an OpenCode 2 session, in the shape the harness reads. */
+function v2Message(message: V2Message): HarnessMessage {
+  const type = message.type ?? 'unknown';
+  const time = v2Time(message);
+  if (type === 'user') return v2UserMessage(message, time);
+  if (type === 'assistant') return v2AssistantMessage(message, time);
+  if (type === 'synthetic') return v2SyntheticMessage(message, time);
+  return { info: { role: type, ...(time === undefined ? {} : { time }) }, parts: [] };
+}
+
+/**
+ * A user message of an OpenCode 2 session.
+ *
+ * The message is flat: its text is on the message itself and it has no
+ * parts.
+ */
+function v2UserMessage(message: V2Message, time: HarnessTime | undefined): HarnessMessage {
+  return {
+    info: { role: 'user', ...(time === undefined ? {} : { time }) },
+    parts: [{ type: 'text', text: message.text ?? '' }],
+  };
+}
+
+/**
+ * An assistant message of an OpenCode 2 session.
+ *
+ * The parts carry the answer: the text of a part is on the part, and the
+ * name of a tool and the arguments of its call are on the part's state.
+ */
+function v2AssistantMessage(message: V2Message, time: HarnessTime | undefined): HarnessMessage {
+  const error = v2Error(message);
+  const tokens = harnessTokens(message.tokens);
+  const cost = message.cost;
+  return {
+    info: {
+      role: 'assistant',
+      ...(time === undefined ? {} : { time }),
+      ...(error === undefined ? {} : { error }),
+      ...(tokens === undefined ? {} : { tokens }),
+      ...(cost !== undefined ? { cost } : {}),
+    },
+    parts: (message.content ?? []).map(v2Part),
+  };
+}
+
+/**
+ * A synthetic message of an OpenCode 2 session.
+ *
+ * The model switch is a message of its own and it carries no reply, so the
+ * part is marked and the reader of the reply passes over it.
+ */
+function v2SyntheticMessage(message: V2Message, time: HarnessTime | undefined): HarnessMessage {
+  return {
+    info: { role: 'assistant', ...(time === undefined ? {} : { time }) },
+    parts: [{ type: 'text', text: message.text ?? '', synthetic: true, ignored: true }],
+  };
+}
+
+/** The times of a message of an OpenCode 2 session. */
+function v2Time(message: V2Message): HarnessTime | undefined {
+  const time = message.time;
+  if (time === undefined) return undefined;
+  const created = time.created;
+  const completed = time.completed;
+  return {
+    ...(created !== undefined ? { created } : {}),
+    ...(completed !== undefined ? { completed } : {}),
+  };
+}
+
+/** The error of a failed turn of an OpenCode 2 session. */
+function v2Error(
+  message: V2Message,
+): { message?: string; data?: { statusCode?: number } } | undefined {
+  const error = message.error;
+  if (error === undefined) return undefined;
+  const text = error.message;
+  const status = error.status;
+  return {
+    ...(text !== undefined ? { message: text } : {}),
+    ...(status !== undefined ? { data: { statusCode: status } } : {}),
+  };
+}
+
+/** One part of an assistant message of an OpenCode 2 session. */
+function v2Part(part: V2MessagePart): HarnessPart {
+  const text = part.text;
+  const name = part.name;
+  const state = part.state;
+  const input = state?.input;
+  return {
+    type: part.type ?? 'unknown',
+    ...(text !== undefined ? { text } : {}),
+    ...(name !== undefined ? { tool: name } : {}),
+    ...(state === undefined ? {} : { state: { ...(input !== undefined ? { input } : {}) } }),
+  };
+}
+
+/** A message of an OpenCode 1 session, in the shape the harness reads. */
+function v1Message(message: unknown): HarnessMessage {
+  const shape = asObject(message) ?? {};
+  const info = asObject(shape['info']) ?? {};
+  const time = v1Time(asObject(info['time']));
+  const error = v1Error(asObject(info['error']));
+  const tokens = harnessTokens(info['tokens']);
+  const cost = info['cost'];
+  const parts = Array.isArray(shape['parts']) ? shape['parts'] : [];
+  return {
+    info: {
+      role: typeof info['role'] === 'string' ? info['role'] : 'assistant',
+      ...(time === undefined ? {} : { time }),
+      ...(error === undefined ? {} : { error }),
+      ...(tokens === undefined ? {} : { tokens }),
+      ...(typeof cost === 'number' ? { cost } : {}),
+    },
+    parts: parts.map(v1Part),
+  };
+}
+
+/** The tokens a turn used, when the server counted them. */
+function harnessTokens(value: unknown): HarnessMessage['info']['tokens'] | undefined {
+  const shape = asObject(value);
+  if (shape === undefined) return undefined;
+  const cache = asObject(shape['cache']) ?? {};
+  return {
+    input: numberOf(shape['input']),
+    output: numberOf(shape['output']),
+    reasoning: numberOf(shape['reasoning']),
+    cache: { read: numberOf(cache['read']), write: numberOf(cache['write']) },
+  };
+}
+
+/** The number under a key, or zero. */
+function numberOf(value: unknown): number {
+  return typeof value === 'number' ? value : 0;
+}
+
+/** The times of a message of an OpenCode 1 session. */
+function v1Time(
+  time: Record<string, unknown> | undefined,
+): { created?: number; completed?: number } | undefined {
+  if (time === undefined) return undefined;
+  const created = time['created'];
+  const completed = time['completed'];
+  return {
+    ...(typeof created === 'number' ? { created } : {}),
+    ...(typeof completed === 'number' ? { completed } : {}),
+  };
+}
+
+/** The error of a failed turn of an OpenCode 1 session. */
+function v1Error(
+  error: Record<string, unknown> | undefined,
+): { message?: string; data?: { statusCode?: number } } | undefined {
+  if (error === undefined) return undefined;
+  const message = error['message'];
+  const data = asObject(error['data']);
+  const statusCode = data?.['statusCode'];
+  return {
+    ...(typeof message === 'string' ? { message } : {}),
+    ...(data === undefined
+      ? {}
+      : { data: { ...(typeof statusCode === 'number' ? { statusCode } : {}) } }),
+  };
+}
+
+/** One part of a message of an OpenCode 1 session. */
+function v1Part(part: unknown): HarnessPart {
+  const shape = asObject(part) ?? {};
+  const state = asObject(shape['state']);
+  const input = state?.['input'];
+  const text = shape['text'];
+  const tool = shape['tool'];
+  const synthetic = shape['synthetic'];
+  const ignored = shape['ignored'];
+  return {
+    type: typeof shape['type'] === 'string' ? shape['type'] : 'unknown',
+    ...(typeof text === 'string' ? { text } : {}),
+    ...(typeof tool === 'string' ? { tool } : {}),
+    ...(state === undefined ? {} : { state: { ...(input !== undefined ? { input } : {}) } }),
+    ...(synthetic === true ? { synthetic: true } : {}),
+    ...(ignored === true ? { ignored: true } : {}),
+  };
+}
+
+/** The events of an OpenCode 1 server, in the shape the pump reads. */
+async function* v1Events(stream: AsyncIterable<unknown>): AsyncGenerator<HarnessEvent> {
+  for await (const event of stream) {
+    const shape = asObject(event) ?? {};
+    const type = shape['type'];
+    const properties = shape['properties'];
+    yield {
+      type: typeof type === 'string' ? type : 'unknown',
+      ...(properties !== undefined ? { properties } : {}),
+    };
+  }
+}
+
+/** The events of an OpenCode 2 server, in the shape the pump reads. */
+async function* v2Events(stream: V2EventStream): AsyncGenerator<HarnessEvent> {
+  try {
+    for await (const event of stream) {
+      yield { type: event.type, ...(event.data !== undefined ? { data: event.data } : {}) };
+    }
+  } finally {
+    // The socket of the stream stays open until it is closed, and a case that
+    // is over leaves it behind.
+    await stream.close();
+  }
+}
+
 export type SessionTurn = {
   /** The text the agent under test produced. */
   text: string;
@@ -20,7 +658,7 @@ export type SessionTurn = {
 };
 
 export type OpenCodeHarness = {
-  client: OpencodeClient;
+  client: HarnessClient;
   root: string;
   /**
    * The runtime the harness started.
@@ -116,19 +754,29 @@ export async function readRuntime(binary: string): Promise<OpenCodeRuntime> {
 }
 
 /**
+ * A permission request, as the harness reads it.
+ */
+export type PermissionRequest = {
+  /** The session that asked. */
+  sessionID: string;
+  /** The id of the request. */
+  permissionID: string;
+  /** What the session says about the request. */
+  title: string;
+  /** What the session wants to do, for example `edit`. */
+  type: string;
+  /** The paths the request is about. */
+  patterns: string[];
+};
+
+/**
  * How a permission request is answered.
  *
  * The Lead asks before it runs a shell command, and in a headless session
  * nobody is there to answer, so the tool call waits forever. The harness
  * answers, the way the user in the case would.
  */
-export type PermissionPolicy = (request: {
-  sessionID: string;
-  permissionID: string;
-  title: string;
-  type: string;
-  patterns: string[];
-}) => 'once' | 'always' | 'reject';
+export type PermissionPolicy = (request: PermissionRequest) => PermissionDecision;
 
 const DEFAULT_PERMISSION: PermissionPolicy = () => 'once';
 
@@ -143,11 +791,56 @@ const DEFAULT_PERMISSION: PermissionPolicy = () => 'once';
 export function permissionPatterns(properties: {
   pattern?: string | string[] | undefined;
   patterns?: string[] | undefined;
+  resources?: string[] | undefined;
 }): string[] {
   if (Array.isArray(properties.pattern)) return properties.pattern;
   if (typeof properties.pattern === 'string') return [properties.pattern];
   if (Array.isArray(properties.patterns)) return properties.patterns;
+  if (Array.isArray(properties.resources)) return properties.resources;
   return [];
+}
+
+/**
+ * The events that carry a permission request.
+ *
+ * OpenCode 1 sent `permission.updated` and OpenCode 2 sends
+ * `permission.asked`. Every other event of the stream is not a request, and
+ * some of them carry an id and a session id of their own: the id of a tool
+ * call, for one, and the server refuses that as the id of a permission.
+ */
+const PERMISSION_EVENTS = new Set(['permission.updated', 'permission.asked']);
+
+/**
+ * The permission request an event carries, when it is one.
+ *
+ * OpenCode 1 sent `permission.updated` and put the request under
+ * `properties`, with the paths it is about under `pattern`. OpenCode 2 sends
+ * `permission.asked` and puts the request under `data`, with the same paths
+ * under `resources`. Both are read here, so the pump answers a request the
+ * same way on both runtimes.
+ */
+export function permissionRequestOf(event: HarnessEvent): PermissionRequest | undefined {
+  if (!PERMISSION_EVENTS.has(event.type)) return undefined;
+  const payload = asObject(event.properties) ?? asObject(event.data);
+  if (payload === undefined) return undefined;
+  const id = payload['id'];
+  const sessionID = payload['sessionID'];
+  if (typeof id !== 'string' || typeof sessionID !== 'string') return undefined;
+  const pattern = payload['pattern'];
+  const patternValue = typeof pattern === 'string' ? pattern : stringList(pattern);
+  const patterns = stringList(payload['patterns']);
+  const resources = stringList(payload['resources']);
+  return {
+    sessionID,
+    permissionID: id,
+    title: stringOf(payload, 'title') ?? stringOf(payload, 'message') ?? '',
+    type: stringOf(payload, 'type') ?? stringOf(payload, 'action') ?? '',
+    patterns: permissionPatterns({
+      ...(patternValue !== undefined ? { pattern: patternValue } : {}),
+      ...(patterns !== undefined ? { patterns } : {}),
+      ...(resources !== undefined ? { resources } : {}),
+    }),
+  };
 }
 
 /**
@@ -211,6 +904,18 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+/** The string under a key, when the value is a string. */
+function stringOf(object: Record<string, unknown>, key: string): string | undefined {
+  const value = object[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** The strings of a list, when the value is a list. */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === 'string');
+}
+
 /**
  * Watch the server for permission requests and answer them.
  *
@@ -230,11 +935,11 @@ export async function answerPermissions(
   directory: string,
   policy: PermissionPolicy = DEFAULT_PERMISSION,
 ): Promise<() => void> {
-  const stream = await harness.client.event.subscribe({ query: { directory } });
+  const stream = await harness.client.events({ directory });
   let stopped = false;
 
   const pump = async (): Promise<void> => {
-    for await (const event of stream.stream) {
+    for await (const event of stream) {
       if (stopped) return;
       if (process.env.OPENAGENTSY_EVAL_TRACE) {
         const { appendFileSync } = await import('node:fs');
@@ -247,22 +952,8 @@ export async function answerPermissions(
       // turn reads it, and a run that hung says nothing without it.
       const idleSession = idleSessionOf(event);
       if (idleSession !== undefined) harness.idle.record(idleSession);
-      if (event.type !== 'permission.updated') continue;
-      const properties = event.properties as {
-        id: string;
-        sessionID: string;
-        title?: string;
-        type?: string;
-        pattern?: string | string[];
-        patterns?: string[];
-      };
-      const request = {
-        sessionID: properties.sessionID,
-        permissionID: properties.id,
-        title: properties.title ?? '',
-        type: properties.type ?? '',
-        patterns: permissionPatterns(properties),
-      };
+      const request = permissionRequestOf(event);
+      if (request === undefined) continue;
       // Every request is written down before it is answered. A case that
       // waits for a permission answer and a case that waits for a child
       // session that never returns look the same in a run log, and only the
@@ -274,10 +965,11 @@ export async function answerPermissions(
       // The subscription is scoped to the case directory, so a session that
       // asks here belongs to this case; a host error naming it is attributed.
       harness.trackSession(request.sessionID, basename(directory));
-      await harness.client.postSessionIdPermissionsPermissionId({
-        path: { id: request.sessionID, permissionID: request.permissionID },
-        body: { response },
-        query: { directory },
+      await harness.client.replyPermission({
+        sessionID: request.sessionID,
+        permissionID: request.permissionID,
+        directory,
+        decision: response,
       });
       process.stdout.write(`[permission] ${request.sessionID} answered ${response}\n`);
     }
@@ -777,10 +1469,20 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     throw error;
   }
 
-  const client = createOpencodeClient({
-    baseUrl,
-    headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
-  });
+  // The runtime decides which API the harness talks to: OpenCode 1 serves
+  // `/session` and OpenCode 2 serves `/api/session`, and the harness's logic
+  // sits on this side of that difference.
+  const client: HarnessClient =
+    runtime.major >= 2
+      ? new V2HarnessClient({ baseUrl, password })
+      : new V1HarnessClient(
+          createOpencodeClient({
+            baseUrl,
+            headers: {
+              Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`,
+            },
+          }),
+        );
 
   const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
   const sessions = new Map<string, string>();
@@ -1040,11 +1742,9 @@ export async function waitForBoard(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const status = await harness.client.mcp.status({ query: { directory } });
-    const servers = status.data ?? {};
-    const board = servers.openagentsy;
-    if (board !== undefined && 'status' in board && board.status === 'connected') return;
-    if (board !== undefined && 'status' in board && board.status === 'failed') {
+    const board = await harness.client.boardStatus({ directory });
+    if (board?.status === 'connected') return;
+    if (board?.status === 'failed') {
       throw new Error(`the board server failed to start: ${JSON.stringify(board)}`);
     }
     if (Date.now() >= deadline) {
@@ -1070,17 +1770,7 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const { harness, directory, agent } = options;
   const client = harness.client;
 
-  const created = await client.session.create({
-    body: { title: `eval ${agent}` },
-    query: { directory },
-  });
-  if (created.error) {
-    throw new Error(`could not create a session: ${JSON.stringify(created.error)}`);
-  }
-  const sessionID = created.data?.id;
-  if (sessionID === undefined) {
-    throw new Error('the server created a session without an id');
-  }
+  const sessionID = await client.createSession({ title: `eval ${agent}`, directory });
   // A host error that names this session belongs to this case. The case is
   // its throwaway directory; the directory is what the suite gives it.
   harness.trackSession(sessionID, basename(directory));
@@ -1098,18 +1788,13 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     // The idle events that came before this turn are not this turn's: the
     // wait ends on the idle of the turn it waits for.
     harness.idle.beginTurn(sessionID);
-    const asked = await client.session.promptAsync({
-      path: { id: sessionID },
-      body: {
-        agent,
-        ...(options.model !== undefined ? { model: parseModel(options.model) } : {}),
-        parts: [{ type: 'text', text: options.text }],
-      },
-      query: { directory },
+    await client.prompt({
+      sessionID,
+      directory,
+      agent,
+      ...(options.model !== undefined ? { model: parseModel(options.model) } : {}),
+      text: options.text,
     });
-    if (asked.error) {
-      throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
-    }
   };
 
   await ask();
@@ -1117,15 +1802,11 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const timeoutMs = options.timeoutMs ?? TRIAL_BUDGET_MS;
   await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
 
-  const messages = await client.session.messages({
-    path: { id: sessionID },
-    query: { directory },
-  });
-  const last = messages.data?.at(-1);
   // The whole list, not only the last message: a climb puts a synthetic
   // message at the end of the session, and the reply is the message before
   // it.
-  let replyFrom: readonly unknown[] = messages.data ?? [];
+  let replyFrom: readonly unknown[] = await client.messages({ sessionID, directory });
+  const last = replyFrom.at(-1);
 
   // A rate limited turn is the provider's answer, not the agent's. The free
   // model tiers answer with 429 when a burst trips their limit, so the turn
@@ -1143,16 +1824,13 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
     await sleep(waitMs);
     await ask();
     await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
-    const again = await client.session.messages({
-      path: { id: sessionID },
-      query: { directory },
-    });
-    const recovered = again.data?.at(-1);
+    const again = await client.messages({ sessionID, directory });
+    const recovered = again.at(-1);
     providerError = providerErrorOf(recovered);
     if (providerError === undefined) {
       // The turn came back. The reply is this one, not the refusal that
       // came before it.
-      replyFrom = again.data ?? [];
+      replyFrom = again;
       break;
     }
   }
@@ -1191,7 +1869,7 @@ type TurnWait = {
 /** The options of the wait for a turn to end. */
 export type WaitForIdleOptions = {
   /** The client the wait asks the server with. */
-  client: OpencodeClient;
+  client: HarnessClient;
   /** The session the turn runs in. */
   sessionID: string;
   /** The directory the session lives in. */
@@ -1259,7 +1937,7 @@ export async function waitForIdle(options: WaitForIdleOptions): Promise<void> {
  * it: the line says what the poll saw.
  */
 async function lastMessageOf(
-  client: OpencodeClient,
+  client: HarnessClient,
   sessionID: string,
   directory: string,
   known: string,
@@ -1282,14 +1960,13 @@ async function lastMessageOf(
  * nothing.
  */
 async function pollOnce(
-  client: OpencodeClient,
+  client: HarnessClient,
   sessionID: string,
   directory: string,
   state: TurnWait,
 ): Promise<boolean> {
-  const status = await client.session.status({ query: { directory } });
-  const busy = status.data as Record<string, unknown> | undefined;
-  if (busy !== undefined && Object.hasOwn(busy, sessionID)) {
+  const busy = await client.busySessions({ directory });
+  if (busy.has(sessionID)) {
     state.seenBusy = true;
     return false;
   }
@@ -1331,15 +2008,11 @@ type MessageSummary = {
 
 /** Read the messages of a session. */
 async function readSessionMessages(
-  client: OpencodeClient,
+  client: HarnessClient,
   sessionID: string,
   directory: string,
 ): Promise<SessionMessages> {
-  const messages = await client.session.messages({
-    path: { id: sessionID },
-    query: { directory },
-  });
-  const list = messages.data ?? [];
+  const list = await client.messages({ sessionID, directory });
   let last: MessageSummary | undefined;
   let lastAssistant: MessageSummary | undefined;
   for (const message of list) {
@@ -1504,28 +2177,21 @@ export async function startFaultServer(mode: '429' | 'down'): Promise<FaultServe
  * aborting the same session for a while.
  */
 export async function killSession(
-  client: OpencodeClient,
+  client: HarnessClient,
   sessionID: string,
   directory: string,
 ): Promise<void> {
   try {
-    await client.session.abort({ path: { id: sessionID }, query: { directory } });
+    await client.interrupt({ sessionID, directory });
   } catch {
     // The session may be gone already; that is the outcome we wanted.
   }
   try {
-    const deleted = await client.session.delete({
-      path: { id: sessionID },
-      query: { directory },
-    });
-    if (deleted.error !== undefined) {
-      process.stderr.write(
-        `[kill] the session ${sessionID} was not deleted: ${JSON.stringify(deleted.error)}\n`,
-      );
-    }
-  } catch {
-    // The client cannot delete, or the server is gone; the abort is all the
-    // kill there is, and the watch keeps cutting the same session.
+    await client.deleteSession({ sessionID, directory });
+  } catch (error) {
+    // The server refused the delete, or the client cannot delete: the abort
+    // is all the kill there is, and the watch keeps cutting the same session.
+    process.stderr.write(`[kill] the session ${sessionID} was not deleted: ${String(error)}\n`);
   }
 }
 
@@ -1564,7 +2230,7 @@ export function selectKillTarget(
 }
 
 export function killSessionWhenItAppears(
-  client: OpencodeClient,
+  client: HarnessClient,
   directory: string,
   matches: (title: string) => boolean,
   options: { attempts?: number; intervalMs?: number; suppressMs?: number } = {},
@@ -1602,7 +2268,7 @@ export function killSessionWhenItAppears(
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
       if (stopped) return;
       try {
-        await client.session.abort({ path: { id }, query: { directory } });
+        await client.interrupt({ sessionID: id, directory });
       } catch {
         // The session may be gone already; that is the outcome we wanted.
       }
@@ -1611,11 +2277,8 @@ export function killSessionWhenItAppears(
   const killed = (async (): Promise<string | undefined> => {
     for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
       try {
-        const listed = await client.session.list({ query: { directory } });
-        const sessions = listed.data ?? [];
-        const ids = new Set(
-          sessions.map((session) => session.id).filter((id): id is string => id !== undefined),
-        );
+        const sessions = await client.listSessions({ directory });
+        const ids = new Set(sessions.map((session) => session.id));
         if (baseline === undefined) baseline = ids;
         const hit = selectKillTarget(sessions, baseline, matches);
         if (hit !== undefined) {

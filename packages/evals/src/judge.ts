@@ -1,6 +1,12 @@
 import { createJevClient, type JevClient, noul } from '@openagentsy/jev';
-import type { OpencodeClient } from '@opencode-ai/sdk';
-import { parseModel } from './opencode.js';
+import {
+  type HarnessClient,
+  type HarnessMessage,
+  type IdleRegistry,
+  parseModel,
+  TRIAL_BUDGET_MS,
+  waitForIdle,
+} from './opencode.js';
 
 /**
  * The probability at which a System One answer counts as met.
@@ -40,7 +46,16 @@ export type Verdict = {
 };
 
 export type JudgeOptions = {
-  client: OpencodeClient;
+  /** The client the judge asks. */
+  client: HarnessClient;
+  /**
+   * The idle events the event stream carried.
+   *
+   * The judge waits for its turn to end, and the stream of the case says
+   * when the turn of a session is over.
+   */
+  idle: IdleRegistry;
+  /** The directory the judge's session lives in. */
   directory: string;
   /** The model that judges. It should be a different family from the one under test. */
   model: string;
@@ -57,6 +72,8 @@ export type JudgeOptions = {
    * is what happened and the conversation is what was said.
    */
   evidence?: string;
+  /** How long the judge's turn may take, in milliseconds. */
+  timeoutMs?: number;
 };
 
 /**
@@ -67,60 +84,53 @@ export type JudgeOptions = {
  * has no tools and answers with one JSON object.
  */
 export async function judge(options: JudgeOptions): Promise<Verdict> {
-  const { client, directory } = options;
+  const { client, directory, idle } = options;
 
-  const created = await client.session.create({
-    body: { title: 'eval judge' },
-    query: { directory },
+  const sessionID = await client.createSession({ title: 'eval judge', directory });
+
+  // The judge agent carries its own instructions, in its file. A system
+  // prompt in the body would replace them, and the Console refuses a request
+  // that carries one: the free tier only answers requests that came from
+  // inside OpenCode, and the override is a path that arrives without the
+  // mark of one.
+  const question = [
+    'The criteria:',
+    ...options.criteria.map((c, index) => `${index + 1}. ${c}`),
+    '',
+    'The conversation:',
+    '',
+    options.transcript,
+    '',
+    options.evidence ? `The state the session left behind:\n\n${options.evidence}` : '',
+  ].join('\n');
+
+  // The turn is asked for in the background and the answer is read out of
+  // the session when the turn ends. OpenCode 2 has no prompt that waits for
+  // the answer, and the wait is the same on both runtimes.
+  idle.beginTurn(sessionID);
+  await client.prompt({
+    sessionID,
+    directory,
+    agent: 'judge',
+    model: parseModel(options.model),
+    text: question,
   });
-  if (created.error) {
-    throw new Error(`could not create the judge session: ${JSON.stringify(created.error)}`);
-  }
-
-  const prompted = await client.session.prompt({
-    path: { id: created.data?.id },
-    body: {
-      agent: 'judge',
-      model: parseModel(options.model),
-      // The judge agent carries its own instructions, in its file. A system
-      // prompt in the body would replace them, and the Console refuses a
-      // request that carries one: the free tier only answers requests that
-      // came from inside OpenCode, and the override is a path that arrives
-      // without the mark of one.
-      parts: [
-        {
-          type: 'text',
-          text: [
-            'The criteria:',
-            ...options.criteria.map((c, index) => `${index + 1}. ${c}`),
-            '',
-            'The conversation:',
-            '',
-            options.transcript,
-            '',
-            options.evidence ? `The state the session left behind:\n\n${options.evidence}` : '',
-          ].join('\n'),
-        },
-      ],
-    },
-    query: { directory },
+  await waitForIdle({
+    client,
+    sessionID,
+    directory,
+    timeoutMs: options.timeoutMs ?? TRIAL_BUDGET_MS,
+    idle,
   });
 
-  if (prompted.error) {
-    throw new Error(`the judge failed: ${JSON.stringify(prompted.error)}`);
-  }
-
-  const text = await replyOf(client, created.data?.id, directory, prompted.data?.parts);
+  const messages = await client.messages({ sessionID, directory });
+  const text = replyOf(messages);
 
   if (text.trim() === '') {
     // The provider's refusal lands on the message, not on the response, so
     // an empty answer means the model never ran. Say which refusal it was.
-    const error = prompted.data?.info?.error;
-    throw new Error(
-      `the judge answered with nothing${
-        error === undefined ? '' : `: ${JSON.stringify(error).slice(0, 300)}`
-      }`,
-    );
+    const error = providerRefusal(messages.at(-1));
+    throw new Error(`the judge answered with nothing${error === undefined ? '' : `: ${error}`}`);
   }
 
   const verdict = parseVerdict(text, options.criteria);
@@ -216,34 +226,35 @@ export async function breakTies(
 }
 
 /**
- * The judge's answer, from wherever it landed.
+ * The judge's answer, from the session's own messages.
  *
- * A prompt that streams can come back with its parts empty, so the session's
- * own messages are the source of truth; the response is the fallback.
+ * The prompt is answered in the background, so the answer is in the session
+ * when the turn ends, and the session's own messages are the source of
+ * truth.
  */
-async function replyOf(
-  client: OpencodeClient,
-  sessionID: string | undefined,
-  directory: string,
-  parts: { type: string }[] | undefined,
-): Promise<string> {
-  if (sessionID !== undefined) {
-    const messages = await client.session.messages({
-      path: { id: sessionID },
-      query: { directory },
-    });
-    const last = messages.data?.at(-1);
-    const text = (last?.parts ?? [])
-      .filter((part): part is Extract<typeof part, { type: 'text' }> => part.type === 'text')
-      .map((part) => part.text)
-      .join('\n');
-    if (text.trim() !== '') return text;
-  }
-
-  return (parts ?? [])
+function replyOf(messages: readonly HarnessMessage[]): string {
+  const last = messages.at(-1);
+  return (last?.parts ?? [])
     .filter((part) => part.type === 'text')
-    .map((part) => (part as unknown as { text: string }).text)
+    .map((part) => part.text ?? '')
     .join('\n');
+}
+
+/**
+ * What the provider said, when it refused the judge's turn.
+ *
+ * The refusal lands on the message, not on the response, so the status and
+ * the message of the error say which provider and which budget refused.
+ */
+function providerRefusal(message: HarnessMessage | undefined): string | undefined {
+  const error = message?.info.error;
+  if (error === undefined) return undefined;
+  const status = error.data?.statusCode;
+  const text = error.message ?? '';
+  if (status === undefined) return text === '' ? undefined : text;
+  return text === ''
+    ? `the provider answered ${status}`
+    : `the provider answered ${status}: ${text}`;
 }
 
 /**

@@ -265,6 +265,7 @@ async function runTrial(
 
       const verdict = await judge({
         client: harness.client,
+        idle: harness.idle,
         directory: root,
         model: JUDGE_MODEL,
         criteria: scenarioCase.judgeCriteria,
