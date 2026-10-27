@@ -37,7 +37,43 @@ describe('the round status', () => {
 describe('the dispatch', () => {
   it('accepts a dispatch with an owner and a return condition', () => {
     const given = dispatch();
-    expect(validateDispatch(given)).toBe(given);
+    const accepted = validateDispatch(given);
+    expect(accepted).toEqual(given);
+    expect(accepted.owner).toBe('oa-builder');
+    expect(accepted.returnCondition).toBe('the commit hash and the gate output');
+  });
+
+  it('refuses a dispatch whose owner is not a string at all', () => {
+    // The MCP's schema takes the field as optional, so an omitted field
+    // arrives as undefined and a null one arrives as null. Both are a
+    // missing field, and the refusal has to be a BoardError: the MCP knows
+    // how to report one and nothing else.
+    const shapes = [
+      { ...dispatch(), owner: undefined },
+      { ...dispatch(), owner: null },
+      { ...dispatch(), owner: '' },
+    ];
+    for (const shape of shapes) {
+      const withoutOwner = shape as unknown as Dispatch;
+      let refused: BoardError | undefined;
+      try {
+        validateDispatch(withoutOwner);
+      } catch (error) {
+        refused = error as BoardError;
+      }
+      expect(refused).toBeInstanceOf(BoardError);
+      expect(refused?.message).toContain('no owner');
+      expect(refused?.hint).toContain('owner');
+    }
+  });
+
+  it('refuses a dispatch whose return condition is not a string at all', () => {
+    const withoutReturn = {
+      ...dispatch(),
+      returnCondition: undefined,
+    } as unknown as Dispatch;
+    expect(() => validateDispatch(withoutReturn)).toThrow(BoardError);
+    expect(() => validateDispatch(withoutReturn)).toThrow(/no return condition/);
   });
 
   it('refuses a dispatch without an owner', () => {

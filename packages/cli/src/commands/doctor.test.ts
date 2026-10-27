@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -217,10 +217,10 @@ describe('the config map', () => {
  * The target follows the OpenCode the doctor will find, or the comparison
  * would flag every file for a difference nobody made.
  */
-async function buildAgents(root: string): Promise<void> {
+async function buildAgents(root: string, target?: 'v1' | 'v2'): Promise<void> {
   const version = await detectOpenCode();
-  const target = version ? targetForVersion(version) : 'v1';
-  await runBuild({ root, target, outDir: join(root, '.opencode') });
+  const chosen = target ?? (version ? targetForVersion(version) : 'v1');
+  await runBuild({ root, target: chosen, outDir: join(root, '.opencode') });
 }
 
 /** The files of a tree, by name and content. */
@@ -262,11 +262,34 @@ describe('the regeneration check', () => {
 
   it('never writes into the project it is describing', async () => {
     await buildAgents(root);
-    const before = await tree(join(root, '.opencode'));
+    const before = await tree(root);
 
     await runDoctor(root);
 
-    const after = await tree(join(root, '.opencode'));
+    const after = await tree(root);
     expect(after).toEqual(before);
+  });
+
+  it('does not flag a tree that was built for the other target', async () => {
+    // The doctor finds the OpenCode on PATH, but a project may be built for
+    // the other version. The files say which target they are, so a v2 tree
+    // on a v1 machine is a v2 tree and not a drifted one.
+    await buildAgents(root, 'v2');
+
+    const report = await runDoctor(root);
+    expect(report.regeneration.drifted).toEqual([]);
+  });
+
+  it('says so when the generated files cannot be read', async () => {
+    await buildAgents(root);
+    const dir = join(root, '.opencode', 'agents');
+    await chmod(dir, 0o000);
+    try {
+      const report = await runDoctor(root);
+      expect(report.regeneration.error).toBeDefined();
+      expect(report.regeneration.drifted).toEqual([]);
+    } finally {
+      await chmod(dir, 0o755);
+    }
   });
 });

@@ -1,30 +1,66 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type BoardDatabase, createRecord, migrate, openDatabase } from '@openagentsy/core';
-import { openLedger, wasteByKind } from '@openagentsy/ledger';
+import {
+  type BoardDatabase,
+  closeDatabase,
+  createRecord,
+  migrate,
+  openDatabase,
+} from '@openagentsy/core';
+import {
+  closeLedger,
+  detectNoProgressAtPath,
+  openLedger,
+  recordAssistantMessage,
+  wasteByKind,
+} from '@openagentsy/ledger';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   claimedStatusOf,
   observeRoundStatus,
   observeSessionIdle,
-  readRoundFacts,
-  recordNoProgressRound,
-  roundChangedNothing,
+  recordNoProgressRounds,
 } from './idle-observer.js';
 
 let board: BoardDatabase;
+let boardPath: string;
+let boardRoot: string;
 let ledgerRoot: string;
 
 beforeEach(async () => {
-  board = openDatabase(':memory:');
+  boardRoot = await mkdtemp(join(tmpdir(), 'openagentsy-board-'));
+  boardPath = join(boardRoot, 'board.sqlite');
+  board = openDatabase(boardPath);
   migrate(board);
   ledgerRoot = await mkdtemp(join(tmpdir(), 'openagentsy-ledger-'));
 });
 
 afterEach(async () => {
+  closeDatabase(board);
+  await rm(boardRoot, { recursive: true, force: true });
   await rm(ledgerRoot, { recursive: true, force: true });
 });
+
+/** One message of the Lead, in the ledger's own ledger. */
+function leadMessage(id: string, ts: string, tokens: number): void {
+  const db = openLedger(ledgerRoot);
+  try {
+    recordAssistantMessage(
+      db,
+      {
+        id,
+        sessionID: 'ses_lead',
+        providerID: 'anthropic',
+        modelID: 'claude-sonnet-4-5',
+        tokens: { input: tokens, output: 0 },
+      },
+      { rootSessionId: 'ses_lead', role: 'lead', ts },
+    );
+  } finally {
+    closeLedger(db);
+  }
+}
 
 describe('the idle observer', () => {
   it('finds nothing when the report and the board agree', () => {
@@ -66,6 +102,13 @@ describe('the claimed status', () => {
     expect(claimedStatusOf('round: paused')).toBe('paused');
   });
 
+  it('reads the status a real Lead report claims', () => {
+    expect(claimedStatusOf('The round status is complete, and the board agrees.')).toBe('complete');
+    expect(claimedStatusOf('state: awaiting_result')).toBe('awaiting_result');
+    expect(claimedStatusOf('the round is paused')).toBe('paused');
+    expect(claimedStatusOf('The recovery round is running; next I report.')).toBe('running');
+  });
+
   it('takes the last claim in the message', () => {
     expect(claimedStatusOf('status: running, and now status: complete')).toBe('complete');
   });
@@ -76,91 +119,61 @@ describe('the claimed status', () => {
   });
 });
 
-describe('the round facts', () => {
-  it('counts a round that dispatched nothing and changed nothing', () => {
-    const facts = readRoundFacts(board, {
-      agent: 'agentsy',
-      from: '2026-01-01T00:00:00.000Z',
-      until: '2026-01-02T00:00:00.000Z',
-    });
-    expect(facts).toEqual({ dispatched: 0, consumed: 0, changed: false });
-  });
-
-  it('counts a dispatch the round made', () => {
+describe('the round that changed nothing', () => {
+  it('writes the no_progress event the ledger writes, and writes it once', () => {
+    // The decision is the ledger's, so the observer and `oa ledger` cannot
+    // write the same round twice and count its tokens twice.
     createRecord(board, {
       bean: '2c-4',
-      kind: 'contract',
+      kind: 'status',
       from: 'agentsy',
-      to: 'oa-builder',
-      action: 'dispatched the recovery loop',
-      state: 'owner: oa-builder',
+      action: 'the round is over',
+      state: 'nothing moved',
       confidence: 'verified',
     });
-    const facts = readRoundFacts(board, {
-      agent: 'agentsy',
-      from: '2020-01-01T00:00:00.000Z',
-      until: '2999-01-01T00:00:00.000Z',
-    });
-    expect(facts.dispatched).toBe(1);
-    expect(facts.changed).toBe(false);
+    leadMessage('l1', '2026-01-01T00:00:00.000Z', 1000);
+
+    const ledger = openLedger(ledgerRoot);
+    try {
+      expect(detectNoProgressAtPath(ledger, boardPath, { leadAgent: 'agentsy' })).toHaveLength(1);
+      expect(recordNoProgressRounds(ledger, boardPath, { leadAgent: 'agentsy' })).toBe(1);
+      expect(recordNoProgressRounds(ledger, boardPath, { leadAgent: 'agentsy' })).toBe(0);
+
+      const waste = wasteByKind(ledger).find((row) => row.kind === 'no_progress');
+      expect(waste?.count).toBe(1);
+      expect(waste?.tokens).toBe(1000);
+    } finally {
+      closeLedger(ledger);
+    }
   });
 
-  it('counts a result the round consumed', () => {
+  it('says nothing about a round that changed something', () => {
     createRecord(board, {
       bean: '2c-4',
       kind: 'status',
       from: 'oa-builder',
       to: 'agentsy',
-      action: 'the recovery loop landed',
+      action: 'the result is in',
       state: 'commit a1b2c3',
       confidence: 'verified',
     });
-    const facts = readRoundFacts(board, {
-      agent: 'agentsy',
-      from: '2020-01-01T00:00:00.000Z',
-      until: '2999-01-01T00:00:00.000Z',
+    createRecord(board, {
+      bean: '2c-4',
+      kind: 'status',
+      from: 'agentsy',
+      action: 'the round is over',
+      state: 'the result was consumed',
+      confidence: 'verified',
     });
-    expect(facts.consumed).toBe(1);
-  });
-});
+    leadMessage('l1', '2026-01-01T00:00:00.000Z', 1000);
 
-describe('the round that changed nothing', () => {
-  it('is a round with no dispatch, no result and no board change', () => {
-    expect(roundChangedNothing({ dispatched: 0, consumed: 0, changed: false })).toBe(true);
-    expect(roundChangedNothing({ dispatched: 1, consumed: 0, changed: false })).toBe(false);
-    expect(roundChangedNothing({ dispatched: 0, consumed: 1, changed: false })).toBe(false);
-    expect(roundChangedNothing({ dispatched: 0, consumed: 0, changed: true })).toBe(false);
-  });
-
-  it('writes a no_progress waste event', () => {
     const ledger = openLedger(ledgerRoot);
     try {
-      const written = recordNoProgressRound(
-        ledger,
-        { dispatched: 0, consumed: 0, changed: false },
-        { tokens: 1200, ts: '2026-01-01T00:00:00.000Z', messageId: 'msg-1' },
-      );
-      expect(written).toBe(true);
-      const waste = wasteByKind(ledger).find((row) => row.kind === 'no_progress');
-      expect(waste?.count).toBe(1);
-      expect(waste?.tokens).toBe(1200);
-    } finally {
-      ledger.close();
-    }
-  });
-
-  it('writes nothing when the round changed something', () => {
-    const ledger = openLedger(ledgerRoot);
-    try {
-      const written = recordNoProgressRound(
-        ledger,
-        { dispatched: 1, consumed: 0, changed: false },
-        { tokens: 1200, ts: '2026-01-01T00:00:00.000Z' },
-      );
-      expect(written).toBe(false);
+      expect(detectNoProgressAtPath(ledger, boardPath, { leadAgent: 'agentsy' })).toHaveLength(0);
+      expect(recordNoProgressRounds(ledger, boardPath, { leadAgent: 'agentsy' })).toBe(0);
       expect(wasteByKind(ledger).some((row) => row.kind === 'no_progress')).toBe(false);
     } finally {
-      ledger.close();
+      closeLedger(ledger);
     }
   });
 });

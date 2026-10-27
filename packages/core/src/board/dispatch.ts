@@ -36,9 +36,16 @@ export function assertRoundStatus(value: unknown): RoundStatus {
   );
 }
 
-/** Whether a field of a dispatch is empty. */
+/**
+ * Whether a field of a dispatch is missing.
+ *
+ * A field that is absent arrives as undefined, and one that is empty
+ * arrives as a blank string: both are a missing field, and neither is a
+ * string the length can be read from.
+ */
 function missingField(dispatch: Dispatch, field: keyof Dispatch): boolean {
-  return dispatch[field].trim().length === 0;
+  const value = dispatch[field];
+  return typeof value !== 'string' || value.trim().length === 0;
 }
 
 /** The field names of a dispatch, and how they read in a sentence. */

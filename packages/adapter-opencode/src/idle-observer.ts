@@ -1,11 +1,5 @@
-import {
-  type BoardDatabase,
-  isRoundStatus,
-  listLeases,
-  listRecords,
-  type RoundStatus,
-} from '@openagentsy/core';
-import { recordWasteRows } from '@openagentsy/ledger';
+import { isRoundStatus, type RoundStatus } from '@openagentsy/core';
+import { detectNoProgressAtPath, recordWasteRows } from '@openagentsy/ledger';
 
 /**
  * The observer on `session.idle` (§8.7).
@@ -78,133 +72,45 @@ export function observeSessionIdle(
 /**
  * The status a message claims, when it claims one.
  *
- * The claim is a status token behind a label, so a sentence that mentions a
- * status without claiming it does not count. The last claim in the message
+ * The claim is a status behind a label, and the labels are the ones a Lead
+ * report uses: `status: complete`, `the round status is complete`,
+ * `state: complete`, `the round is complete`. The last claim in the message
  * wins: the report is the end of the round, not its beginning.
  */
 export function claimedStatusOf(text: string): string | undefined {
-  const pattern = /(?:round\s+)?status\s*[:=]\s*([a-z_]+)|round\s*[:=]\s*([a-z_]+)/gi;
+  const pattern = /\b(?:round\s+status|status|state|round)\b\s*(?:is|was|:|=)\s*["']?([a-z_]+)/gi;
   let found: string | undefined;
   for (const match of text.matchAll(pattern)) {
-    const token = (match[1] ?? match[2] ?? '').toLowerCase();
+    const token = (match[1] ?? '').toLowerCase();
     if (isRoundStatus(token)) found = token;
   }
   return found;
 }
 
-/** What a round of the Lead's loop did. */
-export type RoundFacts = {
-  /** The dispatches the round made. */
-  dispatched: number;
-  /** The results the round consumed. */
-  consumed: number;
-  /** Whether the board changed under the round. */
-  changed: boolean;
+/** What the no-progress detector needs to know. */
+export type NoProgressOptions = {
+  /** The agent the Lead writes its records under. */
+  leadAgent?: string | undefined;
+  /** The role key the Lead's usage rows carry. */
+  leadRole?: string | undefined;
 };
 
 /**
- * Whether the round changed nothing at all (§8.7).
+ * Write the waste events of the Lead's rounds that went nowhere (§6.4).
  *
- * A round that dispatched nothing, consumed no result and changed nothing on
- * the board cannot claim progress. The Lead's own record does not count: it
- * is the PERSIST stage writing the round down, not the round moving.
+ * The decision is the ledger's own, not a second one: the same predicate,
+ * the same detail and the same dedup key, so a round the observer and
+ * `oa ledger` both see is written once and counted once. The tokens counted
+ * are the round's own.
  */
-export function roundChangedNothing(facts: RoundFacts): boolean {
-  return facts.dispatched === 0 && facts.consumed === 0 && !facts.changed;
-}
-
-/** The window of a round, and the agent that ran it. */
-export type RoundWindow = {
-  /** The agent that ran the round. */
-  agent: string;
-  /** When the round started. */
-  from: string;
-  /** When the round ended. */
-  until: string;
-};
-
-/** How many records one page of the board holds. */
-const PAGE = 100;
-
-/**
- * The records of a window, read through the board's own API.
- *
- * The board is read page by page, because the window is a slice of the
- * whole and the newest records are the last ones. The read never marks
- * anything read: the observer is a witness, not a reader of the inbox.
- */
-function recordsInWindow(db: BoardDatabase, window: RoundWindow) {
-  const inside: ReturnType<typeof listRecords>['records'] = [];
-  let cursor = 0;
-  for (;;) {
-    const page = listRecords(db, { cursor, limit: PAGE, markRead: false });
-    for (const record of page.records) {
-      if (record.createdAt > window.from && record.createdAt <= window.until) {
-        inside.push(record);
-      }
-    }
-    if (page.records.length < PAGE) break;
-    cursor = page.nextCursor;
-  }
-  return inside;
-}
-
-/**
- * What a round did, read from the board.
- *
- * A dispatch is a record the Lead addressed to somebody else, a consumed
- * result is a record addressed to the Lead, and the board changed when
- * somebody else wrote or when a lease was taken. These are the same three
- * things the ledger's own no-progress detector counts (§6.4).
- */
-export function readRoundFacts(db: BoardDatabase, window: RoundWindow): RoundFacts {
-  const inside = recordsInWindow(db, window);
-  const dispatched = inside.filter(
-    (record) => record.from === window.agent && record.to !== undefined,
-  ).length;
-  const consumed = inside.filter((record) => record.to === window.agent).length;
-  const changed =
-    inside.some((record) => record.from !== window.agent) ||
-    listLeases(db).some(
-      (lease) => lease.grantedAt > window.from && lease.grantedAt <= window.until,
-    );
-  return { dispatched, consumed, changed };
-}
-
-/** The round that ended, and what it cost. */
-export type RoundWaste = {
-  /** The tokens the round cost. */
-  tokens: number;
-  /** When the round ended. */
-  ts: string;
-  /** The session the round belongs to. */
-  rootSessionId?: string | undefined;
-  /** The message the round ended on. */
-  messageId?: string | undefined;
-};
-
-/**
- * Write the waste event of a round that changed nothing.
- *
- * The kind is `no_progress` and the tokens are the round's own, so the
- * waste of a round that went nowhere is measured like any other waste. A
- * round that changed something writes nothing at all.
- */
-export function recordNoProgressRound(
+export function recordNoProgressRounds(
   db: Parameters<typeof recordWasteRows>[0],
-  facts: RoundFacts,
-  round: RoundWaste,
-): boolean {
-  if (!roundChangedNothing(facts)) return false;
-  const written = recordWasteRows(db, [
-    {
-      kind: 'no_progress',
-      tokens: round.tokens,
-      ts: round.ts,
-      ...(round.rootSessionId === undefined ? {} : { rootSessionId: round.rootSessionId }),
-      ...(round.messageId === undefined ? {} : { messageId: round.messageId }),
-      detail: 'lead round with no dispatch, no result and no board change',
-    },
-  ]);
-  return written > 0;
+  boardPath: string,
+  options: NoProgressOptions = {},
+): number {
+  const candidates = detectNoProgressAtPath(db, boardPath, {
+    ...(options.leadAgent === undefined ? {} : { leadAgent: options.leadAgent }),
+    ...(options.leadRole === undefined ? {} : { leadRole: options.leadRole }),
+  });
+  return recordWasteRows(db, candidates);
 }

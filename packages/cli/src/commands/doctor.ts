@@ -437,21 +437,55 @@ function staleLeaseWarnings(held: Lease[]): string[] {
 /** The command that reconciles the generated agent files. */
 const RECONCILE_BUILD = 'openagentsy build';
 
-/** The agent files of a directory, by name. */
+/**
+ * The agent files of a directory, by name.
+ *
+ * A directory that cannot be read is a failure and not an empty tree: an
+ * empty tree would say every generated file is missing.
+ */
 async function agentFiles(dir: string): Promise<Map<string, string>> {
   const files = new Map<string, string>();
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return files;
-  }
-  for (const name of entries) {
+  for (const name of await readdir(dir)) {
     if (!name.endsWith('.md')) continue;
     files.set(name, await readFile(join(dir, name), 'utf8'));
   }
   return files;
 }
+
+/** The target one agent file was built for, when its frontmatter says. */
+function targetOfAgentFile(content: string): Target | undefined {
+  const match = /^---\n([\s\S]*?)\n---/.exec(content);
+  if (match === null) return undefined;
+  const frontmatter = asRecord(parseYaml(match[1] ?? ''));
+  if (frontmatter.permissions !== undefined) return 'v2';
+  if (frontmatter.permission !== undefined) return 'v1';
+  return undefined;
+}
+
+/**
+ * The target the installed files say they were built for.
+ *
+ * The doctor cannot recover the target a project was built for from the
+ * OpenCode it finds on PATH: a project built for v2 on a machine with v1
+ * installed is not a drifted tree, it is a v2 tree, and rendering it for the
+ * wrong target would flag every file. The installed files say which target
+ * they are, so the files are what the check asks.
+ */
+function installedTarget(files: Map<string, string>): Target | undefined {
+  const targets = new Set<Target>();
+  for (const content of files.values()) {
+    const target = targetOfAgentFile(content);
+    if (target !== undefined) targets.add(target);
+  }
+  if (targets.size !== 1) return undefined;
+  return [...targets][0];
+}
+
+/** What the regeneration check found, and the target it judged. */
+type RegenerationDiff = {
+  drifted: string[];
+  target: Target | undefined;
+};
 
 /**
  * The generated files that disagree with a fresh render of the roles.
@@ -460,21 +494,21 @@ async function agentFiles(dir: string): Promise<Map<string, string>> {
  * the project it is describing, because the person who runs it may be about
  * to change that project.
  */
-async function regenerationDiff(
-  root: string,
-  target: Target,
-  ours: Set<string>,
-): Promise<string[]> {
+async function regenerationDiff(root: string, ours: Set<string>): Promise<RegenerationDiff> {
   const installedDir = join(root, '.opencode', 'agents');
   // A tree that was never built has nothing to drift from, and the setup
   // warning already says the plugin is not installed.
-  if (!(await fileExists(installedDir))) return [];
+  if (!(await fileExists(installedDir))) return { drifted: [], target: undefined };
+
+  const installed = await agentFiles(installedDir);
+  const target = installedTarget(installed);
+  // A tree whose target cannot be read is not a tree this check can judge.
+  if (target === undefined) return { drifted: [], target: undefined };
 
   const temp = await mkdtemp(join(tmpdir(), 'openagentsy-regeneration-'));
   try {
     await runBuild({ root, target, outDir: temp });
     const fresh = await agentFiles(join(temp, 'agents'));
-    const installed = await agentFiles(installedDir);
 
     const drifted: string[] = [];
     for (const [name, content] of fresh) {
@@ -489,7 +523,7 @@ async function regenerationDiff(
       if (!ours.has(name) && !name.startsWith('oa-')) continue;
       drifted.push(`${name} is stale: the generator does not write it any more`);
     }
-    return drifted;
+    return { drifted, target };
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
@@ -501,14 +535,15 @@ async function regenerationDiff(
  * A doctor that cannot run the comparison says so rather than pretending
  * the tree is clean.
  */
-async function regenerationReport(
-  root: string,
-  target: Target,
-  roles: RolesFile,
-): Promise<RegenerationReport> {
+async function regenerationReport(root: string, roles: RolesFile): Promise<RegenerationReport> {
   const ours = new Set(Object.values(roles.roles).map((role) => agentFileName(role)));
   try {
-    return { drifted: await regenerationDiff(root, target, ours), reconcile: RECONCILE_BUILD };
+    const diff = await regenerationDiff(root, ours);
+    return {
+      drifted: diff.drifted,
+      reconcile:
+        diff.target === undefined ? RECONCILE_BUILD : `${RECONCILE_BUILD} --target ${diff.target}`,
+    };
   } catch (error) {
     return {
       drifted: [],
@@ -541,7 +576,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   const roles = await loadRoles(join(root, 'roles.yaml'));
   const lock = await readModelLock(join(root, 'openagentsy.models.lock.json'));
 
-  const regeneration = await regenerationReport(root, target, roles);
+  const regeneration = await regenerationReport(root, roles);
   for (const entry of regeneration.drifted) {
     warnings.push(`the generated agent file ${entry}, run: ${regeneration.reconcile} to reconcile`);
   }
