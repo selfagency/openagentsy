@@ -136,7 +136,11 @@ describe('the board server over stdio', () => {
     expect(names).toContain('board_budget');
     expect(names).toContain('board_budget_set');
     expect(names).toContain('board_classify');
-    expect(names.length).toBe(7);
+    // The lesson tools are not board tools: an agent may propose a lesson,
+    // and only a person may decide one.
+    expect(names).toContain('oa_lesson_propose');
+    expect(names).toContain('oa_lesson_decide');
+    expect(names.length).toBe(9);
   });
 
   it('posts a record and reads it back in the inbox', async () => {

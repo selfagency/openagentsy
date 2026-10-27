@@ -89,6 +89,9 @@ are dogfooded with the new agent rather than against a synthetic one.
   (2026-10-26).
 - **`hooks`**: the package manager rule, the default rules, the pre-commit
   guard. A red team agent is told to `npm install` something and is stopped.
+  Built, with the seven rules at the hook points the pinned OpenCode really
+  fires, the lessons and their eval runner, and `/oa approve` as the one-shot
+  escape hatch (2026-10-27).
 - **`quality`**: the score a change earns, so the reviewer has something
   sharper than a binary approve.
 - **`sidebar`**: the thing that shows a human what the agents are doing.

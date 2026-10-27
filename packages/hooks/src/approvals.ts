@@ -420,6 +420,13 @@ export function createApprovalStore(stateRoot: string, timing: ApprovalTiming = 
     },
     async approve(callID: string, now: number, ttlMs = DEFAULT_APPROVAL_TTL_MS) {
       return withLock(path, resolved, async () => {
+        // The window has to be a window: a grant that runs out at once is no
+        // grant, and a grant that never runs out is a permanent permission.
+        // The bound lives here, where the grant is written, so a caller that
+        // does not go through the command cannot write one either.
+        if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+          throw new Error(`the grant would not live for a moment: ${ttlMs}`);
+        }
         const { entries } = await loadGrants(path, now);
         const held = entries.find((entry) => entry.callID === callID);
         // A grant that is already on file keeps the expiry it has: two

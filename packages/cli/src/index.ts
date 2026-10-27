@@ -2,6 +2,7 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import type { Target } from '@openagentsy/core';
+import { formatApproveResult, runApprove } from './commands/approve.js';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
 import { formatDoctorReport, runDoctor } from './commands/doctor.js';
@@ -15,6 +16,12 @@ import {
   runLedgerScanReverts,
   runLedgerWaste,
 } from './commands/ledger.js';
+import {
+  formatLessonDecision,
+  formatLessonsReport,
+  runLessonDecision,
+  runLessons,
+} from './commands/lessons.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
 import { runSetup } from './commands/setup.js';
 import { detectOpenCode, targetForVersion } from './opencode.js';
@@ -30,6 +37,9 @@ Commands:
   ledger waste       Find the waste that can be found, and say what the waste is
   ledger scan-reverts  Find the code that was written and then taken back
   ledger outcomes    Find the commits that name a task, and the Refs trailers they carry
+  lessons            Show the lessons that are waiting for a decision
+  lesson <id> <act>  Decide a lesson: validate, apply, reject or observe
+  approve <callID>   Grant one call the permission it asked for
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
@@ -50,6 +60,7 @@ Options:
   --key <key>         BenchLM key, for the keyed REST API
   --yes               Write the lock file without asking
   --json              Write the output as JSON (ledger)
+  --ttl <ms>          How long a grant lives (default: 15 minutes, max: 1 day)
   --dry-run           Print what setup would write without writing it
   --magic-context     Turn OpenCode's compaction off, for a project with a
                       memory integration that shrinks the context itself
@@ -74,6 +85,7 @@ export type Values = {
   'allow-retention'?: boolean | undefined;
   yes?: boolean | undefined;
   json?: boolean | undefined;
+  ttl?: string | undefined;
   help?: boolean | undefined;
 };
 
@@ -259,6 +271,54 @@ async function modelsCommand(root: string, values: Values, positionals: string[]
   return 0;
 }
 
+/**
+ * The lessons that are waiting for a decision.
+ */
+async function lessonsCommand(root: string): Promise<number> {
+  const report = await runLessons(root);
+  process.stdout.write(formatLessonsReport(report));
+  return 0;
+}
+
+/**
+ * A decision about one lesson.
+ *
+ * The person running the command is the decider: a lesson changes state
+ * only when a person says so.
+ */
+async function lessonCommand(
+  root: string,
+  _values: Values,
+  positionals: string[],
+): Promise<number> {
+  const id = positionals[1];
+  const action = positionals[2];
+  if (id === undefined || action === undefined) {
+    process.stderr.write('usage: openagentsy lesson <id> <validate|apply|reject|observe>\n');
+    return 1;
+  }
+  const report = await runLessonDecision(root, id, action);
+  process.stdout.write(formatLessonDecision(report));
+  return report.ok ? 0 : 1;
+}
+
+/**
+ * Grant one call the permission it asked for.
+ */
+async function approveCommand(
+  root: string,
+  values: Values,
+  positionals: string[],
+): Promise<number> {
+  const result = await runApprove({
+    root,
+    ...(positionals[1] === undefined ? {} : { callID: positionals[1] }),
+    ...(values.ttl === undefined ? {} : { ttl: values.ttl }),
+  });
+  process.stdout.write(formatApproveResult(result));
+  return result.ok ? 0 : 1;
+}
+
 /** The command table. One entry per command, so the dispatch is a lookup. */
 const COMMANDS: Record<
   string,
@@ -268,6 +328,9 @@ const COMMANDS: Record<
   board: boardCommand,
   doctor: doctorCommand,
   ledger: ledgerCommand,
+  lessons: lessonsCommand,
+  lesson: lessonCommand,
+  approve: approveCommand,
   setup: setupCommand,
   models: modelsCommand,
 };
@@ -309,6 +372,7 @@ export async function main(argv: string[]): Promise<number> {
       key: { type: 'string' },
       yes: { type: 'boolean' },
       json: { type: 'boolean' },
+      ttl: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });

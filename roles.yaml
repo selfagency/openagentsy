@@ -26,6 +26,14 @@ protectedPaths:
   - ".opencode/plugins/**"
   - "roles.yaml"
   - "packages/core/src/policy/**"
+  # The approval store is a person and the gate, never an agent. The lock
+  # family is part of the same store: a lock that an agent can delete is a
+  # lock that an agent can steal.
+  - ".openagentsy/approvals.json"
+  - ".openagentsy/approvals.json.lock"
+  - ".openagentsy/approvals.json.lock.reclaim"
+  - ".openagentsy/approvals.json.lock.stale"
+  - ".openagentsy/approvals.json.lock.release.*"
   - "ETHICS.md"
   - "SAFETY.md"
   - "GOVERNANCE.md"

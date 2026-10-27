@@ -34,6 +34,7 @@ import {
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
 import { ledgerReaders } from './ledger-usage.js';
+import { createLessonTools } from './lessons.js';
 
 const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
 const stateDir = join(root, '.openagentsy');
@@ -366,6 +367,31 @@ async function postRecord(input: {
   });
   return text({ id: record.id, createdAt: record.createdAt });
 }
+
+// --- lessons ----------------------------------------------------------------
+
+// The lesson tools: an agent may PROPOSE a lesson, and only a person may
+// DECIDE one. The permission map keeps every agent role away from the
+// decision tool (roles.yaml), and the hook rule is the second layer.
+const LESSON_TOOLS = createLessonTools(root);
+
+server.registerTool(
+  'oa_lesson_propose',
+  {
+    description: LESSON_TOOLS.oa_lesson_propose.description,
+    inputSchema: LESSON_TOOLS.oa_lesson_propose.inputSchema,
+  },
+  async (input) => LESSON_TOOLS.oa_lesson_propose.handler(input),
+);
+
+server.registerTool(
+  'oa_lesson_decide',
+  {
+    description: LESSON_TOOLS.oa_lesson_decide.description,
+    inputSchema: LESSON_TOOLS.oa_lesson_decide.inputSchema,
+  },
+  async (input) => LESSON_TOOLS.oa_lesson_decide.handler(input),
+);
 
 // --- leases -----------------------------------------------------------------
 
