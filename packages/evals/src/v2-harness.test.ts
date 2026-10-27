@@ -1,11 +1,9 @@
 import { readFileSync } from 'node:fs';
-import type { OpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it } from 'vitest';
 import {
   type HarnessClient,
   permissionRequestOf,
   replyPartsOf,
-  V1HarnessClient,
   V2HarnessClient,
 } from './opencode.js';
 import type { V2Transport } from './v2client.js';
@@ -315,23 +313,13 @@ describe('the permission request of an event', () => {
 });
 
 /**
- * The same contract on both runtimes.
+ * The contract the harness asks for.
  *
- * The harness asks the same questions of both servers, and the two answer
- * them in different words. The two clients below are given the two answers
- * the two servers really send, and the assertions are the same for both.
+ * The harness asks the server for the same things whatever the runtime, and
+ * the client answers with the shape the harness reads. The client below is
+ * given the answer a 2.x server really sends.
  */
-describe('the same contract on both runtimes', () => {
-  /** The answer of a 1.x server: the message and the parts the SDK sends. */
-  const V1_MESSAGES = {
-    data: [
-      {
-        info: { role: 'assistant', time: { completed: 3 } },
-        parts: [{ type: 'text', text: 'the answer' }],
-      },
-    ],
-  };
-
+describe('the contract the harness asks for', () => {
   /** The answer of a 2.x server: the union of tagged messages. */
   const V2_MESSAGES = {
     data: [
@@ -346,25 +334,6 @@ describe('the same contract on both runtimes', () => {
       { id: 'm1', time: { created: 1 }, text: 'the question', type: 'user' },
     ],
   };
-
-  /** A client of a 1.x server, over the SDK's own API. */
-  function v1(): HarnessClient {
-    const client = {
-      session: {
-        create: async () => ({ data: { id: 'ses_case' } }),
-        promptAsync: async () => ({}),
-        messages: async () => V1_MESSAGES,
-        status: async () => ({ data: { ses_busy: {} } }),
-        list: async () => ({ data: [{ id: 'ses_child', title: 'a child', parentID: 'ses_case' }] }),
-        abort: async () => ({}),
-        delete: async () => ({ data: true }),
-      },
-      mcp: { status: async () => ({ data: { openagentsy: { status: 'connected' } } }) },
-      event: { subscribe: async () => ({ stream: (async function* () {})() }) },
-      postSessionIdPermissionsPermissionId: async () => ({}),
-    } as unknown as OpencodeClient;
-    return new V1HarnessClient(client);
-  }
 
   /** A client of a 2.x server, over the API of the 2.x server. */
   function v2(): HarnessClient {
@@ -412,10 +381,7 @@ describe('the same contract on both runtimes', () => {
     };
   }
 
-  const runtimes: [string, () => HarnessClient][] = [
-    ['OpenCode 1', v1],
-    ['OpenCode 2', v2],
-  ];
+  const runtimes: [string, () => HarnessClient][] = [['OpenCode 2', v2]];
 
   it.each(runtimes)('%s creates a session and names it', async (_name, build) => {
     const client = build();

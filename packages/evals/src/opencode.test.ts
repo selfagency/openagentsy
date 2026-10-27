@@ -1086,50 +1086,50 @@ describe('a watcher that cannot attach', () => {
 /**
  * The idle event of the event stream.
  *
- * The v1 server sends `{type, properties}` and the v2 server sends the
- * envelope `{id, created, type, location?, data}`. The harness's own
- * subscription receives the v1 shape today and the v2 client hands over
- * the other one, so both are read.
+ * The 2.x server sends the envelope `{id, created, type, location?, data}`,
+ * and the payload of the event is under `data`.
  */
 describe('the idle event of the stream', () => {
-  it('reads the session out of the v1 shape', () => {
-    expect(idleSessionOf({ type: 'session.idle', properties: { sessionID: 'ses_a' } })).toBe(
-      'ses_a',
-    );
-  });
-
-  it('reads the session out of the v2 envelope', () => {
+  it('reads the session out of the envelope', () => {
     expect(
       idleSessionOf({
         id: 'evt_1',
         created: 1,
         type: 'session.idle',
-        data: { sessionID: 'ses_b' },
+        data: { sessionID: 'ses_a' },
       }),
-    ).toBe('ses_b');
+    ).toBe('ses_a');
   });
 
   it('reads a status that says the session is idle', () => {
     expect(
       idleSessionOf({
         type: 'session.status',
-        properties: { sessionID: 'ses_c', status: { type: 'idle' } },
+        data: { sessionID: 'ses_c', status: { type: 'idle' } },
       }),
     ).toBe('ses_c');
     expect(
       idleSessionOf({
         type: 'session.status',
-        properties: { sessionID: 'ses_c', status: { type: 'busy' } },
+        data: { sessionID: 'ses_c', status: { type: 'busy' } },
       }),
     ).toBeUndefined();
   });
 
   it('says nothing about the other events', () => {
     expect(
-      idleSessionOf({ type: 'permission.updated', properties: { sessionID: 'ses_d' } }),
+      idleSessionOf({ type: 'permission.updated', data: { sessionID: 'ses_d' } }),
     ).toBeUndefined();
     expect(idleSessionOf({ type: 'session.idle' })).toBeUndefined();
     expect(idleSessionOf(undefined)).toBeUndefined();
+  });
+
+  it('does not read the envelope of the 1.x server', () => {
+    // The 1.x server sent `{type, properties}`, and the harness does not read
+    // that shape: the payload of an event is under `data`.
+    expect(
+      idleSessionOf({ type: 'session.idle', properties: { sessionID: 'ses_e' } }),
+    ).toBeUndefined();
   });
 });
 

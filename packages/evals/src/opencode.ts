@@ -4,7 +4,6 @@ import { mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { promisify } from 'node:util';
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 import { gitFreeEnv } from './git-env.js';
 import {
   isSessionNotFound,
@@ -55,11 +54,10 @@ export type HarnessTime = { created?: number; completed?: number };
 /**
  * A message of a session, in the shape the harness reads.
  *
- * The harness reads one shape, whatever the runtime sent: an `info` with the
- * role, the times and the error, and a list of parts. OpenCode 1 sends that
- * shape. OpenCode 2 sends a union of tagged messages instead, so the v2
- * client reads the union and answers with this shape, and the readers of the
- * harness are written once and cannot tell the two runtimes apart.
+ * The harness reads one shape: an `info` with the role, the times and the
+ * error, and a list of parts. OpenCode 2 sends a union of tagged messages
+ * instead, so the client reads the union and answers with this shape, and
+ * the readers of the harness are written once.
  */
 export type HarnessMessage = {
   info: {
@@ -86,14 +84,14 @@ export type HarnessMessage = {
 /**
  * One event of the server's stream.
  *
- * The shape is the runtime's own: OpenCode 1 sends `{type, properties}` and
- * OpenCode 2 sends the envelope `{id, created, type, data}`. The readers
- * below take both, the way the idle reader does, so the pump is written once.
+ * OpenCode 2 sends the envelope `{id, created, type, data}`, and the pump
+ * reads that one shape. The permission reader also accepts the `properties`
+ * spelling the 1.x server used, so a request of that shape is answered too.
  */
 export type HarnessEvent = {
   /** What happened. */
   type: string;
-  /** The payload of an OpenCode 1 event. */
+  /** The payload of an event in the OpenCode 1 spelling. */
   properties?: unknown;
   /** The payload of an OpenCode 2 event. */
   data?: unknown;
@@ -153,12 +151,11 @@ export type HarnessPrompt = {
 /**
  * The calls the harness makes on the OpenCode server.
  *
- * The harness asks the same questions of both runtimes, and the two servers
- * answer them in different words: OpenCode 1 serves `/session` and OpenCode
- * 2 serves `/api/session`, and the shapes they answer with are not the same.
- * This interface is the boundary. The harness's logic sits on this side of
- * it, and the two implementations sit on the other side, where a call is
- * made and a shape is read.
+ * The harness asks the server for the same things whatever the runtime, and
+ * the server answers in its own words: it serves `/api/session` and the
+ * shapes it answers with are its own. This interface is the boundary. The
+ * harness's logic sits on this side of it, and the implementation sits on
+ * the other side, where a call is made and a shape is read.
  */
 export type HarnessClient = {
   /** Create a session in a directory. */
@@ -196,9 +193,8 @@ export type HarnessClient = {
  * nothing, and the case's own expectations are what judge that. The harness
  * must not report a removed session as a fault of the host.
  *
- * The 1.x server answers a missing session with an empty message list and
- * never raises this; the 2.x server answers 404, and the harness client turns
- * that answer into this error.
+ * The 2.x server answers a missing session with 404, and the harness client
+ * turns that answer into this error.
  */
 export class SessionGoneError extends Error {
   /** The session that is not there. */
@@ -217,112 +213,6 @@ export function isSessionGone(error: unknown): boolean {
 }
 
 const execFileAsync = promisify(execFile);
-/**
- * The harness on OpenCode 1.
- *
- * The server speaks the SDK's own API, so the calls are the SDK's calls and
- * the shapes are the SDK's shapes. The work here is the boundary: the
- * message list becomes the shape the harness reads, and the busy map becomes
- * the set of the sessions the server is working on.
- */
-export class V1HarnessClient implements HarnessClient {
-  constructor(private readonly client: OpencodeClient) {}
-
-  async createSession(input: { title: string; directory: string }): Promise<string> {
-    const created = await this.client.session.create({
-      body: { title: input.title },
-      query: { directory: input.directory },
-    });
-    if (created.error) {
-      throw new Error(`could not create a session: ${JSON.stringify(created.error)}`);
-    }
-    const id = created.data?.id;
-    if (id === undefined) throw new Error('the server created a session without an id');
-    return id;
-  }
-
-  async prompt(input: HarnessPrompt): Promise<void> {
-    const asked = await this.client.session.promptAsync({
-      path: { id: input.sessionID },
-      body: {
-        agent: input.agent,
-        ...(input.model !== undefined ? { model: input.model } : {}),
-        parts: [{ type: 'text', text: input.text }],
-      },
-      query: { directory: input.directory },
-    });
-    if (asked.error) throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
-  }
-
-  async messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]> {
-    const listed = await this.client.session.messages({
-      path: { id: input.sessionID },
-      query: { directory: input.directory },
-    });
-    return (listed.data ?? []).map(v1Message);
-  }
-
-  async busySessions(input: { directory: string }): Promise<ReadonlySet<string>> {
-    const status = await this.client.session.status({ query: { directory: input.directory } });
-    const busy = asObject(status.data) ?? {};
-    return new Set(Object.keys(busy));
-  }
-
-  async events(input: { directory: string }): Promise<AsyncIterable<HarnessEvent>> {
-    const subscription = await this.client.event.subscribe({
-      query: { directory: input.directory },
-    });
-    return v1Events(subscription.stream);
-  }
-
-  async replyPermission(input: {
-    sessionID: string;
-    permissionID: string;
-    directory: string;
-    decision: PermissionDecision;
-  }): Promise<void> {
-    await this.client.postSessionIdPermissionsPermissionId({
-      path: { id: input.sessionID, permissionID: input.permissionID },
-      body: { response: input.decision },
-      query: { directory: input.directory },
-    });
-  }
-
-  async boardStatus(input: { directory: string }): Promise<HarnessMcpStatus | undefined> {
-    const status = await this.client.mcp.status({ query: { directory: input.directory } });
-    const servers = asObject(status.data) ?? {};
-    const board = asObject(servers['openagentsy']);
-    if (board === undefined) return undefined;
-    const state = board['status'];
-    return { status: typeof state === 'string' ? state : 'unknown' };
-  }
-
-  async interrupt(input: { sessionID: string; directory: string }): Promise<void> {
-    await this.client.session.abort({
-      path: { id: input.sessionID },
-      query: { directory: input.directory },
-    });
-  }
-
-  async deleteSession(input: { sessionID: string; directory: string }): Promise<void> {
-    const deleted = await this.client.session.delete({
-      path: { id: input.sessionID },
-      query: { directory: input.directory },
-    });
-    if (deleted.error !== undefined) {
-      throw new Error(`the server refused the delete: ${JSON.stringify(deleted.error)}`);
-    }
-  }
-
-  async listSessions(input: { directory: string }): Promise<HarnessSession[]> {
-    const listed = await this.client.session.list({ query: { directory: input.directory } });
-    return (listed.data ?? []).map((session) => ({
-      id: session.id,
-      title: session.title,
-      ...(session.parentID === undefined ? {} : { parentID: session.parentID }),
-    }));
-  }
-}
 
 /**
  * The harness on OpenCode 2.
@@ -598,27 +488,6 @@ function v2Part(part: V2MessagePart): HarnessPart {
   };
 }
 
-/** A message of an OpenCode 1 session, in the shape the harness reads. */
-function v1Message(message: unknown): HarnessMessage {
-  const shape = asObject(message) ?? {};
-  const info = asObject(shape['info']) ?? {};
-  const time = v1Time(asObject(info['time']));
-  const error = v1Error(asObject(info['error']));
-  const tokens = harnessTokens(info['tokens']);
-  const cost = info['cost'];
-  const parts = Array.isArray(shape['parts']) ? shape['parts'] : [];
-  return {
-    info: {
-      role: typeof info['role'] === 'string' ? info['role'] : 'assistant',
-      ...(time === undefined ? {} : { time }),
-      ...(error === undefined ? {} : { error }),
-      ...(tokens === undefined ? {} : { tokens }),
-      ...(typeof cost === 'number' ? { cost } : {}),
-    },
-    parts: parts.map(v1Part),
-  };
-}
-
 /** The tokens a turn used, when the server counted them. */
 function harnessTokens(value: unknown): HarnessMessage['info']['tokens'] | undefined {
   const shape = asObject(value);
@@ -635,67 +504,6 @@ function harnessTokens(value: unknown): HarnessMessage['info']['tokens'] | undef
 /** The number under a key, or zero. */
 function numberOf(value: unknown): number {
   return typeof value === 'number' ? value : 0;
-}
-
-/** The times of a message of an OpenCode 1 session. */
-function v1Time(
-  time: Record<string, unknown> | undefined,
-): { created?: number; completed?: number } | undefined {
-  if (time === undefined) return undefined;
-  const created = time['created'];
-  const completed = time['completed'];
-  return {
-    ...(typeof created === 'number' ? { created } : {}),
-    ...(typeof completed === 'number' ? { completed } : {}),
-  };
-}
-
-/** The error of a failed turn of an OpenCode 1 session. */
-function v1Error(
-  error: Record<string, unknown> | undefined,
-): { message?: string; data?: { statusCode?: number } } | undefined {
-  if (error === undefined) return undefined;
-  const message = error['message'];
-  const data = asObject(error['data']);
-  const statusCode = data?.['statusCode'];
-  return {
-    ...(typeof message === 'string' ? { message } : {}),
-    ...(data === undefined
-      ? {}
-      : { data: { ...(typeof statusCode === 'number' ? { statusCode } : {}) } }),
-  };
-}
-
-/** One part of a message of an OpenCode 1 session. */
-function v1Part(part: unknown): HarnessPart {
-  const shape = asObject(part) ?? {};
-  const state = asObject(shape['state']);
-  const input = state?.['input'];
-  const text = shape['text'];
-  const tool = shape['tool'];
-  const synthetic = shape['synthetic'];
-  const ignored = shape['ignored'];
-  return {
-    type: typeof shape['type'] === 'string' ? shape['type'] : 'unknown',
-    ...(typeof text === 'string' ? { text } : {}),
-    ...(typeof tool === 'string' ? { tool } : {}),
-    ...(state === undefined ? {} : { state: { ...(input !== undefined ? { input } : {}) } }),
-    ...(synthetic === true ? { synthetic: true } : {}),
-    ...(ignored === true ? { ignored: true } : {}),
-  };
-}
-
-/** The events of an OpenCode 1 server, in the shape the pump reads. */
-async function* v1Events(stream: AsyncIterable<unknown>): AsyncGenerator<HarnessEvent> {
-  for await (const event of stream) {
-    const shape = asObject(event) ?? {};
-    const type = shape['type'];
-    const properties = shape['properties'];
-    yield {
-      type: typeof type === 'string' ? type : 'unknown',
-      ...(properties !== undefined ? { properties } : {}),
-    };
-  }
 }
 
 /** The events of an OpenCode 2 server, in the shape the pump reads. */
@@ -780,9 +588,8 @@ export type OpenCodeHarness = {
  * The OpenCode the harness started.
  *
  * The binary is named by the environment, because a machine may have more
- * than one: the suite talks to the OpenCode 1 API, and a machine whose
- * `opencode` is a 2.x serves the 2.x API instead. The default is the one on
- * the path.
+ * than one: the suite talks to the 2.x API, and a machine whose `opencode`
+ * is a 1.x serves the 1.x API instead. The default is the one on the path.
  */
 export type OpenCodeRuntime = {
   /** The binary the harness runs. */
@@ -796,7 +603,7 @@ export type OpenCodeRuntime = {
 /**
  * The binary the harness starts.
  *
- * The suite drives the OpenCode 1 API, so the binary is the one that serves
+ * The suite drives the OpenCode 2 API, so the binary is the one that serves
  * it. The environment names it, because the machine's `opencode` may be a
  * different major version, and the path is not a thing the code may decide.
  */
@@ -891,8 +698,8 @@ const PERMISSION_EVENTS = new Set(['permission.updated', 'permission.asked']);
  * OpenCode 1 sent `permission.updated` and put the request under
  * `properties`, with the paths it is about under `pattern`. OpenCode 2 sends
  * `permission.asked` and puts the request under `data`, with the same paths
- * under `resources`. Both are read here, so the pump answers a request the
- * same way on both runtimes.
+ * under `resources`. Both spellings are read here, so a request of either
+ * shape is answered the same way.
  */
 export function permissionRequestOf(event: HarnessEvent): PermissionRequest | undefined {
   if (!PERMISSION_EVENTS.has(event.type)) return undefined;
@@ -950,11 +757,8 @@ export class IdleRegistry {
 /**
  * The session an event says is idle.
  *
- * The v1 server sends `{type, properties}` and the v2 server sends the
- * envelope `{id, created, type, location?, data}`. The harness's own
- * subscription receives the v1 shape today, and the v2 client hands over
- * the other one, so both are read here and the next wiring does not have
- * to change this.
+ * The 2.x server sends the envelope `{id, created, type, location?, data}`,
+ * and the payload of the event is under `data`.
  *
  * Two events say that a session is idle: `session.idle`, and a
  * `session.status` whose status is `idle`. The v2 schema calls the first
@@ -965,7 +769,7 @@ export function idleSessionOf(event: unknown): string | undefined {
   if (shape === undefined) return undefined;
   const type = shape['type'];
   if (typeof type !== 'string') return undefined;
-  const body = asObject(shape['properties']) ?? asObject(shape['data']);
+  const body = asObject(shape['data']);
   const sessionID = body?.['sessionID'];
   if (typeof sessionID !== 'string') return undefined;
   if (type === 'session.idle') return sessionID;
@@ -1539,6 +1343,16 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   const runtime = await readRuntime(binary);
   process.stdout.write(`the suite runs ${runtime.binary} ${runtime.version}\n`);
 
+  // The harness speaks the 2.x API, and a 1.x server does not serve it. A
+  // run against a 1.x binary would fail on every call with a 404, and the
+  // run stops here instead, before the server starts, and says which runtime
+  // it found.
+  if (runtime.major < 2) {
+    throw new Error(
+      `the harness speaks OpenCode 2 only, and the runtime is ${runtime.binary} ${runtime.version}`,
+    );
+  }
+
   // The server's output goes to a file even when no log path is given, so a
   // CI run shows why a server that never answered did not answer. `serve` is
   // started with `--print-logs`, so its structured lines go to stderr and
@@ -1561,9 +1375,8 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // exists would otherwise carry an earlier run's errors into this suite.
   const logStart = fstatSync(logFd).size;
 
-  // OpenCode 2 serves with a password and OpenCode 1 does not, so the
-  // password is set for both and sent with every request. The harness talks
-  // to the same server API on both, so one harness covers both runtimes.
+  // OpenCode 2 serves with a password, and the password is sent with every
+  // request.
   const password = process.env.OPENAGENTSY_EVAL_PASSWORD ?? 'openagentsy-eval';
 
   // The suite gets its own database. Without this the server opens the
@@ -1598,20 +1411,9 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     throw error;
   }
 
-  // The runtime decides which API the harness talks to: OpenCode 1 serves
-  // `/session` and OpenCode 2 serves `/api/session`, and the harness's logic
-  // sits on this side of that difference.
-  const client: HarnessClient =
-    runtime.major >= 2
-      ? new V2HarnessClient({ baseUrl, password })
-      : new V1HarnessClient(
-          createOpencodeClient({
-            baseUrl,
-            headers: {
-              Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`,
-            },
-          }),
-        );
+  // The harness talks to the 2.x API, and the harness's logic sits on this
+  // side of that boundary.
+  const client: HarnessClient = new V2HarnessClient({ baseUrl, password });
 
   const watches: KillWatch[] = [];
   const sessions = new Map<string, string>();

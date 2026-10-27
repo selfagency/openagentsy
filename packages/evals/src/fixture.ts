@@ -383,6 +383,13 @@ export async function prepare(
   // Bun, not node: the CLI reaches the board's database, and that database
   // is a bun:sqlite builtin. Node cannot load it, and a case whose agents
   // were never generated waits for an agent that does not exist.
+  //
+  // The agents are built for the runtime that will read them: the two
+  // runtimes read different permission keys. The 2.x runtime reads the files
+  // the CLI writes for it, and the CLI writes those for 2.x without being
+  // told: the flag that named the target went with the 1.x line. A 1.x
+  // runtime still needs the flag, so the branch is kept.
+  const target = options.runtime.major >= 2 ? [] : ['--target', 'v1'];
   await execFileAsync(
     'bun',
     [
@@ -390,10 +397,7 @@ export async function prepare(
       'build',
       '--root',
       root,
-      // The agents are built for the runtime that will read them: the two
-      // runtimes read different permission keys.
-      '--target',
-      options.runtime.major >= 2 ? 'v2' : 'v1',
+      ...target,
     ],
     { cwd: root },
   );
