@@ -4,6 +4,7 @@ import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
+import { gitFreeEnv } from './git-env.js';
 export type SessionTurn = {
   /** The text the agent under test produced. */
   text: string;
@@ -436,8 +437,15 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // the caller's OpenCode 1 unable to read it.
   const database = join(tmpdir(), `openagentsy-eval-${port}.db`);
 
+  // The server runs in a directory of its own. It serves whatever directory
+  // a request names, so its own working directory is never the project: a
+  // server that decides to run a git command where it happens to sit would
+  // write into the repository that started the suite.
+  const serverCwd = await mkdtemp(join(tmpdir(), 'openagentsy-eval-server-cwd-'));
+
   const child: ChildProcess = spawn('opencode', serveArgs(port), {
     stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+    cwd: serverCwd,
     env: { ...childEnv(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
   });
 
@@ -514,6 +522,8 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
         // once the server is gone. Nothing else is in the list: not the board
         // database, not its records or leases, and no file that is not ours.
         await removeHarnessFiles(database, ownsLogFile ? logFile : undefined);
+        // The server's own directory goes with it.
+        await rm(serverCwd, { recursive: true, force: true });
       }
       if (faults.length > 0) {
         const detail = faults
@@ -667,9 +677,14 @@ export function replyPartsOf(messages: readonly unknown[]): {
  * The key for a System One model belongs to the harness, which grades the
  * case. A case runs without it: the agent under test must not be able to
  * reach a classifier, or the case measures something else than the agent.
+ *
+ * The git variables go too. A child that inherits them addresses the
+ * repository they point at instead of the one it was told about, and the
+ * suite's own repository is the one they point at when the suite runs from
+ * a commit.
  */
 export function childEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
-  const copy: Record<string, string | undefined> = { ...env };
+  const copy = gitFreeEnv(env);
   delete copy.TYPESAFE_API_KEY;
   return copy;
 }

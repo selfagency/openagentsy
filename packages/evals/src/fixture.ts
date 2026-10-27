@@ -16,6 +16,7 @@ import {
 } from '@openagentsy/core';
 import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
 import { parse as parseJsonc } from 'jsonc-parser';
+import { gitFreeEnv } from './git-env.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -63,8 +64,11 @@ export async function seedCase(
     await writeFile(target, content, 'utf8');
   }
 
-  await execFileAsync('git', ['init', '-q'], { cwd: root });
-  await execFileAsync('git', ['add', '-A'], { cwd: root });
+  // The git commands get an environment without the git variables, so a
+  // suite that runs inside a hook still seeds the case's own repository and
+  // not the one the hook belongs to.
+  await execFileAsync('git', ['init', '-q'], { cwd: root, env: gitFreeEnv() });
+  await execFileAsync('git', ['add', '-A'], { cwd: root, env: gitFreeEnv() });
   await execFileAsync(
     'git',
     [
@@ -79,7 +83,7 @@ export async function seedCase(
       '-m',
       'seed',
     ],
-    { cwd: root },
+    { cwd: root, env: gitFreeEnv() },
   );
 
   const stateDir = join(root, '.openagentsy');
