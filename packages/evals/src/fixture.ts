@@ -191,9 +191,16 @@ export async function readAudit(state: CaseState): Promise<
  * its role key ('builder') or its agent id ('oa-builder'). Both name the
  * same agent, so both are accepted. A check that demands one spelling scores
  * a correct agent as silent.
+ *
+ * A dispatch label names the same agent too: the Lead dispatches 'builder-2'
+ * and grants the lease to that name, but the session that runs is the
+ * builder role, and it posts under the label it was given (measured
+ * 2026-10-27: the builder's completion record was invisible to the
+ * confirmation and the case failed with 'a completion nobody confirmed').
  */
 export function isFrom(record: { from: string }, agent: string): boolean {
-  const name = (value: string): string => value.trim().toLowerCase().replace(/^oa-/, '');
+  const name = (value: string): string =>
+    value.trim().toLowerCase().replace(/^oa-/, '').replace(/-\d+$/, '');
   return name(record.from) === name(agent);
 }
 
