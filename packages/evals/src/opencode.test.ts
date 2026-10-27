@@ -11,6 +11,8 @@ import {
   HARNESS_SWEEP_AGE_MS,
   hostErrorsIn,
   hostFaults,
+  IdleRegistry,
+  idleSessionOf,
   isCaseDirWatcherFault,
   killSessionWhenItAppears,
   logFields,
@@ -25,6 +27,7 @@ import {
   serveArgs,
   splitHostErrors,
   sweepStaleHarnessFiles,
+  waitForIdle,
   watcherExemptionLine,
 } from './opencode.js';
 
@@ -744,5 +747,181 @@ describe('a watcher on a throwaway directory', () => {
     expect(fields.get('message')).toBe('failed to subscribe');
     expect(fields.get('directory')).toBe('/tmp/case');
     expect(fields.get('cause')).toBe('Error: message=not a field');
+  });
+});
+
+/**
+ * The idle event of the event stream.
+ *
+ * The v1 server sends `{type, properties}` and the v2 server sends the
+ * envelope `{id, created, type, location?, data}`. The harness's own
+ * subscription receives the v1 shape today and the v2 client hands over
+ * the other one, so both are read.
+ */
+describe('the idle event of the stream', () => {
+  it('reads the session out of the v1 shape', () => {
+    expect(idleSessionOf({ type: 'session.idle', properties: { sessionID: 'ses_a' } })).toBe(
+      'ses_a',
+    );
+  });
+
+  it('reads the session out of the v2 envelope', () => {
+    expect(
+      idleSessionOf({
+        id: 'evt_1',
+        created: 1,
+        type: 'session.idle',
+        data: { sessionID: 'ses_b' },
+      }),
+    ).toBe('ses_b');
+  });
+
+  it('reads a status that says the session is idle', () => {
+    expect(
+      idleSessionOf({
+        type: 'session.status',
+        properties: { sessionID: 'ses_c', status: { type: 'idle' } },
+      }),
+    ).toBe('ses_c');
+    expect(
+      idleSessionOf({
+        type: 'session.status',
+        properties: { sessionID: 'ses_c', status: { type: 'busy' } },
+      }),
+    ).toBeUndefined();
+  });
+
+  it('says nothing about the other events', () => {
+    expect(
+      idleSessionOf({ type: 'permission.updated', properties: { sessionID: 'ses_d' } }),
+    ).toBeUndefined();
+    expect(idleSessionOf({ type: 'session.idle' })).toBeUndefined();
+    expect(idleSessionOf(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * The wait for a turn to end.
+ *
+ * The server says a session is idle when its turn is over, and the case
+ * that hung for thirty minutes never heard it: the wait polled the busy
+ * map and looked at the last message, and the event that ended the turn
+ * went past it.
+ */
+describe('the end of a turn', () => {
+  const directory = '/case';
+
+  /**
+   * A client that answers the two calls the wait makes.
+   *
+   * The count of the polls is what a test reads: a wait that ends on the
+   * event never polls.
+   */
+  function fakeClient(answers: {
+    status?: (polls: number) => Record<string, unknown>;
+    messages?: () => unknown[];
+  }): { client: OpencodeClient; polls: () => number } {
+    let polls = 0;
+    const client = {
+      session: {
+        status: async () => {
+          const answer = answers.status?.(polls) ?? {};
+          polls += 1;
+          return { data: answer };
+        },
+        messages: async () => ({ data: answers.messages?.() ?? [] }),
+      },
+    } as unknown as OpencodeClient;
+    return { client, polls: () => polls };
+  }
+
+  it('ends the wait when the server says the session under test is idle', async () => {
+    const idle = new IdleRegistry();
+    idle.beginTurn('ses_under_test');
+    // The event arrives after the prompt, so it belongs to this turn.
+    idle.record('ses_under_test');
+    const { client, polls } = fakeClient({});
+
+    await waitForIdle({
+      client,
+      sessionID: 'ses_under_test',
+      directory,
+      timeoutMs: 1_000,
+      idle,
+      pollMs: 1,
+    });
+
+    // The wait ended on the event: it never asked the server.
+    expect(polls()).toBe(0);
+  });
+
+  it('does not end the wait on the idle of another session', async () => {
+    const idle = new IdleRegistry();
+    idle.beginTurn('ses_under_test');
+    // The event fires for every session of the case: the Lead, the
+    // builders, the judge.
+    idle.record('ses_judge');
+    const { client, polls } = fakeClient({
+      messages: () => [{ info: { role: 'assistant', time: { completed: 1 } } }],
+    });
+
+    await waitForIdle({
+      client,
+      sessionID: 'ses_under_test',
+      directory,
+      timeoutMs: 1_000,
+      idle,
+      pollMs: 1,
+    });
+
+    // The poll ran, so the other session's idle did not end the wait.
+    expect(polls()).toBeGreaterThan(0);
+  });
+
+  it('ends the wait on the poll when the server sends no event', async () => {
+    const idle = new IdleRegistry();
+    idle.beginTurn('ses_under_test');
+    const { client, polls } = fakeClient({
+      // The session is busy on the first poll and idle on the second.
+      status: (count) => (count === 0 ? { ses_under_test: {} } : {}),
+    });
+
+    await waitForIdle({
+      client,
+      sessionID: 'ses_under_test',
+      directory,
+      timeoutMs: 1_000,
+      idle,
+      pollMs: 1,
+    });
+
+    expect(polls()).toBe(2);
+  });
+
+  it('names the state of the turn when the wait runs out', async () => {
+    const idle = new IdleRegistry();
+    idle.beginTurn('ses_under_test');
+    const { client } = fakeClient({
+      status: () => ({ ses_under_test: {} }),
+      messages: () => [],
+    });
+
+    const message = await waitForIdle({
+      client,
+      sessionID: 'ses_under_test',
+      directory,
+      timeoutMs: 30,
+      idle,
+      pollMs: 1,
+    }).then(
+      () => 'the wait did not fail',
+      (error: unknown) => (error as Error).message,
+    );
+
+    expect(message).toContain('ses_under_test');
+    expect(message).toContain('the server reported the session busy: yes');
+    expect(message).toContain('the server sent an idle event for the session: no');
+    expect(message).toContain('the last assistant message: none');
+    expect(message).toContain('the wait had gone on for');
   });
 });
