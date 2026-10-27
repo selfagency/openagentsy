@@ -21,9 +21,9 @@ export type BuildResult = {
   warnings: string[];
 };
 
-async function writeFileAt(path: string, content: string): Promise<void> {
+async function writeFileAt(path: string, content: string | Uint8Array): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content, 'utf8');
+  await writeFile(path, content);
 }
 
 /**
@@ -58,6 +58,28 @@ async function removeStaleAgents(
   }
 }
 
+/**
+ * Copy a directory, with everything in it.
+ *
+ * A skill may link to reference files beside its SKILL.md, and a copy
+ * that took only the SKILL.md would leave those links pointing at
+ * nothing. The whole tree is copied, so a file the skill names is
+ * there when the skill is read.
+ */
+async function copyTree(from: string, to: string): Promise<void> {
+  const entries = await readdir(from, { withFileTypes: true });
+  for (const entry of entries) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (entry.isDirectory()) {
+      await mkdir(target, { recursive: true });
+      await copyTree(source, target);
+      continue;
+    }
+    await writeFileAt(target, await readFile(source));
+  }
+}
+
 async function copySkills(
   sourceDir: string,
   targetDir: string,
@@ -74,14 +96,20 @@ async function copySkills(
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const skillFile = join(sourceDir, entry.name, 'SKILL.md');
+    const skillDir = join(sourceDir, entry.name);
     try {
-      const content = await readFile(skillFile, 'utf8');
-      await writeFileAt(join(targetDir, entry.name, 'SKILL.md'), content);
-      copied.push(entry.name);
+      await readFile(join(skillDir, 'SKILL.md'), 'utf8');
     } catch {
       warnings.push(`skill "${entry.name}" has no SKILL.md, skipped`);
+      continue;
     }
+    try {
+      await copyTree(skillDir, join(targetDir, entry.name));
+    } catch (error) {
+      warnings.push(`skill "${entry.name}" could not be copied: ${(error as Error).message}`);
+      continue;
+    }
+    copied.push(entry.name);
   }
 
   return { copied, warnings };

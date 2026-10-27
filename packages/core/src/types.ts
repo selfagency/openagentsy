@@ -70,7 +70,15 @@ export type RoleDefinition = {
   scope: string;
   guidance: string;
   permissions: Record<string, ActionPermissions>;
+  /** The skills the role may load. Empty means every skill. */
   skills: string[];
+  /**
+   * The routing that says when a skill loads, when the role has one.
+   *
+   * The text belongs to the role: it names the conditions, so the token
+   * test can check them and the agent can act on them.
+   */
+  skillRouting?: string;
   modelProfile: ModelProfile;
   effort: EffortLadder;
 };

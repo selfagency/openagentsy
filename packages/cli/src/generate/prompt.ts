@@ -70,6 +70,17 @@ function criticalRules(role: RoleDefinition): string[] {
 }
 
 /**
+ * The routing that says when a skill loads.
+ *
+ * A role with no routing has no section: the text is the role's own,
+ * and a role that writes no UI, copy or comments does not need it.
+ */
+function skillsSection(role: RoleDefinition): string[] {
+  if (role.skillRouting === undefined) return [];
+  return ['## Skills', '', role.skillRouting.trim(), ''];
+}
+
+/**
  * The agent prompt body. Everything here is derived from the role definition,
  * so a role is described in exactly one place.
  */
@@ -89,6 +100,7 @@ export function renderPrompt(role: RoleDefinition, variants: EffortVariants = {}
     '',
     role.guidance.trim(),
     '',
+    ...skillsSection(role),
     '## Reporting',
     '',
     'Report through a tool call, not through a file: call',

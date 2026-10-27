@@ -240,6 +240,30 @@ function skillRules(skills: string[]): ActionPermissions {
   ];
 }
 
+/**
+ * The skills a role may load, and the routing that says when.
+ *
+ * The field is a list of skill names, or a mapping with the list under
+ * `allow` and the routing under `routing`. A role with no list loads
+ * every skill, so the list stays the single source of truth for the
+ * `skill` permission, and the routing is the text that says which
+ * skill a change loads.
+ */
+function parseSkills(
+  value: unknown,
+  where: string,
+): { allow: string[]; routing?: string | undefined } {
+  if (value === undefined) return { allow: [] };
+  if (Array.isArray(value)) return { allow: asStringArray(value, where) };
+  if (!isRecord(value)) {
+    throw new RolesError(`${where}: expected a list of skill names or a mapping`);
+  }
+  const allow = value.allow === undefined ? [] : asStringArray(value.allow, `${where}.allow`);
+  const routing =
+    value.routing === undefined ? undefined : asString(value.routing, `${where}.routing`);
+  return { allow, routing };
+}
+
 function parseRole(
   name: string,
   raw: unknown,
@@ -265,8 +289,8 @@ function parseRole(
     merged[action] = rules;
   }
 
-  const skills = asStringArray(raw.skills ?? [], `${where}.skills`);
-  merged.skill = skillRules(skills);
+  const skills = parseSkills(raw.skills, `${where}.skills`);
+  merged.skill = skillRules(skills.allow);
 
   const agentName =
     raw.agentName === undefined ? undefined : asString(raw.agentName, `${where}.agentName`);
@@ -286,7 +310,8 @@ function parseRole(
     scope: asString(raw.scope, `${where}.scope`),
     guidance: asString(raw.guidance, `${where}.guidance`),
     permissions: merged,
-    skills,
+    skills: skills.allow,
+    ...(skills.routing !== undefined ? { skillRouting: skills.routing } : {}),
     modelProfile: parseModelProfile(raw.modelProfile, `${where}.modelProfile`),
     effort: parseEffort(raw.effort, `${where}.effort`),
   };
