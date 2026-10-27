@@ -9,6 +9,9 @@ import {
   pendingLessons,
   readEvalResult,
 } from '@openagentsy/hooks';
+import { deciderBy } from '../who.js';
+
+export { deciderBy };
 
 /**
  * The lesson commands.
@@ -64,17 +67,6 @@ export type LessonDecisionOptions = {
   /** The file the proof is in. The content of an eval result file. */
   evalResultPath?: string;
 };
-
-/**
- * Who the decision is attributed to.
- *
- * The person running the command is the decider. The name comes from the
- * environment when it is set, because a person may want the record to say
- * who they are, and it is otherwise just "a person".
- */
-export function deciderBy(override?: string): string {
-  return override ?? process.env.OPENAGENTSY_USER ?? 'human';
-}
 
 /**
  * The inbox.

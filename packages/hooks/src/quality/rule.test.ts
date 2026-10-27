@@ -5,6 +5,7 @@ import type { Finding } from '@openagentsy/quality';
 import { describe, expect, it } from 'vitest';
 import { createFindingsStore } from './findings.js';
 import { qualityAfterWrite } from './rule.js';
+import { createWaiverStore } from './waivers.js';
 
 /** A workspace the test writes into. */
 async function scratch(): Promise<string> {
@@ -102,6 +103,48 @@ describe('the quality rule', () => {
     const result = await rule.handler(written(['src/app.css']));
 
     expect(result).toEqual({ continue: true });
+  });
+
+  it('says nothing about a finding a waiver covers', async () => {
+    const root = await scratch();
+    await createWaiverStore(root).add({
+      ruleId: 'css/no-transition-all',
+      path: 'src/app.css',
+      reason: 'The file is a fixture, not a page.',
+      decidedBy: 'human',
+      ts: '2026-10-27T10:00:00.000Z',
+    });
+    const rule = qualityAfterWrite({
+      workspace: root,
+      stateRoot: root,
+      mode: 'during',
+      check: async () => [finding()],
+    });
+
+    const result = await rule.handler(written(['src/app.css']));
+
+    expect(result).toEqual({ continue: true });
+  });
+
+  it('still says something about a finding no waiver covers', async () => {
+    const root = await scratch();
+    await createWaiverStore(root).add({
+      ruleId: 'css/no-transition-all',
+      path: 'src/other.css',
+      reason: 'The file is a fixture, not a page.',
+      decidedBy: 'human',
+      ts: '2026-10-27T10:00:00.000Z',
+    });
+    const rule = qualityAfterWrite({
+      workspace: root,
+      stateRoot: root,
+      mode: 'during',
+      check: async () => [finding()],
+    });
+
+    const result = await rule.handler(written(['src/app.css']));
+
+    expect(appended(result) ?? '').toContain('css/no-transition-all');
   });
 
   it('records a floor finding for the task of the session', async () => {

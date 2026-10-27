@@ -328,7 +328,12 @@ describe('protect-policy', () => {
 
 describe('human-only-decisions', () => {
   it('blocks the three decision tools', async () => {
-    for (const tool of ['oa_lesson_decide', 'oa_quality_waive', 'oa_memory_decide']) {
+    for (const tool of [
+      'oa_lesson_decide',
+      'oa_quality_waive',
+      'openagentsy_oa_quality_waive',
+      'oa_memory_decide',
+    ]) {
       const result = await decide('human-only-decisions', { toolName: tool, args: {}, files: [] });
       expect(continues(result), tool).toBe(false);
     }

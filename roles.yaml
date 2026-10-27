@@ -238,10 +238,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:
@@ -308,10 +310,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: [openagentsy-scout]
     modelProfile:
@@ -378,10 +382,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:
@@ -514,10 +520,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: [openagentsy-handoff]
     modelProfile:
@@ -620,10 +628,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: [openagentsy-review]
     modelProfile:
@@ -685,10 +695,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:
@@ -758,10 +770,12 @@ roles:
       openagentsy_memory_decide: deny
       # The names the host knows the decide tools by. The server is called
       # `openagentsy`, so `oa_lesson_decide` arrives as
-      # `openagentsy_oa_lesson_decide` and `oa_memory_decide` as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
       # `openagentsy_oa_memory_decide`. A deny under a name no host calls
       # is a deny for nothing, so the effective names are here as well.
       openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
       openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:

@@ -20,10 +20,13 @@ const repositoryRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const HUMAN_ONLY_TOOLS = [
   'oa_lesson_decide',
   'openagentsy_lesson_decide',
+  'openagentsy_oa_lesson_decide',
   'oa_quality_waive',
   'openagentsy_quality_waive',
+  'openagentsy_oa_quality_waive',
   'oa_memory_decide',
   'openagentsy_memory_decide',
+  'openagentsy_oa_memory_decide',
 ];
 
 /**
@@ -45,7 +48,7 @@ function words(text: string): string[] {
 }
 
 describe('the permission map', () => {
-  it('denies the three human-only tools to every agent role, in both name forms', async () => {
+  it('denies the three human-only tools to every agent role, in every name', async () => {
     const roles = await loadRoles(join(repositoryRoot, 'roles.yaml'));
     expect(Object.keys(roles.roles).length).toBeGreaterThan(0);
     for (const [name, role] of Object.entries(roles.roles)) {

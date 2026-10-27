@@ -9,6 +9,7 @@
  * never loads it, and nothing here decides on its own what a person
  * decided.
  */
+export * from './accountability.js';
 export * from './approvals.js';
 export * from './base-tool.js';
 export * from './eval/index.js';

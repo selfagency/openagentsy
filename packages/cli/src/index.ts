@@ -39,6 +39,8 @@ Commands:
   ledger outcomes    Find the commits that name a task, and the Refs trailers they carry
   lessons            Show the lessons that are waiting for a decision
   lesson <id> <act>  Decide a lesson: validate, apply, reject or observe
+  waive <ruleId> <path> <reason>
+                        Record a quality waiver, as a person
   approve <callID>   Grant one call the permission it asked for
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
@@ -303,6 +305,32 @@ async function lessonCommand(
 }
 
 /**
+ * Record a quality waiver.
+ *
+ * The person running the command is the decider, and the command is the
+ * way a waiver is recorded: the tool the board server registers is denied
+ * to every agent role by the permission map, so an agent may propose a
+ * waiver in chat and never record one.
+ *
+ * The command is loaded on demand. The waiver check asks the whole rule
+ * set whether a rule may be waived, and the whole rule set carries the
+ * TypeScript compiler; the other commands must not pay for it.
+ */
+async function waiveCommand(root: string, _values: Values, positionals: string[]): Promise<number> {
+  const ruleId = positionals[1];
+  const path = positionals[2];
+  const reason = positionals.slice(3).join(' ');
+  if (ruleId === undefined || path === undefined || reason === '') {
+    process.stderr.write('usage: openagentsy waive <ruleId> <path> "<reason>"\n');
+    return 1;
+  }
+  const { formatWaiver, runWaiver } = await import('./commands/waivers.js');
+  const report = await runWaiver(root, ruleId, path, reason);
+  process.stdout.write(formatWaiver(report));
+  return report.ok ? 0 : 1;
+}
+
+/**
  * Grant one call the permission it asked for.
  */
 async function approveCommand(
@@ -330,6 +358,7 @@ const COMMANDS: Record<
   ledger: ledgerCommand,
   lessons: lessonsCommand,
   lesson: lessonCommand,
+  waive: waiveCommand,
   approve: approveCommand,
   setup: setupCommand,
   models: modelsCommand,

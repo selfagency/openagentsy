@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { ledgerReaders } from './ledger-usage.js';
 import { createLessonTools } from './lessons.js';
 import { failure, type McpToolResult, text } from './mcp-tool.js';
+import { createWaiverTools, WAIVER_TOOL_NAME } from './waivers.js';
 import { workspaceTools } from './workspace-tools.js';
 
 const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
@@ -391,6 +392,23 @@ server.registerTool(
     inputSchema: LESSON_TOOLS.oa_lesson_decide.inputSchema,
   },
   async (input) => LESSON_TOOLS.oa_lesson_decide.handler(input),
+);
+
+// --- waivers ----------------------------------------------------------------
+
+// A quality waiver is a decision a person makes. The permission map takes
+// the tool away from every agent role (roles.yaml), and the hook rule is
+// the second layer: the hook cannot see an MCP call on the pinned binary,
+// so the map is the enforcement and the rule is the backstop.
+const WAIVER_TOOLS = createWaiverTools(root);
+
+server.registerTool(
+  WAIVER_TOOL_NAME,
+  {
+    description: WAIVER_TOOLS.oa_quality_waive.description,
+    inputSchema: WAIVER_TOOLS.oa_quality_waive.inputSchema,
+  },
+  async (input) => WAIVER_TOOLS.oa_quality_waive.handler(input),
 );
 
 // --- the workspace tools ---------------------------------------------------

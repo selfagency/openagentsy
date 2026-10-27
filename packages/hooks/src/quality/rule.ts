@@ -9,6 +9,7 @@ import type { Finding } from '@openagentsy/quality/rule';
 import { type FileRef, readPreToolCall } from '../event.js';
 import type { HandlerResult, Rule } from '../registry.js';
 import { createFindingsStore, type FindingsStore } from './findings.js';
+import { loadWaiverLookup, type WaiverLookup } from './waivers.js';
 
 /**
  * The quality check, run after a write.
@@ -31,21 +32,6 @@ const CONTINUE: HandlerResult = { continue: true };
 
 /** When the check runs. */
 export type QualityMode = 'during' | 'after';
-
-/**
- * The waivers.
- *
- * A waiver is a decision a person makes, and the bean that writes them is
- * not this one. So the seam is here: the lookup covers nothing, and every
- * finding is open until the next bean says otherwise.
- */
-export interface WaiverLookup {
-  /** Whether a waiver covers a finding. */
-  covers(finding: Finding): boolean;
-}
-
-/** The lookup that covers nothing. */
-export const noWaivers: WaiverLookup = { covers: () => false };
 
 /** What the rule needs to know. */
 export interface QualityRuleOptions {
@@ -79,7 +65,6 @@ export interface QualityRuleOptions {
 export function qualityAfterWrite(options: QualityRuleOptions): Rule {
   const store = options.store ?? createFindingsStore(options.stateRoot);
   const run = options.check ?? check;
-  const waivers = options.waivers ?? noWaivers;
   return {
     id: 'quality-after-write',
     event: 'PostToolCall',
@@ -93,7 +78,7 @@ export function qualityAfterWrite(options: QualityRuleOptions): Rule {
       const findings = await findingsOf(run, paths, options);
       if (findings === undefined) return CONTINUE;
       await recordOf(store, options, call.sessionID, paths, findings);
-      const open = openFindings(findings, waivers);
+      const open = await openFindings(findings, options);
       if (open.length === 0) return CONTINUE;
       return {
         transform: {
@@ -140,8 +125,19 @@ async function findingsOf(
   }
 }
 
-/** The findings that are open: not taste, and not waived. */
-function openFindings(findings: readonly Finding[], waivers: WaiverLookup): Finding[] {
+/**
+ * The findings that are open: not taste, and not waived.
+ *
+ * The waivers are read when there is something to filter: a call that found
+ * nothing does not read the decisions of the project. A waiver a person
+ * recorded covers a finding, and a covered finding is not open.
+ */
+async function openFindings(
+  findings: readonly Finding[],
+  options: QualityRuleOptions,
+): Promise<Finding[]> {
+  if (findings.length === 0) return [];
+  const waivers = options.waivers ?? (await loadWaiverLookup(options.stateRoot));
   return findings.filter((finding) => finding.tier !== 'finish' && !waivers.covers(finding));
 }
 

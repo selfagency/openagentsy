@@ -21,6 +21,7 @@ const HUMAN_ONLY_TOOLS = [
   'openagentsy_oa_lesson_decide',
   'oa_quality_waive',
   'openagentsy_quality_waive',
+  'openagentsy_oa_quality_waive',
   'oa_memory_decide',
   'openagentsy_memory_decide',
   'openagentsy_oa_memory_decide',
@@ -167,7 +168,10 @@ describe('the board server over stdio', () => {
     // The quality check is a tool of its own: the rule shows the agent
     // eight lines of findings, and the tool returns all of them.
     expect(names).toContain('oa_quality_check');
-    expect(names.length).toBe(19);
+    // A waiver is a decision a person makes, and the map takes the tool
+    // away from every agent role.
+    expect(names).toContain('oa_quality_waive');
+    expect(names.length).toBe(20);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
@@ -676,6 +680,37 @@ describe('the workspace tools', () => {
       (record) => record.id === posted.id,
     );
     expect(candidate?.state).toBe('promoted');
+  });
+});
+
+/**
+ * The waiver tool.
+ *
+ * A waiver is a decision a person makes, and the tool is the way a person
+ * makes it that the server knows about. The permission map keeps every
+ * agent role away from it, and the tool itself refuses a floor rule.
+ */
+describe('the waiver tool', () => {
+  it('records a waiver for a rule that may be waived', async () => {
+    const recorded = await call('oa_quality_waive', {
+      ruleId: 'css/no-transition-all',
+      path: 'src/app.css',
+      reason: 'The file is a fixture, not a page.',
+      decidedBy: 'human',
+    });
+    expect(recorded.ruleId).toBe('css/no-transition-all');
+    expect(recorded.decidedBy).toBe('human');
+  });
+
+  it('refuses a floor rule', async () => {
+    await expect(
+      call('oa_quality_waive', {
+        ruleId: 'css/contrast',
+        path: 'src/app.css',
+        reason: 'The contrast is fine, I have looked at it.',
+        decidedBy: 'human',
+      }),
+    ).rejects.toThrow('cannot be waived');
   });
 });
 
