@@ -1,10 +1,13 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { closeSync, fstatSync, openSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
 import { gitFreeEnv } from './git-env.js';
+
+const execFileAsync = promisify(execFile);
 export type SessionTurn = {
   /** The text the agent under test produced. */
   text: string;
@@ -19,6 +22,14 @@ export type SessionTurn = {
 export type OpenCodeHarness = {
   client: OpencodeClient;
   root: string;
+  /**
+   * The runtime the harness started.
+   *
+   * A verdict says which runtime measured it: the runtimes differ in more
+   * than their API, and a run that cannot name its runtime is a run whose
+   * result cannot be read.
+   */
+  runtime: OpenCodeRuntime;
   stop: () => Promise<void>;
   /**
    * The faults that are still watching.
@@ -44,6 +55,58 @@ export type OpenCodeHarness = {
 };
 
 /**
+ * The OpenCode the harness started.
+ *
+ * The binary is named by the environment, because a machine may have more
+ * than one: the suite talks to the OpenCode 1 API, and a machine whose
+ * `opencode` is a 2.x serves the 2.x API instead. The default is the one on
+ * the path.
+ */
+export type OpenCodeRuntime = {
+  /** The binary the harness runs. */
+  binary: string;
+  /** The version the binary reported, for example "1.19.4". */
+  version: string;
+  /** The major version: 1 or 2. */
+  major: number;
+};
+
+/**
+ * The binary the harness starts.
+ *
+ * The suite drives the OpenCode 1 API, so the binary is the one that serves
+ * it. The environment names it, because the machine's `opencode` may be a
+ * different major version, and the path is not a thing the code may decide.
+ */
+export function runtimeBinary(): string {
+  const named = process.env.OPENAGENTSY_EVAL_BIN?.trim();
+  return named !== undefined && named !== '' ? named : 'opencode';
+}
+
+/**
+ * Read the version of the runtime the harness will start.
+ *
+ * A version that cannot be read is a run whose result cannot be read, so the
+ * harness stops rather than measuring with a runtime it cannot name.
+ */
+export async function readRuntime(binary: string): Promise<OpenCodeRuntime> {
+  let output: string;
+  try {
+    const result = await execFileAsync(binary, ['--version']);
+    output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  } catch (error) {
+    throw new Error(
+      `the opencode runtime ${binary} could not be started: ${(error as Error).message}`,
+    );
+  }
+  const found = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+  if (found === null) {
+    throw new Error(`the opencode runtime ${binary} did not report a version: ${output.trim()}`);
+  }
+  return { binary, version: found[0], major: Number(found[1]) };
+}
+
+/**
  * How a permission request is answered.
  *
  * The Lead asks before it runs a shell command, and in a headless session
@@ -61,11 +124,36 @@ export type PermissionPolicy = (request: {
 const DEFAULT_PERMISSION: PermissionPolicy = () => 'once';
 
 /**
+ * The patterns a permission request names.
+ *
+ * The server sends the pattern under the key `pattern`, as a string or as a
+ * list of them. A reader that looks for `patterns` sees an empty list for
+ * every request, and a policy that refuses a path by its patterns can then
+ * never refuse one.
+ */
+export function permissionPatterns(properties: {
+  pattern?: string | string[] | undefined;
+  patterns?: string[] | undefined;
+}): string[] {
+  if (Array.isArray(properties.pattern)) return properties.pattern;
+  if (typeof properties.pattern === 'string') return [properties.pattern];
+  if (Array.isArray(properties.patterns)) return properties.patterns;
+  return [];
+}
+
+/**
  * Watch the server for permission requests and answer them.
  *
  * The event stream is scoped to a directory, so one subscription serves one
  * case. Without an answer the first shell command of a case waits forever,
  * which looks like a slow model and is not.
+ *
+ * The subscription stays scoped to the case. A subscription for the whole
+ * server would have every case answer every case's requests, and a case
+ * whose policy refuses the protected paths would refuse another case's
+ * edit. A request from a session outside the case's directory is the case
+ * that owns it that answers, and the lines below say which case answered
+ * which request.
  */
 export async function answerPermissions(
   harness: OpenCodeHarness,
@@ -91,28 +179,50 @@ export async function answerPermissions(
         sessionID: string;
         title?: string;
         type?: string;
+        pattern?: string | string[];
         patterns?: string[];
       };
-      const response = policy({
+      const request = {
         sessionID: properties.sessionID,
         permissionID: properties.id,
         title: properties.title ?? '',
         type: properties.type ?? '',
-        patterns: properties.patterns ?? [],
-      });
+        patterns: permissionPatterns(properties),
+      };
+      // Every request is written down before it is answered. A case that
+      // waits for a permission answer and a case that waits for a child
+      // session that never returns look the same in a run log, and only the
+      // request line tells the two apart.
+      process.stdout.write(
+        `[permission] ${request.sessionID} asks for ${request.type} in ${directory}: ${request.patterns.join(' ')}\n`,
+      );
+      const response = policy(request);
       // The subscription is scoped to the case directory, so a session that
       // asks here belongs to this case; a host error naming it is attributed.
-      harness.trackSession(properties.sessionID, basename(directory));
+      harness.trackSession(request.sessionID, basename(directory));
       await harness.client.postSessionIdPermissionsPermissionId({
-        path: { id: properties.sessionID, permissionID: properties.id },
+        path: { id: request.sessionID, permissionID: request.permissionID },
         body: { response },
         query: { directory },
       });
+      process.stdout.write(`[permission] ${request.sessionID} answered ${response}\n`);
+    }
+    if (!stopped) {
+      // The stream ended without the harness asking for it: the server
+      // closed the subscription. Every permission request from now on waits
+      // for an answer that will not come, and a case that waits looks like
+      // a slow model.
+      process.stderr.write(
+        `[permission] the pump for ${directory} ended: the server closed the event stream, and every permission request from now on waits for an answer that will not come\n`,
+      );
     }
   };
 
-  void pump().catch(() => {
-    // The server went away first, which happens at teardown.
+  void pump().catch((error: unknown) => {
+    // The pump answers the permissions of a case. A throw ends the
+    // answering for the rest of the case, and nothing else in the run says
+    // so, so the death is written down loudly.
+    process.stderr.write(`[permission] the pump for ${directory} died: ${String(error)}\n`);
   });
 
   return () => {
@@ -402,6 +512,12 @@ export async function sweepStaleHarnessFiles(
 export async function startHarness(options: { port?: number } = {}): Promise<OpenCodeHarness> {
   const port = options.port ?? 40_000 + Math.floor(Math.random() * 5_000);
   const baseUrl = `http://127.0.0.1:${port}`;
+  // The runtime is named before the server starts, and the run says which
+  // one it is: a verdict that cannot name the runtime cannot be read, and
+  // the machine may have more than one `opencode` on it.
+  const binary = runtimeBinary();
+  const runtime = await readRuntime(binary);
+  process.stdout.write(`the suite runs ${runtime.binary} ${runtime.version}\n`);
 
   // The server's output goes to a file even when no log path is given, so a
   // CI run shows why a server that never answered did not answer. `serve` is
@@ -443,7 +559,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // write into the repository that started the suite.
   const serverCwd = await mkdtemp(join(tmpdir(), 'openagentsy-eval-server-cwd-'));
 
-  const child: ChildProcess = spawn('opencode', serveArgs(port), {
+  const child: ChildProcess = spawn(binary, serveArgs(port), {
     stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
     cwd: serverCwd,
     env: { ...childEnv(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
@@ -475,6 +591,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   return {
     client,
     root: baseUrl,
+    runtime,
     watches,
     hostErrors,
     trackSession: (sessionID, caseLabel) => {
@@ -944,13 +1061,45 @@ export async function startFaultServer(mode: '429' | 'down'): Promise<FaultServe
   };
 }
 
-/** Abort a session's turn, the way a killed builder stops mid-task. */
-export async function abortSession(
+/**
+ * End a session, the way a killed builder stops mid-task.
+ *
+ * An abort cancels the turn that is running, and the session resumes: the
+ * measured run (2026-10-27) had a builder that kept working for 59 seconds
+ * after the kill and posted its completion record, and the comment above
+ * the watch records a child that generated for nineteen minutes after its
+ * abort. Deleting the session ends it: the session is gone, so there is
+ * nothing to resume and nothing left to post a record.
+ *
+ * The abort comes first, because it is what stops the generation that is in
+ * flight, and the delete is what makes it stay stopped. A delete the server
+ * refuses leaves the abort as the only kill there is, and the watch keeps
+ * aborting the same session for a while.
+ */
+export async function killSession(
   client: OpencodeClient,
   sessionID: string,
   directory: string,
 ): Promise<void> {
-  await client.session.abort({ path: { id: sessionID }, query: { directory } });
+  try {
+    await client.session.abort({ path: { id: sessionID }, query: { directory } });
+  } catch {
+    // The session may be gone already; that is the outcome we wanted.
+  }
+  try {
+    const deleted = await client.session.delete({
+      path: { id: sessionID },
+      query: { directory },
+    });
+    if (deleted.error !== undefined) {
+      process.stderr.write(
+        `[kill] the session ${sessionID} was not deleted: ${JSON.stringify(deleted.error)}\n`,
+      );
+    }
+  } catch {
+    // The client cannot delete, or the server is gone; the abort is all the
+    // kill there is, and the watch keeps cutting the same session.
+  }
 }
 
 /**
@@ -1003,11 +1152,13 @@ export function killSessionWhenItAppears(
   // An abort cancels the session's in-flight generation, but the session's
   // loop can resume right after (measured 2026-10-27: a builder child kept
   // generating for nineteen minutes after its abort, and the transcript it
-  // grew was what the judge could no longer answer). Keep aborting the SAME
-  // session for a while after the first kill: an abort of an idle session
-  // is a no-op, and a resumed one is cut again. Only the killed session is
-  // re-aborted; a builder the Lead legitimately re-dispatches is a new
-  // session id and is never touched.
+  // grew was what the judge could no longer answer). The kill deletes the
+  // session, so there is nothing to resume. The abort is kept as a fallback
+  // for a delete the server refuses, and the same session is re-aborted for
+  // a while after the first kill: an abort of an idle session is a no-op,
+  // and a resumed one is cut again. Only the killed session is re-aborted; a
+  // builder the Lead legitimately re-dispatches is a new session id and is
+  // never touched.
   const suppressMs = options.suppressMs ?? 60_000;
   // A dispatched child can finish a small task before the server ever gives
   // it a title (measured 2026-10-27: a one-line hello.txt completed with
@@ -1041,7 +1192,7 @@ export function killSessionWhenItAppears(
         if (baseline === undefined) baseline = ids;
         const hit = selectKillTarget(sessions, baseline, matches);
         if (hit !== undefined) {
-          await client.session.abort({ path: { id: hit }, query: { directory } });
+          await killSession(client, hit, directory);
           void suppress(hit);
           return hit;
         }

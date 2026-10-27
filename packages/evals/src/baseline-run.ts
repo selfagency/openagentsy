@@ -63,7 +63,7 @@ async function main(): Promise<void> {
     await prepare(
       agentsy,
       { files: {}, leases: [{ agent: 'agentsy', glob: '**' }] },
-      { repoRoot: REPO_ROOT },
+      { repoRoot: REPO_ROOT, runtime: harness.runtime },
     );
     const stopAgentsy = await answerPermissions(harness, agentsy);
     const agentsyTurn = await runTurn({
