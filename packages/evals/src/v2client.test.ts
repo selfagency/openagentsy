@@ -70,11 +70,11 @@ function onlyCall(calls: Call[]): Call {
 }
 
 /** A client over a fake transport. */
-function client(transport: V2Transport, password?: string): V2Client {
+function client(transport: V2Transport, password?: string, directory = '/tmp/case'): V2Client {
   return new V2Client(
     {
       baseUrl: 'http://127.0.0.1:4096',
-      directory: '/tmp/case',
+      directory,
       ...(password === undefined ? {} : { password }),
     },
     transport,
@@ -236,6 +236,19 @@ describe('the calls of the client', () => {
     expect(answer.interrupted).toBe(false);
   });
 
+  it('asks the server not to resume the session it interrupts', async () => {
+    // The route resumes the execution by default, so an interrupted session
+    // goes on working and posts what it was going to post (measured on a
+    // live OpenCode 2.2.0 server, 2026-10-27: a builder that was
+    // interrupted kept working and posted its completion record). A cut
+    // that is not resumed ends there.
+    const { transport, calls } = fake(() => json(fixture('interrupt.json')));
+
+    await client(transport).interrupt('ses_abc');
+
+    expect(new URL(onlyCall(calls).url).searchParams.get('resume')).toBe('false');
+  });
+
   it('deletes a session', async () => {
     const { transport, calls } = fake(() => new Response('', { status: 204 }));
 
@@ -247,14 +260,60 @@ describe('the calls of the client', () => {
   });
 
   it('lists the sessions of the directory', async () => {
+    // The captured sessions name their directory two ways: `/tmp` is a link
+    // to `/private/tmp` on macOS, and the server answered with both. The
+    // client compares the paths the file system knows, so the two spellings
+    // are one directory and both sessions are the case's.
     const { transport, calls } = fake(() => json(fixture('session-list.json')));
 
-    const list = await client(transport).listSessions();
+    const list = await client(transport, undefined, '/tmp/oa-v2probe').listSessions();
 
     const call = onlyCall(calls);
     expect(call.method).toBe('GET');
     expect(new URL(call.url).pathname).toBe('/api/session');
     expect(list.sessions).toHaveLength(2);
+  });
+
+  it('asks the server for the sessions of the directory it is scoped to', async () => {
+    // The list route is filtered by `directory`. The `location[directory]`
+    // spelling is ignored by that route, so a client that sends only the
+    // one is answered with every session on the server (measured on a live
+    // OpenCode 2.2.0 server, 2026-10-27).
+    const { transport, calls } = fake(() => json(fixture('session-list.json')));
+
+    await client(transport).listSessions();
+
+    expect(new URL(onlyCall(calls).url).searchParams.get('directory')).toBe('/tmp/case');
+  });
+
+  it('never returns a session of another directory', async () => {
+    // The server's filter is a query, and a query is a thing the server can
+    // change. The answer is filtered here as well, so a watch that looks for
+    // a session to kill can never find another case's session.
+    const { transport } = fake(() =>
+      json(
+        JSON.stringify({
+          data: [
+            { id: 'ses_here', location: { directory: '/tmp/case' } },
+            { id: 'ses_elsewhere', location: { directory: '/tmp/other-case' } },
+          ],
+        }),
+      ),
+    );
+
+    const list = await client(transport).listSessions();
+
+    expect(list.sessions.map((session) => session.id)).toEqual(['ses_here']);
+  });
+
+  it('keeps a session that names no directory', async () => {
+    // The guard is about proof: a session without a directory is not proof
+    // of another case.
+    const { transport } = fake(() => json(JSON.stringify({ data: [{ id: 'ses_1' }] })));
+
+    const list = await client(transport).listSessions();
+
+    expect(list.sessions.map((session) => session.id)).toEqual(['ses_1']);
   });
 
   it('answers a permission request', async () => {
@@ -365,9 +424,12 @@ describe('the parsers of the client', () => {
   });
 
   it('reads a page of sessions', async () => {
+    // The captured page names its directory two ways (`/tmp` is a link to
+    // `/private/tmp`), so the client is scoped to the directory the
+    // sessions name and both of them are the case's.
     const { transport } = fake(() => json(fixture('session-list.json')));
 
-    const list = await client(transport).listSessions();
+    const list = await client(transport, undefined, '/tmp/oa-v2probe').listSessions();
 
     expect(list.sessions.map((session) => session.id)).toEqual([
       'ses_e81a0ebf6ffeuFpzQZmRvlcDLv',

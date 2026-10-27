@@ -1,11 +1,17 @@
+import { realpath } from 'node:fs/promises';
+
 /**
  * A client for the OpenCode 2 API.
  *
- * The 2.x server moved every route under `/api`, renamed the shapes it
- * answers with, and left the directory query behind: a call names its
- * directory with `location[directory]`, and the v1 spelling `directory` is
- * ignored, so a client that sends it lists nothing and says so by
- * answering with an empty list.
+ * The 2.x server moved every route under `/api` and renamed the shapes it
+ * answers with. The directory of a call travels in the query, and the
+ * spelling is not the same on every route: the session list is filtered by
+ * `directory`, and `location[directory]` is the spelling of the routes that
+ * take a location (the pty connect route, for one). The session list ignores
+ * `location[directory]` and answers with every session on the server
+ * (measured on a live OpenCode 2.2.0 server, 2026-10-27), so the list sends
+ * the spelling the route honours and the client filters the answer on the
+ * directory as well.
  *
  * The client is written on plain `fetch`. The published SDK for the 2.x
  * API does not exist in this workspace, and a suite that waits for one
@@ -417,9 +423,23 @@ export class V2Client {
     return sessions;
   }
 
-  /** Interrupt the turn a session is running. */
+  /**
+   * Interrupt the turn a session is running.
+   *
+   * The `resume=false` is the whole point of the call. The route resumes the
+   * execution by default, so a session that is interrupted goes on working
+   * and posts what it was going to post (measured on a live OpenCode 2.2.0
+   * server, 2026-10-27: a builder that was interrupted kept working and
+   * posted its completion record). A session that is cut and not resumed
+   * ends there.
+   */
   async interrupt(sessionID: string): Promise<{ interrupted: boolean }> {
-    const body = await this.send('POST', `/session/${encodeURIComponent(sessionID)}/interrupt`, {});
+    const body = await this.send(
+      'POST',
+      `/session/${encodeURIComponent(sessionID)}/interrupt`,
+      {},
+      { resume: 'false' },
+    );
     const object = asObject(parseJson(body), 'the interrupt answer', body);
     const interrupted = object['interrupted'];
     if (typeof interrupted !== 'boolean') {
@@ -433,15 +453,47 @@ export class V2Client {
     await this.send('DELETE', `/session/${encodeURIComponent(sessionID)}`);
   }
 
-  /** The sessions of the directory. */
+  /**
+   * The sessions of the directory, and only of that directory.
+   *
+   * The route is filtered by `directory`, and the answer is filtered again
+   * here: the server's filter is a query, and a query is a thing the server
+   * can change. A session of another case must never come back, because a
+   * watch that looks for a session to kill would find another case's
+   * session and kill that one (measured on a live OpenCode 2.2.0 server,
+   * 2026-10-27: the list route ignored `location[directory]` and answered
+   * with every session on the server, so the kill of one case landed on
+   * another case's session and the case under test never saw its fault).
+   */
   async listSessions(): Promise<V2SessionList> {
-    const body = await this.send('GET', '/session');
+    const body = await this.send('GET', '/session', undefined, { directory: this.directory });
     const envelope = envelopeOf(parseJson(body), body);
     const items = asArray(envelope.data, 'the session list', body);
+    const sessions = await this.onlyHere(items.map((item) => parseSession(item, body)));
     return {
-      sessions: items.map((item) => parseSession(item, body)),
+      sessions,
       ...(envelope.cursor === undefined ? {} : { cursor: envelope.cursor }),
     };
+  }
+
+  /**
+   * The sessions that belong to the directory of this client.
+   *
+   * A session that names no directory is kept: the guard is about proof, and
+   * a session without a directory is not proof of another case.
+   */
+  private async onlyHere(sessions: V2Session[]): Promise<V2Session[]> {
+    const here = await canonicalPath(this.directory);
+    const kept: V2Session[] = [];
+    for (const session of sessions) {
+      const directory = session.directory;
+      if (directory === undefined) {
+        kept.push(session);
+        continue;
+      }
+      if ((await canonicalPath(directory)) === here) kept.push(session);
+    }
+    return kept;
   }
 
   /**
@@ -505,21 +557,27 @@ export class V2Client {
   }
 
   /** The URL of a call, with the location query every call carries. */
-  private url(path: string): string {
+  private url(path: string, query?: Record<string, string>): string {
     const params = new URLSearchParams();
     params.set('location[directory]', this.directory);
+    for (const [name, value] of Object.entries(query ?? {})) params.set(name, value);
     return `${this.baseUrl}/api${path}?${params.toString()}`;
   }
 
   /** Send one request and answer with the body the server sent. */
-  private async send(method: string, path: string, body?: unknown): Promise<string> {
+  private async send(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Record<string, string>,
+  ): Promise<string> {
     const headers = this.headers();
     const init: V2Request = { method, headers };
     if (body !== undefined) {
       headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(body);
     }
-    const response = await this.transport.request(this.url(path), init);
+    const response = await this.transport.request(this.url(path, query), init);
     const text = await response.text();
     if (!response.ok) {
       throw new V2HttpError(response.status, text);
@@ -597,6 +655,23 @@ function defaultTransport(): V2Transport {
 }
 
 /** Read a body the server sent as JSON. */
+/**
+ * The path the file system knows.
+ *
+ * The server answers with the canonical path of a directory and the case
+ * names it with the path it made, and the two are one place written two
+ * ways: `/var` is a link to `/private/var` on macOS. The comparison that
+ * decides whether a session belongs to a directory is made on the paths the
+ * file system knows, so the two spellings are one path.
+ */
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
 function parseJson(text: string): unknown {
   try {
     return JSON.parse(text) as unknown;

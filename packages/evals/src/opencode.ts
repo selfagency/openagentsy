@@ -124,6 +124,14 @@ export type HarnessSession = {
   title?: string;
   /** The session that dispatched this one. */
   parentID?: string;
+  /**
+   * The directory the session lives in.
+   *
+   * The server answers with the directory of every session, and the harness
+   * reads it: a session of another case is never this case's, and a watch
+   * that looks for a session to kill must not find one.
+   */
+  directory?: string;
 };
 
 /**
@@ -452,6 +460,7 @@ export class V2HarnessClient implements HarnessClient {
       id: session.id,
       ...(session.title !== undefined ? { title: session.title } : {}),
       ...(session.parentID !== undefined ? { parentID: session.parentID } : {}),
+      ...(session.directory !== undefined ? { directory: session.directory } : {}),
     }));
   }
 }
@@ -732,7 +741,7 @@ export type OpenCodeHarness = {
    * here and waits for it when the case ends. A watcher that is dropped
    * keeps polling after the case is gone.
    */
-  watches: { killed: Promise<string | undefined>; stop: () => void }[];
+  watches: KillWatch[];
   /**
    * The host errors the server wrote since it started, each with the case it
    * belongs to. `stop` reads the same list and throws when it holds a fault.
@@ -1604,7 +1613,7 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
           }),
         );
 
-  const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
+  const watches: KillWatch[] = [];
   const sessions = new Map<string, string>();
   // The sessions a case injected a fault into. The server writes that fault
   // as an ERROR naming the session, and the fault is the case's own doing.
@@ -1630,15 +1639,12 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // pending timer keeps the process alive.
       for (const watch of watches) watch.stop();
       // The sessions the harness killed on purpose are the case's fault, not
-      // the host's: the server logs each abort at ERROR. The watches resolve
-      // to the id they killed (or undefined when they gave up), so they are
-      // the list of errors the cases asked for. Collect it before the server
-      // goes away, while an abort that is still in flight can still land.
-      const killedSessions = new Set(
-        (await Promise.all(watches.map((watch) => watch.killed))).filter(
-          (id): id is string => id !== undefined,
-        ),
-      );
+      // the host's: the server logs each abort at ERROR. The watches answer
+      // with every session they killed (a fault that kills every builder
+      // the Lead dispatches kills more than one), so the whole list is
+      // collected. Collect it before the server goes away, while an abort
+      // that is still in flight can still land.
+      const killedSessions = new Set((await Promise.all(watches.map((watch) => watch.all))).flat());
       child.kill('SIGTERM');
       // The server writes to the log file it was given, and it may still be
       // writing when the process is asked to stop. Waiting for the exit
@@ -2417,6 +2423,47 @@ async function cutSession(
  * own sessions - the Lead and the judge - are roots, and the archivist, which
  * the Lead dispatches at the end of its turn, says so in its title.
  */
+export function killTargets(
+  sessions: {
+    id?: string | undefined;
+    title?: string | undefined;
+    parentID?: string | undefined;
+  }[],
+  baseline: Set<string>,
+  matches: (title: string) => boolean,
+): string[] {
+  const targets: string[] = [];
+  for (const session of sessions) {
+    const target = killTargetOf(session, baseline, matches);
+    if (target !== undefined) targets.push(target);
+  }
+  return targets;
+}
+
+/**
+ * The session a kill may land on, when it may land on one.
+ */
+function killTargetOf(
+  session: {
+    id?: string | undefined;
+    title?: string | undefined;
+    parentID?: string | undefined;
+  },
+  baseline: Set<string>,
+  matches: (title: string) => boolean,
+): string | undefined {
+  if (session.id === undefined) return undefined;
+  const title = (session.title ?? '').trim();
+  // The archivist is left alone wherever it is: the harvest session is a
+  // root whose title says what it is, and a kill that took it would take
+  // the memory of the session it was harvesting.
+  if (/archiv|harvest/i.test(title)) return undefined;
+  const isChild = session.parentID !== undefined && session.parentID !== null;
+  if (isChild) return session.id;
+  if (title === '') return baseline.has(session.id) ? undefined : session.id;
+  return matches(title) ? session.id : undefined;
+}
+
 export function selectKillTarget(
   sessions: {
     id?: string | undefined;
@@ -2426,23 +2473,160 @@ export function selectKillTarget(
   baseline: Set<string>,
   matches: (title: string) => boolean,
 ): string | undefined {
-  const target = sessions.find((session) => {
-    if (session.id === undefined) return false;
-    const title = (session.title ?? '').trim();
-    const isChild = session.parentID !== undefined && session.parentID !== null;
-    if (isChild) return !/archiv/i.test(title);
-    if (title === '') return !baseline.has(session.id);
-    return matches(title);
-  });
-  return target?.id;
+  return killTargets(sessions, baseline, matches)[0];
 }
+
+/**
+ * The sessions that belong to the case's directory.
+ *
+ * A session of another case is never this case's, and the watch that looks
+ * for a session to kill must not find one: the server's own filter is a
+ * query, and a query is a thing the server can change (measured on a live
+ * OpenCode 2.2.0 server, 2026-10-27: the list route ignored the location
+ * query and answered with every session on the server, so the kill of one
+ * case landed on another case's session and the case under test never saw
+ * its fault).
+ *
+ * A session that names no directory is kept: the guard is about proof, and
+ * a session without a directory is not proof of another case.
+ */
+async function sessionsOfCase(
+  sessions: HarnessSession[],
+  directory: string,
+): Promise<HarnessSession[]> {
+  const here = await canonicalPath(directory);
+  const mine: HarnessSession[] = [];
+  for (const session of sessions) {
+    const own = session.directory;
+    if (own === undefined) {
+      mine.push(session);
+      continue;
+    }
+    if ((await canonicalPath(own)) === here) mine.push(session);
+  }
+  return mine;
+}
+
+/**
+ * The path the file system knows.
+ *
+ * The server answers with the path of a directory and the case names the
+ * same place another way: `/var` is a link to `/private/var` on macOS. The
+ * comparison that decides whether a session belongs to a directory is made
+ * on the paths the file system knows, so the two spellings are one path.
+ */
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * The kill of every session the watch has not killed yet.
+ *
+ * The kills run beside the watch: the watch says at once which session it
+ * found, and the kill keeps cutting that session in the background, because
+ * a cut takes a window to be sure.
+ */
+function startKills(
+  client: HarnessClient,
+  directory: string,
+  targets: string[],
+  killedIds: string[],
+  options: {
+    windowMs: number;
+    intervalMs: number;
+    repeat: boolean;
+    until: () => boolean;
+  },
+  answerKilled: (id: string | undefined) => void,
+): void {
+  for (const target of targets) {
+    if (killedIds.includes(target)) continue;
+    killedIds.push(target);
+    answerKilled(killedIds[0]);
+    void killSession(client, target, directory, {
+      windowMs: options.windowMs,
+      intervalMs: options.intervalMs,
+      until: options.until,
+    });
+    // A watch that does not repeat stops at the first session: one kill is
+    // the fault, and the Lead may dispatch another builder.
+    if (!options.repeat) break;
+  }
+}
+
+/**
+ * The sessions a kill may land on, and the baseline of the watch.
+ *
+ * The server is asked for the sessions of the case, and the answer is
+ * filtered again: the sessions of the case, and only of the case. A watch
+ * that looks for a session to kill must never find another case's session
+ * (the server's own filter is a query, and a query is a thing the server
+ * can change).
+ *
+ * A server that is not up yet is not a reason to stop watching: the poll
+ * answers with nothing and the watch tries again.
+ */
+async function findKillTargets(
+  client: HarnessClient,
+  directory: string,
+  matches: (title: string) => boolean,
+  baseline: Set<string> | undefined,
+): Promise<{ baseline?: Set<string>; targets: string[] }> {
+  try {
+    const sessions = await client.listSessions({ directory });
+    const mine = await sessionsOfCase(sessions, directory);
+    const ids = baseline ?? new Set(mine.map((session) => session.id));
+    return { baseline: ids, targets: killTargets(mine, ids, matches) };
+  } catch {
+    return { targets: [] };
+  }
+}
+
+/**
+ * A watch that kills the sessions it finds.
+ */
+export type KillWatch = {
+  /** The first session the watch killed, when it killed one. */
+  killed: Promise<string | undefined>;
+  /**
+   * Every session the watch killed.
+   *
+   * The promise is answered when the watch stops, because a watch that
+   * kills every builder the Lead dispatches kills more than one, and the
+   * run has to know all of them: the server writes an error for every
+   * session it aborts, and those errors are the fault the case injected.
+   */
+  all: Promise<string[]>;
+  /** Stop the watch. */
+  stop: () => void;
+};
 
 export function killSessionWhenItAppears(
   client: HarnessClient,
   directory: string,
   matches: (title: string) => boolean,
-  options: { attempts?: number; intervalMs?: number; windowMs?: number } = {},
-): { killed: Promise<string | undefined>; stop: () => void } {
+  options: {
+    attempts?: number;
+    intervalMs?: number;
+    windowMs?: number;
+    /**
+     * Whether the watch keeps killing after the first one.
+     *
+     * A builder that dies once can be replaced: the Lead dispatches another
+     * one and the work gets done. The fault of this case is a builder that
+     * dies, and a case that lets the Lead recover measures the recovery
+     * instead of the fault. A watch that repeats kills every builder the
+     * Lead dispatches, for as long as the case runs, so the work cannot be
+     * done and the Lead has to report the death. The case still fails when
+     * a builder posts a completion: that means the kill did not land.
+     */
+    repeat?: boolean;
+  } = {},
+): KillWatch {
   // The watch lives until the harness stops it, not for a fixed number of
   // polls: the Lead decides when to dispatch, and that can take minutes
   // (measured 2026-10-27: a watch that gave up after sixty seconds expired
@@ -2460,6 +2644,7 @@ export function killSessionWhenItAppears(
   // cut; a builder the Lead legitimately re-dispatches is a new session id
   // and is never touched.
   const windowMs = options.windowMs ?? KILL_WINDOW_MS;
+  const repeat = options.repeat ?? false;
   // A dispatched child can finish a small task before the server ever gives
   // it a title (measured 2026-10-27: a one-line hello.txt completed with
   // the session still untitled, the title match never fired, and the fault
@@ -2470,33 +2655,43 @@ export function killSessionWhenItAppears(
   // the title test, which covers a child that raced into the baseline.
   let baseline: Set<string> | undefined;
   let stopped = false;
-  const killed = (async (): Promise<string | undefined> => {
+  const killedIds: string[] = [];
+  let answerKilled: (id: string | undefined) => void = () => {};
+  let answerAll: (ids: string[]) => void = () => {};
+  const killed = new Promise<string | undefined>((resolve) => {
+    answerKilled = resolve;
+  });
+  const all = new Promise<string[]>((resolve) => {
+    answerAll = resolve;
+  });
+  void (async (): Promise<void> => {
     for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
-      try {
-        const sessions = await client.listSessions({ directory });
-        const ids = new Set(sessions.map((session) => session.id));
-        if (baseline === undefined) baseline = ids;
-        const hit = selectKillTarget(sessions, baseline, matches);
-        if (hit !== undefined) {
-          // The kill runs beside the watch: the watch says at once which
-          // session it found, and the kill keeps cutting that session in the
-          // background, because a cut takes a window to be sure.
-          void killSession(client, hit, directory, {
-            windowMs,
-            intervalMs,
-            until: () => stopped,
-          });
-          return hit;
-        }
-      } catch {
-        // A server that is not up yet is not a reason to stop watching.
-      }
+      const found = await findKillTargets(client, directory, matches, baseline);
+      if (found.baseline !== undefined) baseline = found.baseline;
+      startKills(
+        client,
+        directory,
+        found.targets,
+        killedIds,
+        {
+          windowMs,
+          intervalMs,
+          repeat,
+          until: () => stopped,
+        },
+        answerKilled,
+      );
+      // A watch that does not repeat stops at the first session.
+      if (killedIds.length > 0 && !repeat) break;
+      if (stopped) break;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
-    return undefined;
+    answerKilled(killedIds[0]);
+    answerAll(killedIds);
   })();
   return {
     killed,
+    all,
     stop: () => {
       stopped = true;
     },

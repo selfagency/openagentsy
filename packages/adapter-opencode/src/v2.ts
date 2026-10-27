@@ -120,7 +120,18 @@ export type V2PermissionEvent = {
 
 export type V2Event = {
   type: string;
-  properties?: { sessionID?: string; info?: unknown };
+  /**
+   * The v1 shape: the payload of the event under `properties`.
+   *
+   * The 1.x server sends `{type, properties}` and the 2.x server sends the
+   * envelope `{id, created, type, data}`. The plugin context hands the
+   * plugin the 2.x shape (measured on a live OpenCode 2.2.0 server,
+   * 2026-10-27), so the payload is under `data` and the reader below reads
+   * both, the way the harness reader does.
+   */
+  properties?: { sessionID?: string; info?: unknown; status?: unknown };
+  /** The v2 shape: the payload of the event under `data`. */
+  data?: { sessionID?: string; info?: unknown; status?: unknown };
 };
 
 /** The permission actions that write. The names are the permission map keys. */
@@ -226,6 +237,48 @@ async function registerContextHook(
 }
 
 /**
+ * The events that say a turn is over.
+ *
+ * The 2.x server says it with the execution events, and it says nothing
+ * with the v1 `session.idle`: the stream of a live OpenCode 2.2.0 server
+ * carried `session.execution.started`, `session.execution.succeeded` and
+ * `session.execution.failed`, and no idle event at all (measured
+ * 2026-10-27). A plugin that waits for `session.idle` waits forever, and
+ * the archivist never runs.
+ *
+ * The v1 spellings are read as well: a server that sends `session.idle` or
+ * a `session.status` that says `idle` is a server the plugin must still
+ * work on, and the two cost nothing to read.
+ */
+const TURN_ENDED = new Set(['session.execution.succeeded', 'session.execution.failed']);
+
+/**
+ * Whether an event says that a turn is over.
+ */
+function isTurnEnd(event: V2Event): boolean {
+  if (TURN_ENDED.has(event.type)) return true;
+  if (event.type === 'session.idle') return true;
+  if (event.type !== 'session.status') return false;
+  const status = event.data?.status ?? event.properties?.status;
+  return isRecord(status) && status.type === 'idle';
+}
+
+/**
+ * The session an event names, wherever the server put it.
+ */
+function sessionOf(event: V2Event): string | undefined {
+  const data = event.data?.sessionID;
+  if (typeof data === 'string') return data;
+  const properties = event.properties?.sessionID;
+  return typeof properties === 'string' ? properties : undefined;
+}
+
+/** Whether a value is an object and not an array. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
  * An assistant message finished, on the V2 path.
  *
  * The V2 context has no way to look a session up, so the session is its own
@@ -239,7 +292,7 @@ async function onMessageUpdated(
 ): Promise<void> {
   const message = assistantMessageOf(event);
   if (message === undefined) return;
-  const sessionID = event.properties?.sessionID;
+  const sessionID = sessionOf(event);
   if (sessionID === undefined) return;
   const agent = sessionAgents.get(sessionID);
   if (agent === undefined) return;
@@ -332,8 +385,11 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
         await onMessageUpdated(root, event, sessionAgents);
         continue;
       }
-      if (event.type !== 'session.idle') continue;
-      const sessionID = event.properties?.sessionID;
+      // The turn is over. The rungs go back and the archivist takes what the
+      // session learned, the same way the V1 path does when a session goes
+      // idle.
+      if (!isTurnEnd(event)) continue;
+      const sessionID = sessionOf(event);
       if (!sessionID) continue;
       const agent = sessionAgents.get(sessionID);
       sessionAgents.delete(sessionID);

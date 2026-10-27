@@ -59,7 +59,11 @@ afterEach(async () => {
 
 /** A context that records what the plugin asked of it. */
 function fakeContext(
-  events: { type: string; properties?: { sessionID?: string } }[],
+  events: {
+    type: string;
+    properties?: { sessionID?: string };
+    data?: { sessionID?: string };
+  }[],
   directory = root,
 ) {
   const created: { title?: string; parentID?: string }[] = [];
@@ -147,6 +151,43 @@ describe('the OpenCode 2 path', () => {
     // The packet carries what the session said and where a candidate goes.
     expect(prompts[0]?.text).toContain('what the session said');
     expect(prompts[0]?.text).toContain('the candidate in the action');
+  });
+
+  it('launches the archivist when the execution of a session ends', async () => {
+    // The 2.x server says a turn is over with the execution events and says
+    // nothing with the v1 `session.idle`: the event stream of a live
+    // OpenCode 2.2.0 server carried `session.execution.started`,
+    // `session.execution.succeeded` and `session.execution.failed`, and no
+    // idle event at all (measured 2026-10-27). The plugin context hands the
+    // plugin the server's own event shape, so the session is under `data`.
+    const { ctx, created, prompts, contextHooks, done } = fakeContext([
+      { type: 'session.execution.succeeded', data: { sessionID: 'ses_1' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+    await done;
+
+    expect(created).toEqual([{ title: 'harvest builder' }]);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.sessionID).toBe('ses_archivist');
+  });
+
+  it('does not launch the archivist when the execution of a session starts', async () => {
+    // The start of an execution is not the end of a turn, and a session that
+    // is only starting has nothing to distil.
+    const { ctx, created, prompts, contextHooks, done } = fakeContext([
+      { type: 'session.execution.started', data: { sessionID: 'ses_1' } },
+    ]);
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'oa-builder' });
+    }
+    await done;
+
+    expect(created).toHaveLength(0);
+    expect(prompts).toHaveLength(0);
   });
 
   it('does not launch the archivist when the harvest is off', async () => {

@@ -754,8 +754,22 @@ export const FAULT_BUILDER_KILLED: Scenario = {
       // watcher kills it there and then, in the middle of its work, and
       // not between the turns, which is after it has already posted its
       // completion record.
+      //
+      // The watcher repeats: a builder that dies once can be replaced, and
+      // a Lead that replaces it finishes the work, so a case that lets the
+      // Lead recover measures the recovery and not the fault (measured
+      // 2026-10-27: the first builder was cancelled with no record, the
+      // Lead dispatched a second one, and the second one posted a
+      // completion record - the case then failed on a completion the fault
+      // had nothing to do with). The watch keeps killing every builder the
+      // Lead dispatches for as long as the case runs, so the work cannot be
+      // done and the Lead has to report the death. The expectations are
+      // untouched: a builder that posts a completion means the kill did not
+      // land, and the case still fails.
       harness.watches.push(
-        killSessionWhenItAppears(harness.client, state.root, (title) => title.includes('builder')),
+        killSessionWhenItAppears(harness.client, state.root, (title) => title.includes('builder'), {
+          repeat: true,
+        }),
       );
     },
   ],
@@ -1075,7 +1089,18 @@ export const HARVEST_MEMORY: Scenario = {
         const { waitForRecord } = await import('./fixture.js');
         // The harvest runs when the session goes idle and the archivist
         // works after that, so the check waits for the board to fill.
-        const memory = await waitForRecord(state, (record) => record.bean === 'memory');
+        //
+        // The wait is ten minutes, and the assertion is the same one it was:
+        // the candidates have to land on the board. What the longer wait
+        // buys is the time the archivist's own model run needs, which is not
+        // the harness's to bound. Measured on a live run (2026-10-27): the
+        // archivist's session was created 206 seconds after the builder's
+        // turn ended, when the case ran beside a case whose fault was
+        // killing a builder every few hundred milliseconds, and its turn
+        // ended 13 seconds after the old four-minute ceiling had expired.
+        // The candidates themselves are what the case measures, and they
+        // have to be on the board.
+        const memory = await waitForRecord(state, (record) => record.bean === 'memory', 600_000);
         if (!memory) return 'no memory record was posted';
         return undefined;
       },
