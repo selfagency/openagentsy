@@ -69,7 +69,7 @@ function prefixOf(pattern: string): string | undefined {
  *
  * The asterisk is the only wildcard, and it matches any run of characters.
  */
-export function matchesPattern(pattern: string, text: string): boolean {
+function matchesPattern(pattern: string, text: string): boolean {
   const parts = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   return new RegExp(`^${parts.join('.*')}$`).test(text);
 }
@@ -187,12 +187,13 @@ function mergeAction(
 
   for (const [pattern, effect] of Object.entries(wanted)) {
     const known = rules.findIndex(([key]) => key === pattern);
-    if (known !== -1) {
-      const before = rules[known]?.[1] ?? 'allow';
-      rules[known] = [pattern, tighten(action, pattern, before, effect)];
-      continue;
-    }
-    rules.splice(placementOf(rules, pattern, effect), 0, [pattern, effect]);
+    const before = known === -1 ? undefined : rules[known]?.[1];
+    // A rule that is written again is placed again. It was placed when it
+    // first arrived, and the rules around it have moved since, so a rule
+    // that now overlaps a looser rule after it would stay buried there.
+    const placed = before === undefined ? effect : tighten(action, pattern, before, effect);
+    if (known !== -1) rules.splice(known, 1);
+    rules.splice(placementOf(rules, pattern, placed), 0, [pattern, placed]);
   }
 
   const merged: Record<string, PermissionEffect> = {};

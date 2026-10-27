@@ -19,6 +19,7 @@ import {
   refuseClimb,
   roleKeyForAgent,
   rungTarget,
+  statedPathsOf,
   writeRungs,
 } from './guard.js';
 import { harvest, harvestEnabled, recordHarvestFailure } from './harvest.js';
@@ -353,6 +354,14 @@ async function setupServer(
     roleForSession: async (sessionID) => {
       const agent = sessionAgents.get(sessionID);
       return agent === undefined ? undefined : roleKeyForAgent(root, agent);
+    },
+    statedPathsForSession: async (sessionID) => {
+      // The scope of the task a session is working on is the set of files
+      // the task holds a lease on: the board says which files the work may
+      // touch, and the leases are that statement.
+      const agent = sessionAgents.get(sessionID);
+      if (agent === undefined) return [];
+      return statedPathsOf(root, agent);
     },
     approvalFor: await readApprovalFor(root),
     onFindings: async (findings, sessionID) => {

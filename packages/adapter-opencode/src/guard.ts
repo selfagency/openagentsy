@@ -255,6 +255,55 @@ export async function activeBean(root: string, agent: string): Promise<string | 
 }
 
 /**
+ * The path a lease glob names inside the workspace, without its wildcard.
+ *
+ * A lease is written as an absolute glob, and a reply names a relative
+ * path, so the glob is cut at its first wildcard and the directory in front
+ * of it is what a reply can be compared against. A glob that names one file
+ * is that file.
+ *
+ * A glob outside the workspace names nothing the workspace holds, so the
+ * answer is nothing.
+ */
+function relativeGlob(glob: string, root: string): string | undefined {
+  const prefix = root.endsWith('/') ? root : `${root}/`;
+  if (!glob.startsWith(prefix)) return undefined;
+  const relative = glob.slice(prefix.length);
+  const wildcard = relative.search(/[*?]/);
+  if (wildcard === -1) return relative;
+  const head = relative.slice(0, wildcard);
+  const cut = head.endsWith('/') ? head.length - 1 : head.lastIndexOf('/') + 1;
+  return head.slice(0, cut);
+}
+
+/**
+ * The paths the active task of an agent may touch.
+ *
+ * The scope of a task is the set of files it holds a lease on: the board
+ * says which files the work may touch, and the leases are that statement.
+ * The scope of a task that holds the whole workspace is the whole
+ * workspace, and then there is nothing a reply can be out of scope of, so
+ * the answer is no path at all.
+ *
+ * A session with no bean, or with a bean that holds no lease in this
+ * workspace, has no scope either: the answer is nothing rather than a
+ * guess.
+ */
+export async function statedPathsOf(root: string, agent: string): Promise<string[]> {
+  const bean = await activeBean(root, agent);
+  if (bean === undefined) return [];
+  const paths: string[] = [];
+  for (const lease of readLeases(root)) {
+    if (lease.bean !== bean) continue;
+    const relative = relativeGlob(lease.glob, root);
+    if (relative === undefined) continue;
+    if (relative === '') return [];
+    paths.push(relative);
+  }
+  return paths;
+}
+
+/**
  * Decide whether one path may be written.
  *
  * The rules are the ones in the core package, not a second copy.

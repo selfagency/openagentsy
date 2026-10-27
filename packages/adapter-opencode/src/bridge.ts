@@ -135,6 +135,14 @@ export type BridgeOptions = {
   roleForSession?: (sessionID: string) => string | undefined | Promise<string | undefined>;
   /** The paths the active task may touch, for the scope-drift check. */
   statedPaths?: readonly string[];
+  /**
+   * The paths the active task of a session may touch.
+   *
+   * The scope of a task is a fact of the board, and the board changes
+   * while a session runs, so the paths are asked for per reply rather than
+   * named once.
+   */
+  statedPathsForSession?: (sessionID: string) => readonly string[] | Promise<readonly string[]>;
   /** Where the findings of the output checks go. */
   onFindings?: (findings: OutputFinding[], sessionID: string) => void | Promise<void>;
   /** The rules a project adds on top of the defaults. */
@@ -257,6 +265,23 @@ function annotationFor(findings: readonly OutputFinding[]): string {
 }
 
 /**
+ * The rule the scope-drift check runs under.
+ *
+ * The check reports a file a reply names that the task does not cover, and a
+ * task that states no scope has no file it does not cover: every mention
+ * would be a finding, and a finding that fires on every mention says
+ * nothing. So the rule is left out when the scope is not stated, and that
+ * is a named rule rather than a silent filter.
+ *
+ * Where the scope comes from: the leases of the session's active bean, read
+ * from the board. A session with no bean, or a bean that holds the whole
+ * workspace, states no scope, and the check stays off for it. What would
+ * turn it on everywhere: a board record that carries the paths of the
+ * active task, which no board record carries today.
+ */
+const SCOPE_DRIFT_RULE = 'output-scope-drift';
+
+/**
  * The rules that flag a reply.
  *
  * The scope-drift check is left out when the task's scope is not known. A
@@ -270,7 +295,7 @@ function outputRules(
 ): Rule[] {
   const rules = outputCheckRules({ statedPaths, onFindings: sink });
   if (statedPaths.length > 0) return rules;
-  return rules.filter((rule) => rule.id !== 'output-scope-drift');
+  return rules.filter((rule) => rule.id !== SCOPE_DRIFT_RULE);
 }
 
 /**
@@ -281,6 +306,18 @@ function outputRules(
  */
 export function createBridge(options: BridgeOptions): BridgeHooks {
   const statedPaths = options.statedPaths ?? [];
+
+  /**
+   * The scope of the task a session is working on.
+   *
+   * The scope is asked for per reply, because the board changes while a
+   * session runs. A caller that states no source has no scope, and the
+   * scope-drift check stays off for that session.
+   */
+  async function scopeOf(sessionID: string): Promise<readonly string[]> {
+    if (options.statedPathsForSession === undefined) return statedPaths;
+    return await options.statedPathsForSession(sessionID);
+  }
 
   // The rules that block. They are registered here, and the comment below
   // is the reason they are the second layer and not the first.
@@ -368,8 +405,9 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
       // The output checks are registered per call, so the findings belong to
       // the reply they were found in. A check never stops a reply.
       const findings: OutputFinding[] = [];
+      const scope = await scopeOf(input.sessionID);
       const checks = createOaRegistry(
-        outputRules(statedPaths, (found) => {
+        outputRules(scope, (found) => {
           findings.push(...found);
         }),
       );

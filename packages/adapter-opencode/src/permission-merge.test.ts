@@ -1,6 +1,25 @@
 import type { PermissionEffect, V1PermissionBlock } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
-import { matchesPattern, mergePermissions, permissionEntriesFor } from './permission-merge.js';
+import { mergePermissions, permissionEntriesFor } from './permission-merge.js';
+
+/**
+ * Whether a pattern matches a command.
+ *
+ * The oracle is written here and not taken from the module under test: a
+ * matcher that is wrong in the same way as the code it checks hides the
+ * mistake, and the host's own matching is what a permission map is read
+ * with. An OpenCode permission pattern is a wildcard where a single
+ * asterisk matches zero or more of any character.
+ */
+function patternMatches(pattern: string, command: string): boolean {
+  const parts = pattern.split('*');
+  if (parts.length === 1) return pattern === command;
+  const head = parts[0] ?? '';
+  const tail = parts[parts.length - 1] ?? '';
+  if (!command.startsWith(head)) return false;
+  if (!command.endsWith(tail)) return false;
+  return command.length >= head.length + tail.length;
+}
 
 /**
  * The effect a command gets from a permission map.
@@ -11,7 +30,7 @@ import { matchesPattern, mergePermissions, permissionEntriesFor } from './permis
 function effective(block: Record<string, PermissionEffect>, command: string): PermissionEffect {
   let effect: PermissionEffect = 'allow';
   for (const [pattern, value] of Object.entries(block)) {
-    if (matchesPattern(pattern, command)) effect = value;
+    if (patternMatches(pattern, command)) effect = value;
   }
   return effect;
 }
@@ -117,6 +136,28 @@ describe('mergePermissions', () => {
     const current: V1PermissionBlock = { bash: { 'git push*': 'deny' } };
     const incoming: V1PermissionBlock = { bash: { 'git push*': 'ask' } };
     expect(() => mergePermissions(current, incoming)).toThrow(/loosen/);
+  });
+
+  it('places a rule that is written again', () => {
+    // The rule was placed when it first arrived, and the rules around it
+    // have moved since, so a rule that now overlaps a looser rule after it
+    // would stay buried there.
+    const current: V1PermissionBlock = { bash: { 'git push --force': 'ask', '*': 'allow' } };
+    const incoming: V1PermissionBlock = { bash: { 'git push --force': 'deny' } };
+    const merged = mergePermissions(current, incoming);
+
+    const bash = merged['bash'] as Record<string, PermissionEffect>;
+    expect(effective(bash, 'git push --force')).toBe('deny');
+  });
+
+  it('places an approval ask that is written again', () => {
+    const current: V1PermissionBlock = { bash: { 'git push*': 'ask', '*': 'allow' } };
+    const incoming: V1PermissionBlock = { bash: { 'git push*': 'ask' } };
+    const merged = mergePermissions(current, incoming);
+
+    const bash = merged['bash'] as Record<string, PermissionEffect>;
+    expect(effective(bash, 'git push origin main')).toBe('ask');
+    expect(effective(bash, 'ls -la')).toBe('allow');
   });
 });
 

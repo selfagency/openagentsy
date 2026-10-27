@@ -205,6 +205,39 @@ describe('the bridge', () => {
     expect(findings).toContain('scope-drift');
   });
 
+  it('asks the caller for the scope of a session, per reply', async () => {
+    // The scope of a task is a fact of the board, and the board changes
+    // while a session runs, so the paths are asked for per reply.
+    const asked: string[] = [];
+    const findings: string[] = [];
+    let scope: string[] = [];
+    const bridge = createBridge({
+      workspace: root,
+      stateRoot: root,
+      statedPathsForSession: (sessionID) => {
+        asked.push(sessionID);
+        return scope;
+      },
+      onFindings: (found) => {
+        findings.push(...found.map((finding) => finding.name));
+      },
+    });
+
+    await bridge['experimental.text.complete'](
+      { sessionID: 'ses-1' },
+      { text: 'I changed packages/adapter-opencode/src/bridge.ts and the gate is green.' },
+    );
+    expect(asked).toEqual(['ses-1']);
+    expect(findings).toEqual([]);
+
+    scope = ['packages/core/src/board.ts'];
+    await bridge['experimental.text.complete'](
+      { sessionID: 'ses-1' },
+      { text: 'I changed packages/adapter-opencode/src/bridge.ts and the gate is green.' },
+    );
+    expect(findings).toContain('scope-drift');
+  });
+
   it('merges the approval list into the permission config', async () => {
     const bridge = createBridge({
       workspace: root,
