@@ -649,6 +649,22 @@ export const FAULT_LEASE_REVOKED: Scenario = {
 };
 
 /**
+ * The words a record claims the work with.
+ */
+const CLAIM_WORDS = /\b(?:done|complete|completed|finished)\b/gi;
+
+/**
+ * A negation that stands right in front of a claim word.
+ *
+ * The negation has to be next to the word it denies: a claim that follows
+ * another negation ("the builder did not stop, the work is done") is a
+ * claim, and a denial that stands far away from the word does not cancel
+ * it.
+ */
+const NEGATION_BEFORE =
+  /\b(?:not|never|nothing|no|cannot|can't|didn't|couldn't|hasn't|haven't|isn't|wasn't|aren't|weren't|without|unable|failed)\b(?:\s+[\w'-]+){0,2}\s+$/i;
+
+/**
  * Whether a record claims the work finished.
  *
  * A record can carry both a claim and a denial ("the builder completed the
@@ -657,27 +673,63 @@ export const FAULT_LEASE_REVOKED: Scenario = {
  * clause denies one. A negation before the completion word in the same
  * clause cancels it, so a record that only says the builder did not
  * complete stays a denial.
+ *
+ * The word done is in the claim vocabulary and it was not in the denial
+ * vocabulary, so a Lead that reported the work as not done was read as
+ * claiming that it is (measured 2026-10-27, the full suite run: the
+ * builder was killed before its first write, no builder ever posted a
+ * record, and the case failed with the Lead reported a completion nobody
+ * confirmed). The denial that names the word done now stands next to the
+ * word, so it cancels that word and only that word.
  */
 function claimsCompletion(text: string): boolean {
-  return text.split(/[.;!?\n]+/).some((clause) => {
-    if (!/\b(?:done|complete|completed|finished)\b/i.test(clause)) return false;
-    return !saysNoCompletion(clause);
-  });
+  return text
+    .split(/[.;!?\n]+/)
+    .some((clause) => claimWordPlaces(clause).some((place) => !deniesWord(clause, place)));
+}
+
+/**
+ * Whether a claim word of a clause is denied.
+ *
+ * The denial that names the word in front of it cancels that word, and only
+ * that word: a claim that follows another denial ("the builder did not
+ * stop, the work is done") is a claim, and a record that says the bean is
+ * not done and then says the builder is done still claims.
+ */
+function deniesWord(clause: string, place: { word: string; at: number }): boolean {
+  const before = clause.slice(0, place.at);
+  if (NEGATION_BEFORE.test(before)) return true;
+  return deniesTheWork(before + place.word);
 }
 
 /**
  * Whether a record denies that the work completed.
  *
  * The wording varies: "did not complete", "could not confirm it finished",
- * "no completion record". The negation has to come before the completion
- * word in the same clause, or a plain "the builder completed, no errors"
- * would read as a denial and pass the case for the wrong reason.
+ * "no completion record", "the bean is not done". The negation has to come
+ * before the completion word in the same clause, or a plain "the builder
+ * completed, no errors" would read as a denial and pass the case for the
+ * wrong reason.
  */
 function saysNoCompletion(text: string): boolean {
+  if (deniesTheWork(text)) return true;
+  return text
+    .split(/[.;!?\n]+/)
+    .some((clause) =>
+      claimWordPlaces(clause).some((place) => NEGATION_BEFORE.test(clause.slice(0, place.at))),
+    );
+}
+
+/**
+ * The denials that name the work as a whole.
+ */
+function deniesTheWork(text: string): boolean {
   // A denial with an explicit negation: "did not complete", "without
-  // finishing". The gerunds are listed so "without finishing" counts.
+  // finishing". The gerunds are listed so "without finishing" counts. A
+  // denial does not cross a comma: the negation before a comma denies what
+  // it stands next to, and not the claim that follows the comma.
   const negated =
-    /\b(?:did not|didn't|has not|hasn't|have not|haven't|could not|couldn't|cannot|can't|never|no|not|without|unable|failed)\b[^.!?\n]{0,60}\b(?:complete|completed|completing|completion|finish|finished|finishing|confirm|confirmed|confirmation)\b/i;
+    /\b(?:did not|didn't|has not|hasn't|have not|haven't|could not|couldn't|cannot|can't|never|no|not|without|unable|failed)\b[^.,!?\n]{0,60}\b(?:complete|completed|completing|completion|finish|finished|finishing|confirm|confirmed|confirmation)\b/i;
   // An interruption before the work could finish: "killed mid-task before it
   // could complete". The modal keeps a plain "completed the task before
   // noon" out of the match.
@@ -687,6 +739,20 @@ function saysNoCompletion(text: string): boolean {
   // finishing the task".
   const beforeGerund = /\bbefore\b[^.!?\n]{0,20}\b(?:completing|finishing)\b/i;
   return negated.test(text) || interrupted.test(text) || beforeGerund.test(text);
+}
+
+/**
+ * Where the claim words of a clause stand.
+ */
+function claimWordPlaces(clause: string): { word: string; at: number }[] {
+  const places: { word: string; at: number }[] = [];
+  const pattern = new RegExp(CLAIM_WORDS.source, 'gi');
+  let match = pattern.exec(clause);
+  while (match !== null) {
+    places.push({ word: match[0], at: match.index });
+    match = pattern.exec(clause);
+  }
+  return places;
 }
 
 /**
