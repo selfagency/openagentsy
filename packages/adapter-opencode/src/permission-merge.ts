@@ -12,6 +12,11 @@ import type { PermissionEffect, V1PermissionBlock, V1PermissionValue } from '@op
  * `deny`, and a `deny` stays a `deny`. Anything that would loosen a
  * permission throws, because a config that a plugin loosened is a config
  * where the plugin decides what a person may do.
+ *
+ * The order of the map is part of the permission: OpenCode takes the last
+ * matching rule, so a broader rule that lands after a narrower one takes
+ * the narrower one's place. The merge therefore places every rule where it
+ * tightens and nowhere that it would loosen.
  */
 
 /**
@@ -40,6 +45,58 @@ function effectOf(value: unknown): PermissionEffect {
 }
 
 /**
+ * Whether a pattern is a literal: a rule that names one thing.
+ */
+function isLiteral(pattern: string): boolean {
+  return !pattern.includes('*');
+}
+
+/**
+ * The literal a prefix pattern stands for.
+ *
+ * An OpenCode permission pattern is a wildcard where a single asterisk
+ * matches zero or more of any character, so `git push*` is the prefix
+ * `git push` and matches everything that starts with it.
+ */
+function prefixOf(pattern: string): string | undefined {
+  if (!pattern.endsWith('*')) return undefined;
+  if (pattern.indexOf('*') !== pattern.length - 1) return undefined;
+  return pattern.slice(0, -1);
+}
+
+/**
+ * Whether a pattern matches a string.
+ *
+ * The asterisk is the only wildcard, and it matches any run of characters.
+ */
+export function matchesPattern(pattern: string, text: string): boolean {
+  const parts = pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  return new RegExp(`^${parts.join('.*')}$`).test(text);
+}
+
+/**
+ * Whether two patterns can match the same string.
+ *
+ * Two literals overlap when they are the same string, a literal and a
+ * pattern overlap when the pattern matches the literal, and two prefix
+ * patterns overlap when one prefix starts with the other. A pattern with a
+ * wildcard in the middle overlaps with everything it cannot be proven not
+ * to overlap: an overlap that is assumed moves a rule, and a rule that
+ * moves is safe, while an overlap that is missed can loosen a permission.
+ */
+function patternsOverlap(a: string, b: string): boolean {
+  if (isLiteral(a) && isLiteral(b)) return a === b;
+  if (isLiteral(a)) return matchesPattern(b, a);
+  if (isLiteral(b)) return matchesPattern(a, b);
+  const prefixA = prefixOf(a);
+  const prefixB = prefixOf(b);
+  if (prefixA !== undefined && prefixB !== undefined) {
+    return prefixA.startsWith(prefixB) || prefixB.startsWith(prefixA);
+  }
+  return true;
+}
+
+/**
  * A value as a map of patterns to effects.
  *
  * The shorthand form of a single rule is the effect alone, and it is the
@@ -56,21 +113,68 @@ function asMap(value: V1PermissionValue | undefined): Record<string, PermissionE
 }
 
 /**
- * The effect a pattern has now.
- *
- * A pattern that is not named takes the catch-all, and a catch-all that is
- * not named takes the most permissive effect: OpenCode's own default is the
- * one a permission config does not tighten.
+ * The effect a rule ends up with when it tightens another.
  */
-function effectAt(map: Record<string, PermissionEffect>, pattern: string): PermissionEffect {
-  const named = map[pattern];
-  if (named !== undefined) return named;
-  const catchAll = map['*'];
-  return catchAll ?? 'allow';
+function tighten(
+  action: string,
+  pattern: string,
+  before: PermissionEffect,
+  effect: PermissionEffect,
+): PermissionEffect {
+  if (STRICTNESS[effect] > STRICTNESS[before]) {
+    throw new Error(
+      `the permission merge would loosen "${action}" for "${pattern}": ${before} -> ${effect}. ` +
+        'A plugin may only tighten a permission, so the merge was refused.',
+    );
+  }
+  return STRICTNESS[effect] < STRICTNESS[before] ? effect : before;
+}
+
+/**
+ * Where a new rule has to go.
+ *
+ * A rule that overlaps a stricter one has to come before it, or the
+ * stricter one would be lost: a broad `git push*` that lands after a
+ * narrow `git push --force` deny takes the deny's place, because OpenCode
+ * takes the last matching rule. A rule that overlaps a looser one has to
+ * come after it, or the loosening would take the new rule's place.
+ *
+ * A rule that covers a stricter one overlaps it, so the overlap is what
+ * this answers. A rule that cannot be placed both ways refuses the merge:
+ * a permission that cannot be tightened without loosening another one is
+ * not tightened at all.
+ */
+function placementOf(
+  rules: readonly (readonly [string, PermissionEffect])[],
+  pattern: string,
+  effect: PermissionEffect,
+): number {
+  let after = -1;
+  let before = rules.length;
+  for (const [index, entry] of rules.entries()) {
+    const [key, keyEffect] = entry;
+    if (!patternsOverlap(pattern, key)) continue;
+    if (STRICTNESS[keyEffect] < STRICTNESS[effect]) {
+      before = Math.min(before, index);
+    } else if (STRICTNESS[effect] < STRICTNESS[keyEffect]) {
+      after = Math.max(after, index);
+    }
+  }
+  const at = after + 1;
+  if (at > before) {
+    throw new Error(
+      `the permission merge would loosen "${pattern}": a stricter rule for the same command ` +
+        'would have to come after it. A plugin may only tighten a permission, so the merge ' +
+        'was refused.',
+    );
+  }
+  return at;
 }
 
 /**
  * Merge one action's permissions.
+ *
+ * The rules are placed, not just added.
  */
 function mergeAction(
   action: string,
@@ -79,18 +183,20 @@ function mergeAction(
 ): V1PermissionValue {
   const current = asMap(existing);
   const wanted = asMap(incoming);
-  const merged: Record<string, PermissionEffect> = { ...current };
+  const rules: [string, PermissionEffect][] = Object.entries(current);
 
   for (const [pattern, effect] of Object.entries(wanted)) {
-    const before = effectAt(current, pattern);
-    if (STRICTNESS[effect] > STRICTNESS[before]) {
-      throw new Error(
-        `the permission merge would loosen "${action}" for "${pattern}": ${before} -> ${effect}. ` +
-          'A plugin may only tighten a permission, so the merge was refused.',
-      );
+    const known = rules.findIndex(([key]) => key === pattern);
+    if (known !== -1) {
+      const before = rules[known]?.[1] ?? 'allow';
+      rules[known] = [pattern, tighten(action, pattern, before, effect)];
+      continue;
     }
-    merged[pattern] = STRICTNESS[effect] < STRICTNESS[before] ? effect : before;
+    rules.splice(placementOf(rules, pattern, effect), 0, [pattern, effect]);
   }
+
+  const merged: Record<string, PermissionEffect> = {};
+  for (const [pattern, effect] of rules) merged[pattern] = effect;
 
   // The shorthand stays shorthand when both sides were shorthand, so a
   // config that said `bash: "allow"` still says it.

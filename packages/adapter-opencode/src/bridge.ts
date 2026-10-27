@@ -257,6 +257,23 @@ function annotationFor(findings: readonly OutputFinding[]): string {
 }
 
 /**
+ * The rules that flag a reply.
+ *
+ * The scope-drift check is left out when the task's scope is not known. A
+ * reply that names a file is not out of scope of a scope nobody stated, and
+ * a check that fires on every mention of a path is a check that says
+ * nothing: it flags the ordinary report of an ordinary change.
+ */
+function outputRules(
+  statedPaths: readonly string[],
+  sink: (findings: OutputFinding[]) => void,
+): Rule[] {
+  const rules = outputCheckRules({ statedPaths, onFindings: sink });
+  if (statedPaths.length > 0) return rules;
+  return rules.filter((rule) => rule.id !== 'output-scope-drift');
+}
+
+/**
  * The bridge.
  *
  * The rules are the package's: the seven defaults plus whatever a project
@@ -352,11 +369,8 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
       // the reply they were found in. A check never stops a reply.
       const findings: OutputFinding[] = [];
       const checks = createOaRegistry(
-        outputCheckRules({
-          statedPaths,
-          onFindings: (found) => {
-            findings.push(...found);
-          },
+        outputRules(statedPaths, (found) => {
+          findings.push(...found);
         }),
       );
       await checks.run('PreResponse', {

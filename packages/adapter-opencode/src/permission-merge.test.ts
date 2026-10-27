@@ -1,6 +1,20 @@
-import type { V1PermissionBlock } from '@openagentsy/core';
+import type { PermissionEffect, V1PermissionBlock } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
-import { mergePermissions, permissionEntriesFor } from './permission-merge.js';
+import { matchesPattern, mergePermissions, permissionEntriesFor } from './permission-merge.js';
+
+/**
+ * The effect a command gets from a permission map.
+ *
+ * OpenCode takes the last matching rule, so the map is walked in order and
+ * the last rule that matches is the one that decides.
+ */
+function effective(block: Record<string, PermissionEffect>, command: string): PermissionEffect {
+  let effect: PermissionEffect = 'allow';
+  for (const [pattern, value] of Object.entries(block)) {
+    if (matchesPattern(pattern, command)) effect = value;
+  }
+  return effect;
+}
 
 describe('mergePermissions', () => {
   it('turns an allow into an ask', () => {
@@ -63,6 +77,46 @@ describe('mergePermissions', () => {
     const incoming: V1PermissionBlock = { bash: { 'git push*': 'ask' } };
     const merged = mergePermissions({}, incoming);
     expect(merged['bash']).toEqual({ 'git push*': 'ask' });
+  });
+
+  it('keeps a narrower deny ahead of a broader ask', () => {
+    // The broad key would land last and take the narrow one's place, because
+    // OpenCode takes the last matching rule. The deny has to stay last.
+    const current: V1PermissionBlock = { bash: { 'git push --force': 'deny' } };
+    const incoming: V1PermissionBlock = { bash: { 'git push*': 'ask' } };
+    const merged = mergePermissions(current, incoming);
+
+    const bash = merged['bash'] as Record<string, PermissionEffect>;
+    expect(Object.keys(bash)).toEqual(['git push*', 'git push --force']);
+    expect(effective(bash, 'git push --force')).toBe('deny');
+    expect(effective(bash, 'git push origin main')).toBe('ask');
+  });
+
+  it('tightens a broad allow with a narrow deny', () => {
+    const current: V1PermissionBlock = { bash: { 'git push*': 'allow' } };
+    const incoming: V1PermissionBlock = { bash: { 'git push --force': 'deny' } };
+    const merged = mergePermissions(current, incoming);
+
+    const bash = merged['bash'] as Record<string, PermissionEffect>;
+    expect(effective(bash, 'git push --force')).toBe('deny');
+    expect(effective(bash, 'git push origin main')).toBe('allow');
+  });
+
+  it('keeps a deny that a catch-all would have buried', () => {
+    // The deny is written first and the catch-all last, so the deny is
+    // already buried. The merge cannot place the ask without burying it
+    // further, so the merge is refused.
+    const current: V1PermissionBlock = {
+      bash: { 'git push --force': 'deny', '*': 'allow' },
+    };
+    const incoming: V1PermissionBlock = { bash: { 'git push*': 'ask' } };
+    expect(() => mergePermissions(current, incoming)).toThrow(/loosen/);
+  });
+
+  it('refuses to loosen a deny that shares the pattern', () => {
+    const current: V1PermissionBlock = { bash: { 'git push*': 'deny' } };
+    const incoming: V1PermissionBlock = { bash: { 'git push*': 'ask' } };
+    expect(() => mergePermissions(current, incoming)).toThrow(/loosen/);
   });
 });
 

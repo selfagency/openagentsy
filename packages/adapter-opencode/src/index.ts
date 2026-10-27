@@ -148,6 +148,10 @@ export type ServerHooks = BridgeHooks & {
 /**
  * A session ended. It gives its effort rung back, and the archivist takes
  * what it learned.
+ *
+ * The whole path is caught. The `event` hook is not awaited by OpenCode, so
+ * a throw here is an unhandled rejection and a broken session, not a failed
+ * check. Every failure goes on the record and the session goes on.
  */
 async function onSessionIdle(
   client: ClientLike,
@@ -155,32 +159,36 @@ async function onSessionIdle(
   sessionID: string,
   agent: string,
 ): Promise<void> {
-  const role = await roleKeyForAgent(root, agent);
-
-  const rungs = await readRungs(root);
-  if (rungs[sessionID]) {
-    delete rungs[sessionID];
-    await writeRungs(root, rungs);
-  }
-
-  // The round the session just finished is checked before the archivist
-  // runs: the archivist may open a session of its own, and the round that
-  // went nowhere is the one that is still open.
-  await observeIdle(client, root, sessionID, agent);
-
-  // A harvest that fails must not break the session that is closing, so it
-  // is caught here and put on the record.
-  if (!(await harvestEnabled(root))) return;
   try {
-    await harvest({
-      session: sessionAdapter(client, root),
-      root,
-      sessionID,
-      role,
-      agent,
-    });
+    const role = await roleKeyForAgent(root, agent);
+
+    const rungs = await readRungs(root);
+    if (rungs[sessionID]) {
+      delete rungs[sessionID];
+      await writeRungs(root, rungs);
+    }
+
+    // The round the session just finished is checked before the archivist
+    // runs: the archivist may open a session of its own, and the round that
+    // went nowhere is the one that is still open.
+    await observeIdle(client, root, sessionID, agent);
+
+    // A harvest that fails must not break the session that is closing, so it
+    // is caught here and put on the record.
+    if (!(await harvestEnabled(root))) return;
+    try {
+      await harvest({
+        session: sessionAdapter(client, root),
+        root,
+        sessionID,
+        role,
+        agent,
+      });
+    } catch (error) {
+      await recordHarvestFailure(root, { agent, sessionID, error });
+    }
   } catch (error) {
-    await recordHarvestFailure(root, { agent, sessionID, error });
+    await recordIdleFailure(root, { agent, sessionID, error });
   }
 }
 

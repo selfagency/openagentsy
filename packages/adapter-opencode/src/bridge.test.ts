@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDatabase, createRecord, migrate, openDatabase } from '@openagentsy/core';
@@ -166,6 +166,45 @@ describe('the bridge', () => {
     expect(output.text).toBe('The build is green and the commit is a1b2c3.');
   });
 
+  it('says nothing about a file in a reply when the task scope is not known', async () => {
+    // A reply that names a file is not out of scope of a scope nobody
+    // stated, and a check that fires on every mention says nothing.
+    const findings: string[] = [];
+    const bridge = createBridge({
+      workspace: root,
+      stateRoot: root,
+      onFindings: (found) => {
+        findings.push(...found.map((finding) => finding.name));
+      },
+    });
+    const text = 'I changed packages/adapter-opencode/src/bridge.ts and the gate is green.';
+    const output = { text };
+
+    await bridge['experimental.text.complete']({ sessionID: 'ses-1' }, output);
+
+    expect(findings).toEqual([]);
+    expect(output.text).toBe(text);
+  });
+
+  it('flags a file the stated scope does not cover', async () => {
+    const findings: string[] = [];
+    const bridge = createBridge({
+      workspace: root,
+      stateRoot: root,
+      statedPaths: ['packages/core/src/board.ts'],
+      onFindings: (found) => {
+        findings.push(...found.map((finding) => finding.name));
+      },
+    });
+    const output = {
+      text: 'I changed packages/adapter-opencode/src/bridge.ts and the gate is green.',
+    };
+
+    await bridge['experimental.text.complete']({ sessionID: 'ses-1' }, output);
+
+    expect(findings).toContain('scope-drift');
+  });
+
   it('merges the approval list into the permission config', async () => {
     const bridge = createBridge({
       workspace: root,
@@ -214,6 +253,20 @@ function fakeClient(messages: { parts?: { type: string; text?: string }[] }[]): 
 }
 
 describe('the idle path', () => {
+  it('says nothing about a file in a reply through the shipped hook', async () => {
+    // The review's own case, through the plugin: no finding, no annotation
+    // and no audit row.
+    const client = fakeClient([]);
+    const hooks = await plugin.server({ client, directory: root, worktree: '' });
+    const text = 'I changed packages/adapter-opencode/src/bridge.ts and the gate is green.';
+    const output = { text };
+
+    await hooks['experimental.text.complete']?.({ sessionID: 'ses-1' }, output);
+
+    expect(output.text).toBe(text);
+    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8').catch(() => '');
+    expect(audit).not.toContain('scope-drift');
+  });
   it('records a report that contradicts the board', async () => {
     await writeFile(join(root, '.openagentsy', 'harvest'), 'off', 'utf8');
     const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
@@ -243,12 +296,18 @@ describe('the idle path', () => {
     expect(audit).toContain('complete');
   });
 
-  it('keeps the session alive when the ledger throws', async () => {
+  it('keeps the session alive when the idle path throws', async () => {
     // The `event` hook is not awaited by OpenCode, so a throw there is a
-    // broken session and not a failed check. A directory where the ledger
-    // belongs makes the write throw.
+    // broken session and not a failed check. A rung file that cannot be
+    // written makes the idle path throw.
     await writeFile(join(root, '.openagentsy', 'harvest'), 'off', 'utf8');
-    await mkdir(join(root, '.openagentsy', 'ledger.db'), { recursive: true });
+    const rungs = join(root, '.openagentsy', 'rungs.json');
+    await writeFile(
+      rungs,
+      JSON.stringify({ 'ses-1': { role: 'lead', rungIndex: 0, reason: 'x', updatedAt: 'now' } }),
+      'utf8',
+    );
+    await chmod(rungs, 0o400);
     const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
     migrate(db);
     closeDatabase(db);
@@ -260,5 +319,8 @@ describe('the idle path', () => {
     await expect(
       hooks.event?.({ event: { type: 'session.idle', properties: { sessionID: 'ses-1' } } }),
     ).resolves.toBeUndefined();
+
+    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
+    expect(audit).toContain('oa.events.failed');
   });
 });
