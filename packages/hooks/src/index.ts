@@ -11,7 +11,9 @@
  */
 export * from './approvals.js';
 export * from './base-tool.js';
+export * from './eval/index.js';
 export * from './event.js';
+export * from './lessons/index.js';
 export * from './output-checks.js';
 export * from './paths.js';
 export * from './registry.js';

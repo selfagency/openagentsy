@@ -40,6 +40,7 @@
       },
       "dependencies": {
         "@openagentsy/core": "0.1.0",
+        "@openagentsy/hooks": "workspace:^",
         "@openagentsy/ledger": "workspace:^",
         "@openagentsy/models": "0.1.0",
         "jsonc-parser": "^3.3.1",
@@ -141,6 +142,7 @@
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.21.0",
         "@openagentsy/core": "0.1.0",
+        "@openagentsy/hooks": "workspace:^",
         "@openagentsy/jev": "*",
         "@openagentsy/ledger": "workspace:^",
         "zod": "^4.6.0",
