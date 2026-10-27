@@ -1,4 +1,5 @@
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, gt, isNull, or, sql } from 'drizzle-orm';
+import { agentAliases } from '../roles.js';
 import type { BoardDatabase } from './db.js';
 import { recordReads, records } from './schema.js';
 import {
@@ -139,31 +140,48 @@ const MAX_LIMIT = 100;
  * (record, agent), so one agent reading a broadcast does not clear it for
  * the others.
  */
+/**
+ * A record is unread for an agent when no read row names it under any of the
+ * names that agent answers by.
+ */
+function unreadFor(aliases: string[]) {
+  const comparisons = aliases.map((alias) => sql`lower(${recordReads.agent}) = ${alias}`);
+  return sql`NOT EXISTS (
+    SELECT 1 FROM ${recordReads}
+     WHERE ${recordReads.recordId} = ${records.id}
+       AND (${sql.join(comparisons, sql` OR `)})
+  )`;
+}
+
+/**
+ * A record reaches an agent when it is addressed to one of the names that
+ * agent answers by, or to nobody at all.
+ */
+function addressedTo(aliases: string[]) {
+  return or(
+    ...aliases.map((alias) => sql`lower(${records.toAgent}) = ${alias}`),
+    isNull(records.toAgent),
+  );
+}
+
 export function listRecords(db: BoardDatabase, query: InboxQuery): InboxResult {
   const limit = Math.min(Math.max(query.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const cursor = query.cursor ?? 0;
   const agent = query.agent;
 
-  // A record is unread for an agent when no row in record_reads names both.
-  const unreadFor =
-    agent === undefined
-      ? undefined
-      : sql`NOT EXISTS (
-    SELECT 1 FROM ${recordReads}
-     WHERE ${recordReads.recordId} = ${records.id}
-       AND ${recordReads.agent} = ${agent}
-  )`;
+  // The agent's names, folded: a record addressed to `Lead` reaches a session
+  // that reads as `lead`, and a record read under one name is read under the
+  // other. The comparison ignores case for the same reason.
+  const aliases = agent === undefined ? [] : agentAliases(agent);
 
-  const addressed =
-    agent === undefined ? undefined : or(eq(records.toAgent, agent), isNull(records.toAgent));
+  const unread = agent === undefined ? undefined : unreadFor(aliases);
+  const addressed = agent === undefined ? undefined : addressedTo(aliases);
 
   const rows = db
     .select()
     .from(records)
     .where(
-      agent === undefined
-        ? gt(records.id, cursor)
-        : and(gt(records.id, cursor), addressed, unreadFor),
+      agent === undefined ? gt(records.id, cursor) : and(gt(records.id, cursor), addressed, unread),
     )
     .orderBy(records.id)
     .limit(limit)
@@ -174,7 +192,7 @@ export function listRecords(db: BoardDatabase, query: InboxQuery): InboxResult {
   const unreadRow = db
     .select({ count: sql<number>`count(*)` })
     .from(records)
-    .where(agent === undefined ? gt(records.id, cursor) : and(addressed, unreadFor))
+    .where(agent === undefined ? gt(records.id, cursor) : and(addressed, unread))
     .get();
 
   if (query.markRead !== false && agent !== undefined && found.length > 0) {

@@ -33,6 +33,23 @@ export function agentId(roleName: string): string {
 }
 
 /**
+ * The names an agent answers to.
+ *
+ * The Lead has two: the role key `lead` and the agent id `agentsy` (the
+ * agent file a person picks in the selector). Every other role's two names
+ * differ only by the `oa-` prefix. A record addressed to one of these names
+ * reaches a session that reads under the other: the archivist addresses the
+ * Lead as `Lead` and the Lead session reads as `lead`, and the finding
+ * stayed on the board (measured 2026-10-27, the fault case's own board).
+ */
+export function agentAliases(name: string): string[] {
+  const lower = name.toLowerCase();
+  if (lower === 'lead' || lower === 'agentsy') return ['lead', 'agentsy'];
+  if (lower.startsWith(AGENT_PREFIX)) return [lower, lower.slice(AGENT_PREFIX.length)];
+  return [lower, `${AGENT_PREFIX}${lower}`];
+}
+
+/**
  * The id an agent is known by. A role may name its own agent, which the Lead
  * does so a person picks the project's name in the selector.
  */
