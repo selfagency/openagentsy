@@ -1,10 +1,21 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   assertArgv,
   evalResultPath,
+  gitCommand,
   reproduceBaseline,
   runCommand,
   runEvalArtifact,
@@ -42,6 +53,118 @@ async function script(root: string, name: string, body: string): Promise<string>
   const path = join(root, name);
   await writeFile(path, body, 'utf8');
   return path;
+}
+
+/** Whether a path is there. */
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A throwaway repository, with the change in the commit on top.
+ *
+ * The change lives in the second commit, so the worktree can be made from it
+ * and the baseline can be run on the tree without it. Every git command goes
+ * through the runner's own builder, because the runner's environment cannot
+ * reach a signing agent and a throwaway commit must not need one.
+ */
+async function throwawayRepo(root: string): Promise<{ ref: string; owner: string }> {
+  await runCommand(gitCommand(['init', '-q']), root, 30_000);
+  await writeFile(join(root, 'answer.txt'), 'wrong\n', 'utf8');
+  await runCommand(gitCommand(['add', '.']), root, 30_000);
+  await commitIn(root, 'init');
+  await writeFile(join(root, 'answer.txt'), 'right\n', 'utf8');
+  await runCommand(gitCommand(['add', '.']), root, 30_000);
+  await commitIn(root, 'the change');
+  const ref = (await runCommand(gitCommand(['rev-parse', 'HEAD']), root, 30_000)).stdout.trim();
+  const owner = (await runCommand(gitCommand(['rev-parse', 'HEAD~1']), root, 30_000)).stdout.trim();
+  await runCommand(gitCommand(['checkout', owner]), root, 30_000);
+  return { ref, owner };
+}
+
+/** A commit in the throwaway repository, with an identity of its own. */
+async function commitIn(root: string, message: string): Promise<void> {
+  const outcome = await runCommand(
+    gitCommand([
+      '-c',
+      'user.email=builder@example.com',
+      '-c',
+      'user.name=Builder',
+      'commit',
+      '-q',
+      '-m',
+      message,
+    ]),
+    root,
+    30_000,
+  );
+  if (outcome.exitCode !== 0) {
+    throw new Error(`the throwaway commit failed: ${outcome.stderr.trim()}`);
+  }
+}
+
+/** The artifact with the baseline and the candidate scenario. */
+async function baselineArtifact(root: string): Promise<string> {
+  return artifactFile(root, [
+    {
+      id: 'baseline',
+      phase: 'baseline',
+      cwd: '.',
+      command: ['cat', 'answer.txt'],
+      expect: { stdout_includes: ['right'] },
+    },
+    {
+      id: 'candidate',
+      phase: 'candidate',
+      cwd: '.',
+      command: ['cat', 'answer.txt'],
+      expect: { stdout_includes: ['right'] },
+    },
+  ]);
+}
+
+/**
+ * A home directory whose git config signs every commit.
+ *
+ * The machine may sign with an agent the runner's environment cannot reach,
+ * and the signer here fails the way a locked agent fails. The marker says
+ * the signer was reached at all.
+ */
+async function signingHome(): Promise<{
+  home: string;
+  marker: string;
+  remove: () => Promise<void>;
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'openagentsy-signing-home-'));
+  const marker = join(root, 'the-signer-was-called');
+  const signer = join(root, 'signer');
+  await writeFile(
+    signer,
+    ['#!/bin/sh', `printf 'called\\n' > "${marker}"`, 'exit 1', ''].join('\n'),
+    'utf8',
+  );
+  await chmod(signer, 0o755);
+  await writeFile(
+    join(root, '.gitconfig'),
+    [
+      '[commit]',
+      '\tgpgsign = true',
+      '[gpg]',
+      '\tformat = ssh',
+      '[gpg "ssh"]',
+      `\tprogram = ${signer}`,
+      '[user]',
+      '\tsigningkey = ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFIXTUREKEYFORTHEEVALRUNNERONLY0000000',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  return { home: root, marker, remove: () => rm(root, { recursive: true, force: true }) };
 }
 
 describe('the command', () => {
@@ -238,63 +361,8 @@ describe('the baseline in a temporary worktree', () => {
   it('fails on the current owner and passes with the change', async () => {
     const { root, remove } = await workspace();
     try {
-      await runCommand(['git', 'init', '-q'], root, 30_000);
-      await writeFile(join(root, 'answer.txt'), 'wrong\n', 'utf8');
-      await runCommand(['git', 'add', '.'], root, 30_000);
-      await runCommand(
-        [
-          'git',
-          '-c',
-          'user.email=builder@example.com',
-          '-c',
-          'user.name=Builder',
-          'commit',
-          '-q',
-          '-m',
-          'init',
-        ],
-        root,
-        30_000,
-      );
-      await writeFile(join(root, 'answer.txt'), 'right\n', 'utf8');
-      await runCommand(['git', 'add', '.'], root, 30_000);
-      await runCommand(
-        [
-          'git',
-          '-c',
-          'user.email=builder@example.com',
-          '-c',
-          'user.name=Builder',
-          'commit',
-          '-q',
-          '-m',
-          'the change',
-        ],
-        root,
-        30_000,
-      );
-      const ref = (await runCommand(['git', 'rev-parse', 'HEAD'], root, 30_000)).stdout.trim();
-      // The current owner is the tree without the change: the change lives in
-      // the commit the worktree is made from.
-      const owner = (await runCommand(['git', 'rev-parse', 'HEAD~1'], root, 30_000)).stdout.trim();
-      await runCommand(['git', 'checkout', owner], root, 30_000);
-
-      const path = await artifactFile(root, [
-        {
-          id: 'baseline',
-          phase: 'baseline',
-          cwd: '.',
-          command: ['cat', 'answer.txt'],
-          expect: { stdout_includes: ['right'] },
-        },
-        {
-          id: 'candidate',
-          phase: 'candidate',
-          cwd: '.',
-          command: ['cat', 'answer.txt'],
-          expect: { stdout_includes: ['right'] },
-        },
-      ]);
+      const { ref } = await throwawayRepo(root);
+      const path = await baselineArtifact(root);
 
       const outcome = await reproduceBaseline({
         artifactPath: path,
@@ -313,6 +381,49 @@ describe('the baseline in a temporary worktree', () => {
       const after = outcome.after?.scenarios.find((scenario) => scenario.phase === 'candidate');
       expect(after?.passed).toBe(true);
     } finally {
+      await remove();
+    }
+  });
+});
+
+describe('the signing of a throwaway commit', () => {
+  it('turns the signing off on the git commands it spawns', () => {
+    expect(gitCommand(['worktree', 'add', '--detach', 'worktree', 'HEAD'])).toEqual([
+      'git',
+      '-c',
+      'commit.gpgsign=false',
+      'worktree',
+      'add',
+      '--detach',
+      'worktree',
+      'HEAD',
+    ]);
+  });
+
+  it('completes the run on a machine whose signing agent is locked', async () => {
+    const { root, remove } = await workspace();
+    const signing = await signingHome();
+    const before = process.env.HOME;
+    process.env.HOME = signing.home;
+    try {
+      const { ref } = await throwawayRepo(root);
+      const path = await baselineArtifact(root);
+
+      const outcome = await reproduceBaseline({
+        artifactPath: path,
+        workspace: root,
+        repo: root,
+        changeRef: ref,
+        now: () => PINNED,
+      });
+
+      expect(outcome.passed).toBe(true);
+      // The signer was never reached: a throwaway commit is not signed.
+      expect(await exists(signing.marker)).toBe(false);
+    } finally {
+      if (before === undefined) delete process.env.HOME;
+      else process.env.HOME = before;
+      await signing.remove();
       await remove();
     }
   });
@@ -380,7 +491,7 @@ describe('the boundaries of a run', () => {
   it('leaves no worktree behind when the add fails', async () => {
     const { root, remove } = await workspace();
     try {
-      await runCommand(['git', 'init', '-q'], root, 30_000);
+      await runCommand(gitCommand(['init', '-q']), root, 30_000);
       await expect(
         withTemporaryWorktree({
           repo: root,
@@ -388,7 +499,7 @@ describe('the boundaries of a run', () => {
           run: async () => 'never',
         }),
       ).rejects.toThrow(/failed/);
-      const list = await runCommand(['git', 'worktree', 'list'], root, 30_000);
+      const list = await runCommand(gitCommand(['worktree', 'list']), root, 30_000);
       expect(list.stdout.trim().split('\n')).toHaveLength(1);
     } finally {
       await remove();

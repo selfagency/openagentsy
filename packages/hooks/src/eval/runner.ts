@@ -597,13 +597,39 @@ export async function runEvalArtifact(options: EvalRunOptions): Promise<EvalResu
 }
 
 /**
+ * The git settings that keep a throwaway commit unsigned.
+ *
+ * The machine's own config may sign every commit, and the signing agent is
+ * not in the environment a child gets: the commit then fails, and the run
+ * fails with it (measured 2026-10-27: the 1Password agent was not reachable
+ * from the narrow environment, the commit was refused, and the worktree
+ * that followed it was made from a HEAD that did not exist). A throwaway
+ * commit buys nothing from a signature, so the runner turns the signing off
+ * on the git commands it spawns. The setting is on the command and not in
+ * the environment, because the environment stays narrow.
+ */
+const GIT_NO_SIGN = ['-c', 'commit.gpgsign=false'] as const;
+
+/**
+ * The argv of a git command, with the runner's own settings in front of it.
+ *
+ * A git option only counts before the subcommand it belongs to, so the
+ * settings come first.
+ */
+export function gitCommand(args: readonly string[]): string[] {
+  return ['git', ...GIT_NO_SIGN, ...args];
+}
+
+/**
  * Run a git command and wait for it.
  *
  * The worktree is made with git, so git is run with an argv and with the
- * same narrow environment a proof gets.
+ * same narrow environment a proof gets. The command carries the runner's own
+ * settings, so a git that signs every commit does not decide whether the
+ * runner's work happens.
  */
 async function git(cwd: string, args: string[]): Promise<void> {
-  const outcome = await runCommand(['git', ...args], cwd, 60_000);
+  const outcome = await runCommand(gitCommand(args), cwd, 60_000);
   if (outcome.exitCode !== 0) {
     throw new ProofError(
       `git ${args[0] ?? ''} failed`,
