@@ -126,8 +126,9 @@ describe('the approval store', () => {
     const reclaimPath = `${lockPath}.reclaim`;
     await writeFile(reclaimPath, 'orphan', 'utf8');
     await utimes(reclaimPath, old, old);
-    const entry = await store.approve('call-1', 1000, 60_000);
-    expect(entry.callID).toBe('call-1');
+    const grant = await store.approve('call-1', 1000, 60_000);
+    expect(grant.entry.callID).toBe('call-1');
+    expect(grant.created).toBe(true);
   });
 
   it('takes a stale lock over even when a stale file was left behind', async () => {
@@ -140,8 +141,9 @@ describe('the approval store', () => {
     const stalePath = `${lockPath}.stale`;
     await writeFile(stalePath, 'old', 'utf8');
     await utimes(stalePath, old, old);
-    const entry = await store.approve('call-1', 1000, 60_000);
-    expect(entry.callID).toBe('call-1');
+    const grant = await store.approve('call-1', 1000, 60_000);
+    expect(grant.entry.callID).toBe('call-1');
+    expect(grant.created).toBe(true);
   });
 
   it('refreshes the lock while the action runs', async () => {
@@ -169,8 +171,9 @@ describe('the approval store', () => {
     await writeFile(lockPath, '', 'utf8');
     const old = new Date(Date.now() - 60_000);
     await utimes(lockPath, old, old);
-    const entry = await store.approve('call-1', 1000, 60_000);
-    expect(entry.callID).toBe('call-1');
+    const grant = await store.approve('call-1', 1000, 60_000);
+    expect(grant.entry.callID).toBe('call-1');
+    expect(grant.created).toBe(true);
   });
 
   it('refuses to grant on a store it cannot read', async () => {
@@ -178,6 +181,47 @@ describe('the approval store', () => {
     await mkdir(join(root, '.openagentsy'), { recursive: true });
     await writeFile(store.path, '{not json', 'utf8');
     await expect(store.approve('call-1', 1000, 60_000)).rejects.toThrow();
+  });
+
+  it('keeps the grant that is already there', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-1', 1000, 60_000);
+
+    const grant = await store.approve('call-1', 2000, 60_000);
+
+    expect(grant.created).toBe(false);
+    expect(grant.entry.expiresAt).toBe(61_000);
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toEqual([{ callID: 'call-1', expiresAt: 61_000 }]);
+  });
+
+  it('takes a grant back', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-1', 1000, 60_000);
+
+    expect(await store.revokeApproval('call-1', 2000)).toBe(true);
+    expect(await store.revokeApproval('call-1', 2000)).toBe(false);
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toEqual([]);
+  });
+
+  it('refuses a grant that would not run out at a moment a date can name', async () => {
+    const store = createApprovalStore(root);
+
+    await expect(store.approve('call-1', 1000, 1e60)).rejects.toThrow('a moment a date can name');
+    await expect(readFile(store.path, 'utf8')).rejects.toThrow();
+  });
+
+  it('puts the grant back when the trail of the spend cannot be written', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-1', 1000, 60_000);
+    // The audit log is a directory, so nothing can be written to it.
+    await mkdir(join(root, '.openagentsy', 'audit.jsonl'), { recursive: true });
+
+    await expect(store.consumeApproval('call-1', 2000, 'builder')).rejects.toThrow();
+
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toEqual([{ callID: 'call-1', expiresAt: 61_000 }]);
   });
 
   it('does not rewrite a store it cannot read', async () => {
@@ -225,6 +269,33 @@ describe('the approval gate', () => {
       callID: 'call-7',
     });
     expect(continues(second)).toBe(false);
+  });
+
+  it('writes the trail of the spend when the gate lets a call through', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-7', Date.now(), 60_000);
+    const gate = approvalGate(/rm\s+-rf/, store);
+
+    const result = await gate({
+      toolName: 'bash',
+      args: {},
+      files: [],
+      command: 'rm -rf /',
+      callID: 'call-7',
+      role: 'builder',
+    });
+
+    expect(continues(result)).toBe(true);
+    const raw = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
+    const entry = JSON.parse(raw.trim()) as Record<string, unknown>;
+    expect(entry).toMatchObject({
+      policyId: 'oa.approve.used',
+      policyVersion: 'v1',
+      actor: 'builder',
+      action: 'approve_use',
+      resource: 'call-7',
+      effect: 'allow',
+    });
   });
 
   it('lets a command that does not match through', async () => {

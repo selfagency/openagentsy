@@ -1,6 +1,10 @@
 import { join } from 'node:path';
 import { appendAudit, POLICIES } from '@openagentsy/core';
-import { createApprovalStore, DEFAULT_APPROVAL_TTL_MS } from '@openagentsy/hooks';
+import {
+  type ApprovalGrant,
+  createApprovalStore,
+  DEFAULT_APPROVAL_TTL_MS,
+} from '@openagentsy/hooks';
 
 /**
  * The escape hatch: a person approves one call, and the call passes once.
@@ -44,6 +48,17 @@ const HUMAN = 'human';
  */
 const MAX_CALL_ID = 200;
 
+/**
+ * The longest a grant may live, in milliseconds.
+ *
+ * A day is generous: long enough for a person to read the reason the gate
+ * gave, answer it and let the agent retry, and short enough that a grant
+ * left behind does not open a door days later. A longer window is refused
+ * before anything is written, so a grant that never runs out cannot be
+ * written at all.
+ */
+const MAX_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** What the command was asked to do. */
 export type ApproveOptions = {
   /** The project root: the state lives under it. */
@@ -61,31 +76,42 @@ export type ApproveOptions = {
 /** What the command did. */
 export type ApproveResult =
   | { ok: true; outcome: 'granted'; callID: string; expiresAt: number }
-  | { ok: true; outcome: 'already-granted'; callID: string }
-  | { ok: false; outcome: 'no-call-id' | 'bad-ttl' | 'store-failed'; detail: string };
+  | { ok: true; outcome: 'already-granted'; callID: string; expiresAt: number }
+  | {
+      ok: false;
+      outcome: 'no-call-id' | 'bad-ttl' | 'store-failed' | 'audit-failed' | 'unaudited-grant';
+      detail: string;
+    };
 
 /**
  * Whether a string can be the id of a call.
  *
- * An id has no whitespace in it. A phrase, a path or a shell command is not
- * an id, and the gate names the id in the reason it gives, so the person
- * copies the id and not the sentence around it.
+ * An id has no whitespace in it, and it names no path: a phrase, a path or
+ * a shell command is not an id, and the gate names the id in the reason it
+ * gives, so the person copies the id and not the sentence around it. The
+ * id is a JSON string today, and a charset that cannot name a path keeps it
+ * one that cannot.
  */
 function isCallID(text: string): boolean {
-  return text.length > 0 && text.length <= MAX_CALL_ID && !/\s/.test(text);
+  if (text.length === 0 || text.length > MAX_CALL_ID) return false;
+  if (/\s/.test(text)) return false;
+  if (text.includes('/') || text.includes('\\')) return false;
+  if (text.includes('..')) return false;
+  return true;
 }
 
 /**
  * The lifetime a `--ttl` asks for, in milliseconds.
  *
  * The value is a number of milliseconds, and anything else is refused: a
- * grant that lives for an unknown time is a grant that lives for ever.
+ * grant that lives for an unknown time is a grant that lives for ever, and
+ * so is one that lives for longer than a day.
  */
 function ttlOf(ttl: string): number | undefined {
   const text = ttl.trim();
   if (!/^\d+$/.test(text)) return undefined;
   const ms = Number(text);
-  if (!Number.isFinite(ms) || ms <= 0) return undefined;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_TTL_MS) return undefined;
   return ms;
 }
 
@@ -97,12 +123,36 @@ function describe(error: unknown): string {
 }
 
 /**
+ * The grant a call gets, or the error that stopped it.
+ */
+type GrantAttempt = { grant: ApprovalGrant } | { error: unknown };
+
+/**
+ * The grant of a call, without throwing at the caller.
+ *
+ * The store holds its own lock, so the grant is written once: two people
+ * approving the same call at the same time do not write it twice.
+ */
+async function grantCall(
+  store: ReturnType<typeof createApprovalStore>,
+  callID: string,
+  now: number,
+  ttlMs: number,
+): Promise<GrantAttempt> {
+  try {
+    return { grant: await store.approve(callID, now, ttlMs) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/**
  * Grant a call the approval of a person.
  *
  * The grant is written down by the store, under its own lock, and the grant
  * is audited. A call that is already granted is reported as granted and
- * nothing is written: the store holds one entry per call, and a second grant
- * would only move the expiry of the one that is already there.
+ * nothing is written: the store holds one entry per call, and the grant that
+ * is already there keeps the expiry it has.
  */
 export async function runApprove(options: ApproveOptions): Promise<ApproveResult> {
   const callID = options.callID ?? '';
@@ -119,17 +169,34 @@ export async function runApprove(options: ApproveOptions): Promise<ApproveResult
     return {
       ok: false,
       outcome: 'bad-ttl',
-      detail: 'the ttl is a number of milliseconds: /oa approve <callID> --ttl <ms>',
+      detail: `the ttl is a number of milliseconds, at most ${MAX_TTL_MS} (a day): /oa approve <callID> --ttl <ms>`,
     };
   }
 
   const now = options.now ?? Date.now();
+  const store = createApprovalStore(options.root);
+  const attempt = await grantCall(store, callID, now, ttlMs);
+  if ('error' in attempt) {
+    return {
+      ok: false,
+      outcome: 'store-failed',
+      detail: `the approval store could not be written: ${describe(attempt.error)}`,
+    };
+  }
+
+  const grant = attempt.grant;
+  if (!grant.created) {
+    return {
+      ok: true,
+      outcome: 'already-granted',
+      callID,
+      expiresAt: grant.entry.expiresAt,
+    };
+  }
+
+  // The grant is on file, and the trail is part of the grant: a grant that
+  // nobody can look at afterwards is a grant nobody gave.
   try {
-    const store = createApprovalStore(options.root);
-    if (await store.isApproved(callID, now)) {
-      return { ok: true, outcome: 'already-granted', callID };
-    }
-    const entry = await store.approve(callID, now, ttlMs);
     await appendAudit(auditPath(options.root), {
       policyId: POLICIES.approveGranted.id,
       policyVersion: POLICIES.approveGranted.version,
@@ -137,16 +204,35 @@ export async function runApprove(options: ApproveOptions): Promise<ApproveResult
       action: 'approve',
       resource: callID,
       effect: 'allow',
-      detail: `the grant runs out at ${new Date(entry.expiresAt).toISOString()}`,
+      detail: `the grant runs out at ${new Date(grant.entry.expiresAt).toISOString()}`,
     });
-    return { ok: true, outcome: 'granted', callID, expiresAt: entry.expiresAt };
   } catch (error) {
+    // The grant was written and the trail was not. The grant is taken back,
+    // so a call is never approved and not on the record at the same time.
+    let taken = false;
+    let failure: string | undefined;
+    try {
+      taken = await store.revokeApproval(callID, now);
+    } catch (revokeError) {
+      failure = describe(revokeError);
+    }
+    if (taken) {
+      return {
+        ok: false,
+        outcome: 'audit-failed',
+        detail: `the audit could not be written, so the grant was taken back: ${describe(error)}`,
+      };
+    }
     return {
       ok: false,
-      outcome: 'store-failed',
-      detail: `the approval store could not be written: ${describe(error)}`,
+      outcome: 'unaudited-grant',
+      detail: `the grant was written to ${store.path} but the audit could not be written: ${describe(error)}. The call is approved and it is not on the record.${
+        failure === undefined ? '' : ` The grant could not be taken back either: ${failure}.`
+      }`,
     };
   }
+
+  return { ok: true, outcome: 'granted', callID, expiresAt: grant.entry.expiresAt };
 }
 
 /** What the consumer of a grant needs to spend it. */
@@ -165,28 +251,13 @@ export type UseApprovalOptions = {
  * Spend a grant: the call passes once, and the use is on the record.
  *
  * The store spends the grant under its own lock, so two callers cannot both
- * pass the same call, and a grant that ran out is never spent. The use is
- * audited with the agent that made the call, because the person who granted
- * it is not the one that used it.
- *
- * The gate in `@openagentsy/hooks` spends a grant the same way, for a
- * consumer that keeps no trail of its own. This is the audited form of that
- * same step.
+ * pass the same call, and a grant that ran out is never spent. The store
+ * writes the trail of the spend with the agent that made the call, because
+ * the person who granted it is not the one that used it.
  */
 export async function useApproval(options: UseApprovalOptions): Promise<boolean> {
   const store = createApprovalStore(options.root);
-  const passed = await store.consumeApproval(options.callID, options.now ?? Date.now());
-  if (!passed) return false;
-  await appendAudit(auditPath(options.root), {
-    policyId: POLICIES.approveUsed.id,
-    policyVersion: POLICIES.approveUsed.version,
-    actor: options.actor,
-    action: 'approve_use',
-    resource: options.callID,
-    effect: 'allow',
-    detail: 'the grant was spent',
-  });
-  return true;
+  return store.consumeApproval(options.callID, options.now ?? Date.now(), options.actor);
 }
 
 /**
@@ -194,8 +265,9 @@ export async function useApproval(options: UseApprovalOptions): Promise<boolean>
  */
 export function formatApproveResult(result: ApproveResult): string {
   if (!result.ok) return result.detail;
+  const until = new Date(result.expiresAt).toISOString();
   if (result.outcome === 'already-granted') {
-    return `${result.callID} is already approved. Nothing was changed.`;
+    return `${result.callID} is already approved until ${until}. Nothing was changed.`;
   }
-  return `approved ${result.callID} until ${new Date(result.expiresAt).toISOString()}`;
+  return `approved ${result.callID} until ${until}`;
 }
