@@ -953,6 +953,40 @@ export async function abortSession(
   await client.session.abort({ path: { id: sessionID }, query: { directory } });
 }
 
+/**
+ * The session the fault targets: the builder the Lead dispatched.
+ *
+ * The title is not a safe signal: OpenCode names a session from the task
+ * description, and it does that AFTER the dispatch returns, so a child that
+ * works fast is finished before its title exists (measured 2026-10-27: the
+ * child wrote its file and posted its completion fourteen seconds after the
+ * case started, and the title-based kill arrived after the work was done).
+ *
+ * The parent is the signal that is there from the start: a dispatched child
+ * carries the parent id of the session that dispatched it, while the case's
+ * own sessions - the Lead and the judge - are roots, and the archivist, which
+ * the Lead dispatches at the end of its turn, says so in its title.
+ */
+export function selectKillTarget(
+  sessions: {
+    id?: string | undefined;
+    title?: string | undefined;
+    parentID?: string | undefined;
+  }[],
+  baseline: Set<string>,
+  matches: (title: string) => boolean,
+): string | undefined {
+  const target = sessions.find((session) => {
+    if (session.id === undefined) return false;
+    const title = (session.title ?? '').trim();
+    const isChild = session.parentID !== undefined && session.parentID !== null;
+    if (isChild) return !/archiv/i.test(title);
+    if (title === '') return !baseline.has(session.id);
+    return matches(title);
+  });
+  return target?.id;
+}
+
 export function killSessionWhenItAppears(
   client: OpencodeClient,
   directory: string,
@@ -1000,15 +1034,11 @@ export function killSessionWhenItAppears(
           sessions.map((session) => session.id).filter((id): id is string => id !== undefined),
         );
         if (baseline === undefined) baseline = ids;
-        const hit = sessions.find((session) => {
-          if (session.id === undefined) return false;
-          if (session.title !== undefined) return matches(session.title);
-          return !baseline?.has(session.id);
-        });
-        if (hit?.id !== undefined) {
-          await client.session.abort({ path: { id: hit.id }, query: { directory } });
-          void suppress(hit.id);
-          return hit.id;
+        const hit = selectKillTarget(sessions, baseline, matches);
+        if (hit !== undefined) {
+          await client.session.abort({ path: { id: hit }, query: { directory } });
+          void suppress(hit);
+          return hit;
         }
       } catch {
         // A server that is not up yet is not a reason to stop watching.

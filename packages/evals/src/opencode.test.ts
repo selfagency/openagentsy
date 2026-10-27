@@ -13,9 +13,59 @@ import {
   readHostErrors,
   removeHarnessFiles,
   replyPartsOf,
+  selectKillTarget,
   serveArgs,
   sweepStaleHarnessFiles,
 } from './opencode.js';
+
+describe('selectKillTarget', () => {
+  const isBuilder = (title: string) => title.includes('builder');
+
+  it('takes the dispatched child, titled or not', () => {
+    // The measured shapes (2026-10-27): the Lead and the judge are roots,
+    // the builder and the archivist are children of the Lead, and the
+    // builder's title arrives after it has already done the work.
+    const sessions = [
+      { id: 'lead', title: 'eval agentsy' },
+      { id: 'judge', title: 'eval judge' },
+      { id: 'builder', title: '', parentID: 'lead' },
+    ];
+    expect(selectKillTarget(sessions, new Set(['lead', 'judge']), isBuilder)).toBe('builder');
+  });
+
+  it('takes the builder even when it is already titled', () => {
+    const sessions = [
+      { id: 'lead', title: 'eval agentsy' },
+      { id: 'builder', title: 'Write hello.txt one line (@oa-builder subagent)', parentID: 'lead' },
+    ];
+    expect(selectKillTarget(sessions, new Set(['lead']), isBuilder)).toBe('builder');
+  });
+
+  it('leaves the archivist alone: the Lead dispatches it last', () => {
+    const sessions = [
+      { id: 'lead', title: 'eval agentsy' },
+      {
+        id: 'archivist',
+        title: 'Distil builder session learnings (@oa-archivist)',
+        parentID: 'lead',
+      },
+    ];
+    expect(selectKillTarget(sessions, new Set(['lead']), isBuilder)).toBeUndefined();
+  });
+
+  it('leaves the roots alone', () => {
+    const sessions = [
+      { id: 'lead', title: 'eval agentsy' },
+      { id: 'judge', title: 'eval judge' },
+    ];
+    expect(selectKillTarget(sessions, new Set(), isBuilder)).toBeUndefined();
+  });
+
+  it('takes an untitled session that is new since the baseline', () => {
+    const sessions = [{ id: 'fresh', title: '' }];
+    expect(selectKillTarget(sessions, new Set(['lead']), isBuilder)).toBe('fresh');
+  });
+});
 
 describe('replyPartsOf', () => {
   it('reads the text of the last assistant message', () => {
