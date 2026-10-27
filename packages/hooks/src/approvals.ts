@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FileHandle } from 'node:fs/promises';
 import { link, mkdir, open, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { appendAudit, POLICIES } from '@openagentsy/core';
 import { z } from 'zod';
 import { readPreToolCall } from './event.js';
 import type { HandlerResult } from './registry.js';
@@ -25,6 +26,22 @@ export interface ApprovalEntry {
 
 /** How long a grant lives when no other time is given. */
 export const DEFAULT_APPROVAL_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * The largest moment a date can name, in milliseconds since the epoch.
+ *
+ * A grant that runs out at a moment no date can name never runs out, and a
+ * grant that never runs out is a permanent permission. The store refuses one
+ * that would.
+ */
+const MAX_DATE_MS = 8_640_000_000_000_000;
+
+/**
+ * Whether a moment is one a date can name.
+ */
+function isRepresentable(expiresAt: number): boolean {
+  return Number.isFinite(expiresAt) && expiresAt > 0 && expiresAt <= MAX_DATE_MS;
+}
 
 /** The grants, as they are written down. */
 const EntrySchema = z.object({ callID: z.string(), expiresAt: z.number() });
@@ -88,10 +105,36 @@ export interface ApprovalStore {
   readonly path: string;
   /** Whether a grant covers the call now. */
   isApproved(callID: string, now: number): Promise<boolean>;
-  /** Grant the call. */
-  approve(callID: string, now: number, ttlMs?: number): Promise<ApprovalEntry>;
-  /** Spend the grant: it passes once and is gone. */
-  consumeApproval(callID: string, now: number): Promise<boolean>;
+  /** Grant the call, unless it is granted already. */
+  approve(callID: string, now: number, ttlMs?: number): Promise<ApprovalGrant>;
+  /** Spend the grant: it passes once and is gone, and the use is audited. */
+  consumeApproval(callID: string, now: number, actor?: string): Promise<boolean>;
+  /** Take a grant back: the call is not approved after it. */
+  revokeApproval(callID: string, now: number): Promise<boolean>;
+}
+
+/**
+ * A grant, and whether this call wrote it.
+ *
+ * The store holds the lock while it decides, so it knows whether the grant
+ * was there already. The caller needs that: a grant that was written is
+ * audited, and a grant that was found is not.
+ */
+export interface ApprovalGrant {
+  /** The grant that is on file now. */
+  entry: ApprovalEntry;
+  /** Whether this call wrote it, as opposed to finding it there. */
+  created: boolean;
+}
+
+/**
+ * Where the audit of the project lives.
+ *
+ * It is the board's own log, beside the grants: the same file the leases and
+ * the records are audited in.
+ */
+function auditPathFor(approvalsFile: string): string {
+  return join(dirname(approvalsFile), 'audit.jsonl');
 }
 
 /**
@@ -378,13 +421,22 @@ export function createApprovalStore(stateRoot: string, timing: ApprovalTiming = 
     async approve(callID: string, now: number, ttlMs = DEFAULT_APPROVAL_TTL_MS) {
       return withLock(path, resolved, async () => {
         const { entries } = await loadGrants(path, now);
+        const held = entries.find((entry) => entry.callID === callID);
+        // A grant that is already on file keeps the expiry it has: two
+        // people approving the same call do not move the window under each
+        // other, and the caller is told the grant was found.
+        if (held !== undefined) return { entry: held, created: false };
         const entry: ApprovalEntry = { callID, expiresAt: now + ttlMs };
-        const kept = entries.filter((held) => held.callID !== callID);
-        await saveGrants(path, [...kept, entry]);
-        return entry;
+        if (!isRepresentable(entry.expiresAt)) {
+          throw new Error(
+            `the grant would not run out at a moment a date can name: ${entry.expiresAt}`,
+          );
+        }
+        await saveGrants(path, [...entries, entry]);
+        return { entry, created: true };
       });
     },
-    async consumeApproval(callID: string, now: number): Promise<boolean> {
+    async consumeApproval(callID: string, now: number, actor?: string): Promise<boolean> {
       return withLock(path, resolved, async () => {
         const { entries, pruned } = await loadGrants(path, now);
         const held = entries.find((entry) => entry.callID === callID);
@@ -392,6 +444,34 @@ export function createApprovalStore(stateRoot: string, timing: ApprovalTiming = 
           if (pruned) await saveGrants(path, entries);
           return false;
         }
+        await saveGrants(
+          path,
+          entries.filter((entry) => entry.callID !== callID),
+        );
+        // The grant is spent, and the trail is part of the spend: a spend
+        // that cannot be written down takes the grant back, so a call is
+        // never approved and not on the record at the same time.
+        try {
+          await appendAudit(auditPathFor(path), {
+            policyId: POLICIES.approveUsed.id,
+            policyVersion: POLICIES.approveUsed.version,
+            actor: actor ?? 'unknown',
+            action: 'approve_use',
+            resource: callID,
+            effect: 'allow',
+            detail: 'the grant was spent',
+          });
+        } catch (error) {
+          await saveGrants(path, entries);
+          throw error;
+        }
+        return true;
+      });
+    },
+    async revokeApproval(callID: string, now: number): Promise<boolean> {
+      return withLock(path, resolved, async () => {
+        const { entries } = await loadGrants(path, now);
+        if (!entries.some((entry) => entry.callID === callID)) return false;
         await saveGrants(
           path,
           entries.filter((entry) => entry.callID !== callID),
@@ -434,7 +514,10 @@ export function approvalGate(
     const callID = call.callID;
     if (callID !== undefined) {
       try {
-        if (await store.consumeApproval(callID, now())) return { continue: true };
+        // The role is the agent the call was made for, and it is the actor
+        // of the spend: the person who granted it is not the one that used
+        // it.
+        if (await store.consumeApproval(callID, now(), call.role)) return { continue: true };
       } catch (error) {
         return {
           continue: false,
