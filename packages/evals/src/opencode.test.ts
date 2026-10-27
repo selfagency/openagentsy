@@ -1,7 +1,6 @@
 import { mkdtemp, realpath, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { OpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -9,6 +8,7 @@ import {
   caseDirsOfRun,
   createCaseDir,
   HARNESS_SWEEP_AGE_MS,
+  type HarnessClient,
   hostErrorsIn,
   hostFaults,
   IdleRegistry,
@@ -88,18 +88,14 @@ describe('the kill of a session', () => {
     const aborted: string[] = [];
     const deleted: string[] = [];
     const client = {
-      session: {
-        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
-        abort: async ({ path }: { path: { id: string } }) => {
-          aborted.push(path.id);
-          return {};
-        },
-        delete: async ({ path }: { path: { id: string } }) => {
-          deleted.push(path.id);
-          return { data: true };
-        },
+      listSessions: async () => [{ id: 'ses_killed', title: 'eval oa-builder' }],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        aborted.push(sessionID);
       },
-    } as unknown as OpencodeClient;
+      deleteSession: async ({ sessionID }: { sessionID: string }) => {
+        deleted.push(sessionID);
+      },
+    } as unknown as HarnessClient;
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
@@ -118,15 +114,14 @@ describe('the kill of a session', () => {
   it('keeps killing the session when the server refuses the delete', async () => {
     const aborted: string[] = [];
     const client = {
-      session: {
-        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
-        abort: async ({ path }: { path: { id: string } }) => {
-          aborted.push(path.id);
-          return {};
-        },
-        delete: async () => ({ error: { message: 'the session is busy' } }),
+      listSessions: async () => [{ id: 'ses_killed', title: 'eval oa-builder' }],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        aborted.push(sessionID);
       },
-    } as unknown as OpencodeClient;
+      deleteSession: async () => {
+        throw new Error('the session is busy');
+      },
+    } as unknown as HarnessClient;
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
@@ -483,14 +478,12 @@ describe('host errors the case injected', () => {
   it('excludes the session the watch resolved', async () => {
     const aborted: string[] = [];
     const client = {
-      session: {
-        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
-        abort: async ({ path }: { path: { id: string } }) => {
-          aborted.push(path.id);
-          return {};
-        },
+      listSessions: async () => [{ id: 'ses_killed', title: 'eval oa-builder' }],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        aborted.push(sessionID);
       },
-    } as unknown as OpencodeClient;
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
@@ -521,19 +514,17 @@ describe('host errors the case injected', () => {
     let polls = 0;
     const aborted: string[] = [];
     const client = {
-      session: {
-        list: async () => {
-          polls += 1;
-          return polls < 200
-            ? { data: [{ id: 'ses_lead', title: 'eval agentsy' }] }
-            : { data: [{ id: 'ses_lead', title: 'eval agentsy' }, { id: 'ses_child' }] };
-        },
-        abort: async ({ path }: { path: { id: string } }) => {
-          aborted.push(path.id);
-          return {};
-        },
+      listSessions: async () => {
+        polls += 1;
+        return polls < 200
+          ? [{ id: 'ses_lead', title: 'eval agentsy' }]
+          : [{ id: 'ses_lead', title: 'eval agentsy' }, { id: 'ses_child' }];
       },
-    } as unknown as OpencodeClient;
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        aborted.push(sessionID);
+      },
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       intervalMs: 1,
@@ -552,19 +543,17 @@ describe('host errors the case injected', () => {
     // the server gave its session a title, so the title match never fired. A
     // session that is NEW since the first poll is the child, titled or not.
     const lists = [
-      { data: [{ id: 'ses_lead', title: 'eval agentsy' }] },
-      { data: [{ id: 'ses_lead', title: 'eval agentsy' }, { id: 'ses_child' }] },
+      [{ id: 'ses_lead', title: 'eval agentsy' }],
+      [{ id: 'ses_lead', title: 'eval agentsy' }, { id: 'ses_child' }],
     ];
     const aborted: string[] = [];
     const client = {
-      session: {
-        list: async () => lists.shift() ?? { data: [] },
-        abort: async ({ path }: { path: { id: string } }) => {
-          aborted.push(path.id);
-          return {};
-        },
+      listSessions: async () => lists.shift() ?? [],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        aborted.push(sessionID);
       },
-    } as unknown as OpencodeClient;
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 2,
@@ -587,14 +576,12 @@ describe('host errors the case injected', () => {
     // stops, while a re-dispatched builder (a new id) is never touched.
     const aborted: string[] = [];
     const client = {
-      session: {
-        list: async () => ({ data: [{ id: 'ses_killed', title: 'eval oa-builder' }] }),
-        abort: async ({ path }: { path: { id: string } }) => {
-          aborted.push(path.id);
-          return {};
-        },
+      listSessions: async () => [{ id: 'ses_killed', title: 'eval oa-builder' }],
+      interrupt: async ({ sessionID }: { sessionID: string }) => {
+        aborted.push(sessionID);
       },
-    } as unknown as OpencodeClient;
+      deleteSession: async () => {},
+    } as unknown as HarnessClient;
 
     const watch = killSessionWhenItAppears(client, '/case', (title) => title.includes('builder'), {
       attempts: 1,
@@ -820,18 +807,16 @@ describe('the end of a turn', () => {
   function fakeClient(answers: {
     status?: (polls: number) => Record<string, unknown>;
     messages?: () => unknown[];
-  }): { client: OpencodeClient; polls: () => number } {
+  }): { client: HarnessClient; polls: () => number } {
     let polls = 0;
     const client = {
-      session: {
-        status: async () => {
-          const answer = answers.status?.(polls) ?? {};
-          polls += 1;
-          return { data: answer };
-        },
-        messages: async () => ({ data: answers.messages?.() ?? [] }),
+      busySessions: async () => {
+        const answer = answers.status?.(polls) ?? {};
+        polls += 1;
+        return new Set(Object.keys(answer));
       },
-    } as unknown as OpencodeClient;
+      messages: async () => answers.messages?.() ?? [],
+    } as unknown as HarnessClient;
     return { client, polls: () => polls };
   }
 

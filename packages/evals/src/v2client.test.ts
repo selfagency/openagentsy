@@ -102,7 +102,9 @@ describe('the calls of the client', () => {
     const call = onlyCall(calls);
     expect(call.method).toBe('POST');
     expect(new URL(call.url).pathname).toBe('/api/session');
-    expect(call.body).toBe('{"title":"probe session"}');
+    // The location is in the body: a session created without it lands in the
+    // working directory of the server.
+    expect(call.body).toBe('{"title":"probe session","location":{"directory":"/tmp/case"}}');
     expect(session.id).toBe('ses_e81a0ec08ffehgOio28jqJun5M');
   });
 
@@ -132,6 +134,36 @@ describe('the calls of the client', () => {
     );
   });
 
+  it('sets the model of a session', async () => {
+    // The prompt body has no model: the model of a turn is the model of its
+    // session, and the server answers 204 with an empty body.
+    const { transport, calls } = fake(() => new Response(null, { status: 204 }));
+
+    await client(transport).setModel('ses_abc', {
+      id: 'minimax-m3.1-flash',
+      providerID: 'ollama-cloud',
+    });
+
+    const call = onlyCall(calls);
+    expect(call.method).toBe('POST');
+    expect(new URL(call.url).pathname).toBe('/api/session/ses_abc/model');
+    expect(call.body).toBe('{"model":{"id":"minimax-m3.1-flash","providerID":"ollama-cloud"}}');
+  });
+
+  it('switches the agent of a session', async () => {
+    // The prompt body names the agents a message is put to; the agent of a
+    // turn is the agent of its session, and this is the route that changes
+    // it.
+    const { transport, calls } = fake(() => new Response(null, { status: 204 }));
+
+    await client(transport).attachAgent('ses_abc', 'oa-builder');
+
+    const call = onlyCall(calls);
+    expect(call.method).toBe('POST');
+    expect(new URL(call.url).pathname).toBe('/api/session/ses_abc/agent');
+    expect(call.body).toBe('{"agent":"oa-builder"}');
+  });
+
   it('reads the messages of a session', async () => {
     const { transport, calls } = fake(() => json(fixture('messages.json')));
 
@@ -141,6 +173,45 @@ describe('the calls of the client', () => {
     expect(call.method).toBe('GET');
     expect(new URL(call.url).pathname).toBe('/api/session/ses_abc/message');
     expect(list.messages).toHaveLength(1);
+  });
+
+  it('reads the parent of a dispatched child', async () => {
+    const { transport } = fake(() =>
+      json(
+        JSON.stringify({
+          data: [{ id: 'ses_child', title: 'a child', parentID: 'ses_lead' }],
+        }),
+      ),
+    );
+
+    const list = await client(transport).listSessions();
+
+    expect(list.sessions[0]?.parentID).toBe('ses_lead');
+  });
+
+  it('reads the tokens and the cost of a message', async () => {
+    const body = JSON.stringify({
+      data: [
+        {
+          id: 'msg_1',
+          time: { created: 1, completed: 2 },
+          type: 'assistant',
+          cost: 0.25,
+          tokens: { input: 10, output: 2, reasoning: 0, cache: { read: 3, write: 1 } },
+        },
+      ],
+    });
+    const { transport } = fake(() => json(body));
+
+    const list = await client(transport).messages('ses_abc');
+
+    expect(list.messages[0]?.cost).toBe(0.25);
+    expect(list.messages[0]?.tokens).toEqual({
+      input: 10,
+      output: 2,
+      reasoning: 0,
+      cache: { read: 3, write: 1 },
+    });
   });
 
   it('reads the sessions the server is working on', async () => {
