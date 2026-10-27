@@ -1,0 +1,108 @@
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { approvalGate, approvalsPath, createApprovalStore } from './approvals.js';
+import type { HandlerResult } from './registry.js';
+
+/** The reason a result carries, when it stops the call. */
+function reasonOf(result: HandlerResult): string | undefined {
+  return 'reason' in result ? result.reason : undefined;
+}
+
+/** Whether a result lets the call through. */
+function continues(result: HandlerResult): boolean {
+  return 'continue' in result ? result.continue : true;
+}
+
+let root: string;
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), 'oa-approvals-'));
+});
+
+describe('the approval store', () => {
+  it('writes the grants under the state root and makes the directory', async () => {
+    const store = createApprovalStore(root);
+    expect(store.path).toBe(approvalsPath(root));
+    await store.approve('call-1', 1000, 60_000);
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toEqual([{ callID: 'call-1', expiresAt: 61_000 }]);
+  });
+
+  it('passes a granted call exactly once', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-1', 1000, 60_000);
+    expect(await store.isApproved('call-1', 2000)).toBe(true);
+    expect(await store.consumeApproval('call-1', 2000)).toBe(true);
+    expect(await store.consumeApproval('call-1', 2000)).toBe(false);
+    expect(await store.isApproved('call-1', 2000)).toBe(false);
+  });
+
+  it('never passes an expired grant', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-1', 1000, 500);
+    expect(await store.isApproved('call-1', 2000)).toBe(false);
+    expect(await store.consumeApproval('call-1', 2000)).toBe(false);
+  });
+
+  it('prunes the grants that have run out', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('old', 1000, 500);
+    await store.approve('new', 1000, 60_000);
+    expect(await store.isApproved('new', 2000)).toBe(true);
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toEqual([{ callID: 'new', expiresAt: 61_000 }]);
+  });
+
+  it('holds no grant for a call nobody approved', async () => {
+    const store = createApprovalStore(root);
+    expect(await store.isApproved('call-1', 2000)).toBe(false);
+  });
+});
+
+describe('the approval gate', () => {
+  it('stops a destructive command and names the escape hatch', async () => {
+    const store = createApprovalStore(root);
+    const gate = approvalGate(/rm\s+-rf/, store);
+    const result = await gate({
+      toolName: 'bash',
+      args: {},
+      files: [],
+      command: 'rm -rf /',
+      callID: 'call-7',
+    });
+    expect(continues(result)).toBe(false);
+    expect(reasonOf(result)).toContain('/oa approve <callID>');
+    expect(reasonOf(result)).toContain('call-7');
+  });
+
+  it('lets an approved call through once', async () => {
+    const store = createApprovalStore(root);
+    await store.approve('call-7', Date.now(), 60_000);
+    const gate = approvalGate(/rm\s+-rf/, store);
+    const first = await gate({
+      toolName: 'bash',
+      args: {},
+      files: [],
+      command: 'rm -rf /',
+      callID: 'call-7',
+    });
+    expect(continues(first)).toBe(true);
+    const second = await gate({
+      toolName: 'bash',
+      args: {},
+      files: [],
+      command: 'rm -rf /',
+      callID: 'call-7',
+    });
+    expect(continues(second)).toBe(false);
+  });
+
+  it('lets a command that does not match through', async () => {
+    const store = createApprovalStore(root);
+    const gate = approvalGate(/rm\s+-rf/, store);
+    const result = await gate({ toolName: 'bash', args: {}, files: [], command: 'ls -la' });
+    expect(continues(result)).toBe(true);
+  });
+});

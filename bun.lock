@@ -93,6 +93,20 @@
         "typescript": "^5.9.2",
       },
     },
+    "packages/hooks": {
+      "name": "@openagentsy/hooks",
+      "version": "0.1.0",
+      "dependencies": {
+        "@openagentsy/core": "workspace:^",
+        "@openagentsy/memory": "workspace:^",
+        "@openagentsy/tasks": "workspace:^",
+        "zod": "4.6.7",
+      },
+      "devDependencies": {
+        "@types/node": "^24.3.0",
+        "typescript": "^5.9.2",
+      },
+    },
     "packages/jev": {
       "name": "@openagentsy/jev",
       "version": "0.1.0",
@@ -380,6 +394,8 @@
     "@openagentsy/evals": ["@openagentsy/evals@workspace:packages/evals"],
 
     "@openagentsy/footprint": ["@openagentsy/footprint@workspace:packages/footprint"],
+
+    "@openagentsy/hooks": ["@openagentsy/hooks@workspace:packages/hooks"],
 
     "@openagentsy/jev": ["@openagentsy/jev@workspace:packages/jev"],
 
