@@ -40,21 +40,48 @@ export interface PreToolCallEvent {
 const PATH_ARGS = ['filePath', 'file_path', 'path', 'file'];
 
 /**
- * The tools that write a file.
- *
- * A tool that reads names a file too, and a read of a policy file has to
- * stay possible, so the file rules are about the tools that write.
+ * The tools that write, by their exact name.
  */
 const WRITING_TOOLS = ['write', 'edit', 'multi_edit', 'patch', 'apply_patch'];
 
 /**
+ * The verbs that say a tool writes.
+ */
+const WRITING_VERBS = [
+  'write',
+  'edit',
+  'patch',
+  'create',
+  'update',
+  'remove',
+  'delete',
+  'rename',
+  'move',
+];
+
+/**
+ * The nouns that say a tool touches a file.
+ */
+const FILE_NOUNS = ['file', 'files'];
+
+/**
  * Whether a tool writes a file.
  *
- * The name is the base name of the tool, so a tool that a host prefixes
- * is the same tool.
+ * The name is read on its token boundaries, in either direction: the
+ * built-in names (write, edit, multi_edit, patch, apply_patch) and the
+ * names a host composes (write_file, create_file) are the same thing.
  */
 export function isWritingTool(toolName: string): boolean {
-  return WRITING_TOOLS.some((tool) => toolName === tool || toolName.endsWith(`_${tool}`));
+  const lower = toolName.toLowerCase();
+  if (WRITING_TOOLS.some((tool) => lower === tool || lower.endsWith(`_${tool}`))) return true;
+  const tokens = toolName
+    .split(/[^A-Za-z0-9]+|(?=[a-z0-9][A-Z])/)
+    .filter((token) => token.length > 0)
+    .map((token) => token.toLowerCase());
+  if (WRITING_TOOLS.includes(tokens.join('_'))) return true;
+  const verb = tokens.some((token) => WRITING_VERBS.includes(token));
+  const noun = tokens.some((token) => FILE_NOUNS.includes(token));
+  return verb && noun;
 }
 
 /**

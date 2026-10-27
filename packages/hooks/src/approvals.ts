@@ -1,4 +1,6 @@
-import { mkdir, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import type { FileHandle } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { readPreToolCall } from './event.js';
@@ -30,6 +32,16 @@ const GrantsSchema = z.array(EntrySchema);
 
 /** How long a writer waits for the lock, in milliseconds. */
 const LOCK_TIMEOUT_MS = 2000;
+
+/**
+ * How old a lock must be before it is presumed abandoned.
+ *
+ * It is four times the wait, so a writer that is alive and slow is never
+ * mistaken for a writer that died. The two bounds are apart on purpose: a
+ * bound that is the same as the wait would take the lock away from a
+ * writer that is still holding it.
+ */
+const STALE_LOCK_MS = LOCK_TIMEOUT_MS * 4;
 
 /** The pause between two tries for the lock, in milliseconds. */
 const LOCK_RETRY_MS = 5;
@@ -95,22 +107,38 @@ async function withLock<T>(path: string, action: () => Promise<T>): Promise<T> {
 /**
  * The lock file, taken.
  *
- * The file is created exclusively, so only one writer holds it. A writer
- * that cannot take it waits, and a writer that waits for too long gives
- * up with an error: the store is not left open.
+ * The file is created exclusively, so only one writer holds it, and it
+ * carries the token of the writer that holds it, so a writer only gives
+ * back its own lock.
+ *
+ * A writer that cannot take the lock waits. Whether the lock may be taken
+ * over is decided once, when the lock is first seen: a lock that was
+ * alive then is not taken away from the writer that holds it now. A
+ * writer that waits for too long gives up with an error: the store is not
+ * left open.
  */
 async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const token = randomUUID();
+  let reclaimable: boolean | undefined;
   for (;;) {
     try {
       const handle = await open(lockPath, 'wx');
+      await handle.writeFile(token);
       await handle.close();
       return async () => {
-        await rm(lockPath, { force: true });
+        await releaseLock(lockPath, token);
       };
     } catch (error) {
       if (!isFileError(error, 'EEXIST')) throw error;
-      if (await reclaimStaleLock(lockPath)) continue;
+      if (reclaimable === undefined) {
+        reclaimable = await isStale(lockPath);
+      }
+      if (reclaimable) {
+        reclaimable = false;
+        await reclaimStaleLock(lockPath);
+        continue;
+      }
       if (Date.now() > deadline) {
         throw new Error(`the approval store is locked by another writer: ${lockPath}`);
       }
@@ -120,21 +148,68 @@ async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
 }
 
 /**
- * A lock that outlived its writer is taken over.
+ * The lock is given back.
  *
- * A crash leaves the lock behind, and a lock that nobody will release
- * holds the store shut: the approval could not be given. A lock older
- * than the timeout is stale, so it is removed and the writer tries again.
+ * The lock carries the token of the writer that holds it, so a writer
+ * that lost its lock to a reclaim does not remove the lock of the writer
+ * that took it.
  */
-async function reclaimStaleLock(lockPath: string): Promise<boolean> {
+async function releaseLock(lockPath: string, token: string): Promise<void> {
+  let content: string;
+  try {
+    content = await readFile(lockPath, 'utf8');
+  } catch (error) {
+    if (isFileError(error, 'ENOENT')) return;
+    throw error;
+  }
+  if (content !== token) return;
+  await rm(lockPath, { force: true });
+}
+
+/**
+ * Whether a lock is old enough to be presumed abandoned.
+ */
+async function isStale(lockPath: string): Promise<boolean> {
   try {
     const stats = await stat(lockPath);
-    if (Date.now() - stats.mtimeMs <= LOCK_TIMEOUT_MS) return false;
-    await rm(lockPath, { force: true });
-    return true;
+    return Date.now() - stats.mtimeMs > STALE_LOCK_MS;
   } catch (error) {
     if (isFileError(error, 'ENOENT')) return true;
     throw error;
+  }
+}
+
+/**
+ * A stale lock is taken over.
+ *
+ * The taking over is exclusive: a second file says who is taking it
+ * over, so two waiters do not move the lock at the same time. The
+ * staleness is checked again under it, so a lock that a live writer took
+ * in the meantime is left alone, and the lock is moved aside with a
+ * rename, which is one atomic step: only one waiter moves it.
+ */
+async function reclaimStaleLock(lockPath: string): Promise<void> {
+  const reclaimPath = `${lockPath}.reclaim`;
+  let handle: FileHandle;
+  try {
+    handle = await open(reclaimPath, 'wx');
+  } catch (error) {
+    if (isFileError(error, 'EEXIST')) return;
+    throw error;
+  }
+  try {
+    if (!(await isStale(lockPath))) return;
+    const aside = `${lockPath}.stale`;
+    try {
+      await rename(lockPath, aside);
+    } catch (error) {
+      if (isFileError(error, 'ENOENT')) return;
+      throw error;
+    }
+    await rm(aside, { force: true });
+  } finally {
+    await handle.close();
+    await rm(reclaimPath, { force: true });
   }
 }
 

@@ -75,6 +75,30 @@ const MESSAGE_FLAG_PREFIXES = ['-m=', '--message=', '-F=', '--file='];
 const GIT_SUBCOMMANDS = new Set(['commit', 'merge', 'rebase']);
 
 /**
+ * The tokens of a command, without the values of the message flags.
+ *
+ * The value of a message flag is a message and not an argument: a commit
+ * that says "docs: explain rm -rf /" is not a removal, and a commit whose
+ * message names --no-verify is not a skip. A quoted span that is not a
+ * message value stays in the list, so a command that is passed as an
+ * argument is still read.
+ */
+export function commandTokens(command: string): string[] {
+  const tokens = tokenise(command);
+  const kept: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? '';
+    if (MESSAGE_FLAGS.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (MESSAGE_FLAG_PREFIXES.some((flag) => token.startsWith(flag))) continue;
+    kept.push(token);
+  }
+  return kept;
+}
+
+/**
  * Whether a command skips the git hooks.
  *
  * The `-n` of `git commit` is the short form of `--no-verify`, and it is
@@ -87,18 +111,9 @@ const GIT_SUBCOMMANDS = new Set(['commit', 'merge', 'rebase']);
  * `bash -c "git commit -n"` is caught.
  */
 export function skipsGitHooks(command: string): boolean {
-  const tokens = tokenise(command);
-  const kept: string[] = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index] ?? '';
-    if (MESSAGE_FLAGS.has(token)) {
-      index += 1;
-      continue;
-    }
-    if (MESSAGE_FLAG_PREFIXES.some((flag) => token.startsWith(flag))) continue;
-    kept.push(unquote(token));
-  }
-  const bare = kept.join(' ');
+  const bare = commandTokens(command)
+    .map((token) => unquote(token))
+    .join(' ');
   if (/\bHUSKY=0\b/.test(bare)) return true;
   if (/\bcore\.hooksPath\b/.test(bare)) return true;
   return bare.split(/[|;&]/).some((segment) => segmentSkipsHooks(segment));
@@ -124,7 +139,7 @@ function segmentSkipsHooks(segment: string): boolean {
     if (token === '--') break;
     args.push(token);
   }
-  if (args.some((token) => token.includes('--no-verify'))) return true;
+  if (args.some((token) => /^--no-ver/.test(token))) return true;
   // The -n is the short form of --no-verify for commit alone.
   if (tokens[subIndex] !== 'commit') return false;
   return args.some((token) => /^-([A-Za-z]+)$/.exec(token)?.[1]?.includes('n') === true);
@@ -173,6 +188,8 @@ const PROTECTED_STATE = [
   '.openagentsy/memory.jsonl',
   '.openagentsy/approvals.json',
   '.openagentsy/approvals.json.lock',
+  '.openagentsy/approvals.json.lock.reclaim',
+  '.openagentsy/approvals.json.lock.stale',
 ];
 
 /**
@@ -235,6 +252,38 @@ function isForceFlag(flag: string): boolean {
 }
 
 /**
+ * Whether a token names the removal.
+ */
+function isRmToken(token: string): boolean {
+  return /(^|\/)rm$/.test(token);
+}
+
+/**
+ * The flags of a removal.
+ *
+ * The flags are read to the end of the segment, because GNU `rm` permutes
+ * them: `rm build -rf` is `rm -rf build`. An operand is not a flag and
+ * does not end the scan, and `--` ends it.
+ */
+function rmFlags(tokens: readonly string[], from: number): string[] {
+  const flags: string[] = [];
+  for (let index = from; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === undefined || token === '--') break;
+    if (!token.startsWith('-')) continue;
+    flags.push(token);
+  }
+  return flags;
+}
+
+/**
+ * Whether the flags are a recursive and a forced removal.
+ */
+function isDangerousFlags(flags: readonly string[]): boolean {
+  return flags.some(isRecursiveFlag) && flags.some(isForceFlag);
+}
+
+/**
  * Whether the text holds a destructive `rm`.
  *
  * The flags of the removal are read in any order and in either spelling,
@@ -244,19 +293,9 @@ function isForceFlag(flag: string): boolean {
  */
 function hasDestructiveRm(command: string): boolean {
   const tokens = command.split(/\s+/).filter((token) => token.length > 0);
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token === undefined) continue;
-    if (!/(^|\/)rm$/.test(token)) continue;
-    const flags: string[] = [];
-    for (let next = index + 1; next < tokens.length; next += 1) {
-      const flag = tokens[next];
-      if (flag === undefined || !flag.startsWith('-')) break;
-      flags.push(flag);
-    }
-    if (flags.some(isRecursiveFlag) && flags.some(isForceFlag)) return true;
-  }
-  return false;
+  return tokens.some(
+    (token, index) => isRmToken(token) && isDangerousFlags(rmFlags(tokens, index + 1)),
+  );
 }
 
 /**
@@ -272,7 +311,7 @@ const SEPARATORS = /[;&|()$`'"\\\n]/g;
  * `echo $(rm -rf /)` and `bash -c "rm -rf /"` are both caught.
  */
 export function isDestructiveCommand(command: string): boolean {
-  const bare = command.replace(SEPARATORS, ' ');
+  const bare = commandTokens(command).join(' ').replace(SEPARATORS, ' ');
   if (/\bgit\s+push\s+--force\b/i.test(bare)) return true;
   if (/\bgit\s+reset\s+--hard\b/i.test(bare)) return true;
   if (/\bdrop\s+table\b/i.test(bare)) return true;
@@ -324,12 +363,12 @@ function absolutePath(root: string, path: string): string {
 /**
  * Whether a call writes a file.
  *
- * A call writes when the tool is one that writes, or when the host said
- * which files the call touches. A read that names a file is a read, and a
- * read of a policy file has to stay possible.
+ * The tool has to be one that writes, and the call has to name a file. A
+ * read is a read, even when the host says which file it read, so the
+ * exclusion cannot come back through the bridge.
  */
 function writesFiles(call: PreToolCallEvent): boolean {
-  return isWritingTool(call.toolName) || call.files.length > 0;
+  return isWritingTool(call.toolName) && call.files.length > 0;
 }
 
 /** The options the default rules are built with. */
@@ -448,7 +487,7 @@ export const defaultRules = ({ workspace, stateRoot, home }: DefaultRuleOptions)
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined) return CONTINUE;
-        if (!writesFiles(call)) return CONTINUE;
+        if (!isWritingTool(call.toolName)) return CONTINUE;
         const content = contentOf(call);
         if (content === '') return CONTINUE;
         if (findSecrets(content).length === 0) return CONTINUE;

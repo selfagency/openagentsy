@@ -140,6 +140,18 @@ describe('no-skip-git-hooks', () => {
     ).toBe(false);
   });
 
+  it('blocks the abbreviations of the long flag', async () => {
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit --no-verif -m x')))).toBe(
+      false,
+    );
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit --no-veri -m x')))).toBe(
+      false,
+    );
+    expect(continues(await decide('no-skip-git-hooks', shell('git commit --no-ver -m x')))).toBe(
+      false,
+    );
+  });
+
   it('lets a -n that belongs to another command through', async () => {
     expect(continues(await decide('no-skip-git-hooks', shell('git merge -n')))).toBe(true);
     expect(continues(await decide('no-skip-git-hooks', shell('git rebase -n')))).toBe(true);
@@ -219,6 +231,33 @@ describe('workspace-writes-only', () => {
       files: [],
     });
     expect(continues(result)).toBe(true);
+  });
+
+  it('lets a read of a file through, even when the host says which file it read', async () => {
+    const path = '.opencode/skills/openagentsy-review/SKILL.md';
+    const result = await decide('workspace-writes-only', {
+      toolName: 'read',
+      args: { filePath: path },
+      files: [{ path }],
+    });
+    expect(continues(result)).toBe(true);
+    const protectedResult = await decide('protect-policy', {
+      toolName: 'read',
+      args: { filePath: path },
+      files: [{ path }],
+    });
+    expect(continues(protectedResult)).toBe(true);
+  });
+
+  it('knows the tools a host composes', async () => {
+    for (const tool of ['write_file', 'create_file']) {
+      const result = await decide('workspace-writes-only', {
+        toolName: tool,
+        args: { filePath: '/elsewhere/file.ts' },
+        files: [],
+      });
+      expect(continues(result), tool).toBe(false);
+    }
   });
 
   it('lets a call that touches no file through', async () => {
@@ -323,6 +362,17 @@ describe('secret-scan-writes', () => {
     expect(continues(result)).toBe(true);
   });
 
+  it('scans the content of the tools a host composes', async () => {
+    for (const tool of ['write_file', 'create_file']) {
+      const result = await decide('secret-scan-writes', {
+        toolName: tool,
+        args: { content: SECRET_CONTENT },
+        files: [],
+      });
+      expect(continues(result), tool).toBe(false);
+    }
+  });
+
   it('finds a secret in the lines a patch adds', async () => {
     const patch = ['*** Update File: src/a.ts', '@@', `+const api_key = '${SECRET_VALUE}';`].join(
       '\n',
@@ -385,6 +435,39 @@ describe('destructive-needs-approval', () => {
       shell('rm -rf /', { callID: 'call-9' }),
     );
     expect(continues(second)).toBe(false);
+  });
+
+  it('blocks a removal whose flags come after the operand', async () => {
+    expect(continues(await decide('destructive-needs-approval', shell('rm build -rf')))).toBe(
+      false,
+    );
+    expect(continues(await decide('destructive-needs-approval', shell('rm -r build -f')))).toBe(
+      false,
+    );
+    expect(
+      continues(await decide('destructive-needs-approval', shell('rm -r build --force'))),
+    ).toBe(false);
+  });
+
+  it('lets a message that talks about a removal through', async () => {
+    expect(
+      continues(
+        await decide('destructive-needs-approval', shell('git commit -m "docs: explain rm -rf /"')),
+      ),
+    ).toBe(true);
+    expect(
+      continues(
+        await decide('destructive-needs-approval', shell('git commit -m "never git push --force"')),
+      ),
+    ).toBe(true);
+    expect(
+      continues(
+        await decide(
+          'destructive-needs-approval',
+          shell('git commit -m "drop table in a migration"'),
+        ),
+      ),
+    ).toBe(true);
   });
 
   it('lets a removal that is not both recursive and forced through', async () => {

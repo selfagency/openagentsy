@@ -78,6 +78,30 @@ describe('the approval store', () => {
     expect(raw).toHaveLength(2);
   });
 
+  it('does not take a lock that a live writer holds', async () => {
+    const store = createApprovalStore(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${store.path}.lock`;
+    await writeFile(lockPath, 'held', 'utf8');
+    await expect(store.approve('call-1', 1000, 60_000)).rejects.toThrow('locked by another writer');
+    expect(await readFile(lockPath, 'utf8')).toBe('held');
+  });
+
+  it('lets two writers through a stale lock, one at a time', async () => {
+    const store = createApprovalStore(root);
+    await mkdir(join(root, '.openagentsy'), { recursive: true });
+    const lockPath = `${store.path}.lock`;
+    await writeFile(lockPath, 'held', 'utf8');
+    const old = new Date(Date.now() - 60_000);
+    await utimes(lockPath, old, old);
+    await Promise.all([
+      store.approve('first', 1000, 60_000),
+      store.approve('second', 1000, 60_000),
+    ]);
+    const raw = JSON.parse(await readFile(store.path, 'utf8'));
+    expect(raw).toHaveLength(2);
+  });
+
   it('takes over a lock that was left behind', async () => {
     const store = createApprovalStore(root);
     await mkdir(join(root, '.openagentsy'), { recursive: true });
