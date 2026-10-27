@@ -129,6 +129,35 @@ export interface EvalResult {
 }
 
 /**
+ * The shape of a result, for a result that came from somewhere else.
+ *
+ * The runner builds its own results, so the type is enough for it. A result
+ * that arrives from a person or from a file has to be checked, because a
+ * result that is not one is not a proof.
+ */
+export const EvalResultShape = z.object({
+  schema_version: z.literal('1'),
+  lesson_id: z.string().min(1),
+  artifact_sha256: z.string().min(1),
+  started_at: z.string().min(1),
+  finished_at: z.string().min(1),
+  passed: z.boolean(),
+  runs: z.number().int().min(1),
+  scenarios: z.array(
+    z.object({
+      id: z.string().min(1),
+      phase: z.enum(['baseline', 'candidate']),
+      command_sha256: z.string().min(1),
+      exit_code: z.number().int().nullable(),
+      timed_out: z.boolean(),
+      duration_ms: z.number().int(),
+      assertions: z.record(z.string(), z.boolean()),
+      passed: z.boolean(),
+    }),
+  ),
+});
+
+/**
  * The error the proof raises.
  *
  * It carries a hint, like every other error in this repository: the message

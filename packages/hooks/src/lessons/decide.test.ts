@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { hashOf } from '../eval/runner.js';
+import type { EvalScenarioResult } from '../eval/types.js';
 import { captureCandidate } from './capture.js';
-import { decideLesson, proofSufficient } from './decide.js';
+import { decideLesson, proofPath } from './decide.js';
 import type { EvalResult, StartPacket } from './model.js';
 import { readLesson } from './store.js';
 
@@ -31,14 +32,14 @@ function completePacket(proof: string): Partial<StartPacket> {
  * The proof is an artifact the runner can run, so the decision has a real
  * verdict to rest on.
  */
-async function proofArtifact(root: string, name = 'proof.json'): Promise<string> {
+async function proofArtifact(root: string, lessonId: string, name = 'proof.json'): Promise<string> {
   const script = join(root, 'ok.js');
   await writeFile(script, 'console.log("ok");\n', 'utf8');
   await writeFile(
     join(root, name),
     JSON.stringify({
       schema_version: '1',
-      lesson_id: 'oa-lesson-proof01',
+      lesson_id: lessonId,
       name: 'the proof',
       scenarios: [
         {
@@ -60,8 +61,28 @@ async function proofHash(root: string, name: string): Promise<string> {
   return hashOf(await readFile(join(root, name), 'utf8'));
 }
 
+/** A scenario, as a run records it. */
+function scenario(): EvalScenarioResult {
+  return {
+    id: 's',
+    phase: 'candidate',
+    command_sha256: 'c'.repeat(64),
+    exit_code: 0,
+    timed_out: false,
+    duration_ms: 1,
+    assertions: { exit_code: true },
+    passed: true,
+  };
+}
+
 /** A result, built by hand. */
-function result(lessonId: string, artifactSha: string, runs = 1, passed = true): EvalResult {
+function result(
+  lessonId: string,
+  artifactSha: string,
+  runs = 1,
+  passed = true,
+  withScenarios = false,
+): EvalResult {
   return {
     schema_version: '1',
     lesson_id: lessonId,
@@ -70,7 +91,7 @@ function result(lessonId: string, artifactSha: string, runs = 1, passed = true):
     finished_at: '2026-10-27T00:00:01.000Z',
     passed,
     runs,
-    scenarios: [],
+    scenarios: withScenarios ? [scenario()] : [],
   };
 }
 
@@ -90,8 +111,8 @@ describe('the decision', () => {
   it('validates a candidate whose proof runs and passes', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       const outcome = await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
@@ -111,12 +132,13 @@ describe('the decision', () => {
   it('refuses to validate a candidate whose proof does not pass', async () => {
     const { root, remove } = await temporaryRoot();
     try {
+      const lesson = await candidate(root, 'bad.json');
       await writeFile(join(root, 'bad.js'), 'console.log("nope");\n', 'utf8');
       await writeFile(
         join(root, 'bad.json'),
         JSON.stringify({
           schema_version: '1',
-          lesson_id: 'oa-lesson-proof01',
+          lesson_id: lesson.id,
           name: 'the proof',
           scenarios: [
             {
@@ -130,7 +152,6 @@ describe('the decision', () => {
         }),
         'utf8',
       );
-      const lesson = await candidate(root, 'bad.json');
       const outcome = await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
@@ -147,12 +168,12 @@ describe('the decision', () => {
   it('refuses a result whose verdicts disagree with its assertions', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       const handWritten: EvalResult = {
         schema_version: '1',
         lesson_id: lesson.id,
-        artifact_sha256: await proofHash(root, proof),
+        artifact_sha256: await proofHash(root, 'proof.json'),
         started_at: '2026-10-27T00:00:00.000Z',
         finished_at: '2026-10-27T00:00:01.000Z',
         passed: true,
@@ -187,14 +208,14 @@ describe('the decision', () => {
   it('refuses a result that is about another lesson', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       const outcome = await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
         decidedBy: 'human',
         reason: 'a result about another lesson',
-        evalResult: result('oa-lesson-other00', await proofHash(root, proof)),
+        evalResult: result('oa-lesson-other00', await proofHash(root, 'proof.json'), 1, true, true),
       });
       expect(outcome.ok).toBe(false);
       if (!outcome.ok) expect(outcome.reason).toMatch(/not about this lesson/);
@@ -206,14 +227,14 @@ describe('the decision', () => {
   it('refuses a result that does not match the proof', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       const outcome = await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
         decidedBy: 'human',
         reason: 'a result from another run',
-        evalResult: result(lesson.id, 'b'.repeat(64)),
+        evalResult: result(lesson.id, 'b'.repeat(64), 1, true, true),
       });
       expect(outcome.ok).toBe(false);
       if (!outcome.ok) expect(outcome.reason).toMatch(/does not match the proof/);
@@ -231,7 +252,7 @@ describe('the decision', () => {
         action: 'validate',
         decidedBy: 'human',
         reason: 'two runs is not three',
-        evalResult: result(lesson.id, 'a'.repeat(64), 2),
+        evalResult: result(lesson.id, 'a'.repeat(64), 2, true, true),
       });
       expect(twice.ok).toBe(false);
       if (!twice.ok) expect(twice.reason).toMatch(/3 passing runs/);
@@ -240,9 +261,80 @@ describe('the decision', () => {
         action: 'validate',
         decidedBy: 'human',
         reason: 'three runs pass',
-        evalResult: result(lesson.id, 'a'.repeat(64), 3),
+        evalResult: result(lesson.id, 'a'.repeat(64), 3, true, true),
       });
       expect(thrice.ok).toBe(true);
+    } finally {
+      await remove();
+    }
+  });
+
+  it('refuses a suite result that no run produced', async () => {
+    const { root, remove } = await temporaryRoot();
+    try {
+      const lesson = await candidate(root, 'evals/missing-file');
+      const outcome = await decideLesson(root, {
+        id: lesson.id,
+        action: 'validate',
+        decidedBy: 'human',
+        reason: 'a result a person wrote',
+        evalResult: result(lesson.id, 'a'.repeat(64), 3),
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toMatch(/carries no scenario/);
+    } finally {
+      await remove();
+    }
+  });
+
+  it('refuses a result that is not an eval result', async () => {
+    const { root, remove } = await temporaryRoot();
+    try {
+      const lesson = await candidate(root, 'evals/missing-file');
+      const outcome = await decideLesson(root, {
+        id: lesson.id,
+        action: 'validate',
+        decidedBy: 'human',
+        reason: 'a result of the wrong shape',
+        evalResult: { lesson_id: lesson.id } as unknown as EvalResult,
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toMatch(/not an eval result/);
+    } finally {
+      await remove();
+    }
+  });
+
+  it('refuses a proof that is outside the project', async () => {
+    const { root, remove } = await temporaryRoot();
+    try {
+      const lesson = await candidate(root, '/var/folders/nowhere/proof.json');
+      const outcome = await decideLesson(root, {
+        id: lesson.id,
+        action: 'validate',
+        decidedBy: 'human',
+        reason: 'a proof from somewhere else',
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toMatch(/outside the project/);
+    } finally {
+      await remove();
+    }
+  });
+
+  it('refuses a proof that was written for another lesson', async () => {
+    const { root, remove } = await temporaryRoot();
+    try {
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, 'oa-lesson-other00', 'proof.json');
+      const outcome = await decideLesson(root, {
+        id: lesson.id,
+        action: 'validate',
+        decidedBy: 'human',
+        reason: 'a proof for another lesson',
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.reason).toMatch(/not about this lesson/);
     } finally {
       await remove();
     }
@@ -251,8 +343,8 @@ describe('the decision', () => {
   it('applies a validated lesson with a change reference', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
@@ -310,8 +402,8 @@ describe('the decision', () => {
   it('rolls an applied lesson back when the behaviour did not change', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
@@ -341,8 +433,8 @@ describe('the decision', () => {
   it('supersedes an applied lesson when a newer one took over', async () => {
     const { root, remove } = await temporaryRoot();
     try {
-      const proof = await proofArtifact(root);
-      const lesson = await candidate(root, proof);
+      const lesson = await candidate(root, 'proof.json');
+      await proofArtifact(root, lesson.id);
       await decideLesson(root, {
         id: lesson.id,
         action: 'validate',
@@ -440,19 +532,8 @@ describe('the decision', () => {
 });
 
 describe('the proof', () => {
-  it('is enough when it passed once for an artifact', () => {
-    expect(proofSufficient('lessons/missing-file.json', result('oa-lesson-a', 'a'))).toBe(true);
-  });
-
-  it('is not enough when it failed', () => {
-    expect(proofSufficient('lessons/missing-file.json', result('oa-lesson-a', 'a', 1, false))).toBe(
-      false,
-    );
-    expect(proofSufficient('lessons/missing-file.json', undefined)).toBe(false);
-  });
-
-  it('needs three runs for a suite', () => {
-    expect(proofSufficient('evals/missing-file', result('oa-lesson-a', 'a', 2))).toBe(false);
-    expect(proofSufficient('evals/missing-file', result('oa-lesson-a', 'a', 3))).toBe(true);
+  it('is the file the lesson names, inside the project', () => {
+    expect(proofPath('/repo', 'lessons/proof.json')).toBe('/repo/lessons/proof.json');
+    expect(() => proofPath('/repo', '../elsewhere/proof.json')).toThrow(/outside the project/);
   });
 });

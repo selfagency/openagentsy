@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
-import { assertConsistent, runEvalArtifact } from '../eval/runner.js';
-import type { EvalResult } from '../eval/types.js';
+import { isAbsolute, resolve } from 'node:path';
+import { assertConsistent, readArtifact, runEvalArtifact } from '../eval/runner.js';
+import { type EvalArtifact, type EvalResult, EvalResultShape, ProofError } from '../eval/types.js';
+import { isInside } from '../paths.js';
 import {
   type Decision,
   isSuiteProof,
@@ -105,37 +106,58 @@ export function targetState(lesson: Lesson, input: DecideInput): LessonState | u
 }
 
 /**
- * Whether the proof is enough for the decision.
+ * The path of the proof of a lesson.
  *
- * An artifact proof is one run. A proof that points at an evals/ suite runs
- * through the safety suite's own runner, so it is judged by three runs
- * instead of one.
+ * The proof is a file in the project the lesson is about, so the resolved
+ * path has to stay inside the project: a proof that names a directory above
+ * it, or a file somewhere else on the machine, is not a proof of this lesson.
  */
-export function proofSufficient(proof: string, result: EvalResult | undefined): boolean {
-  if (result?.passed !== true) return false;
-  if (isSuiteProof(proof)) return result.runs >= SUITE_RUNS;
-  return true;
+export function proofPath(root: string, proof: string): string {
+  const path = isAbsolute(proof) ? resolve(proof) : resolve(root, proof);
+  if (!isInside(path, [root])) {
+    throw new ProofError(
+      'the proof is outside the project',
+      'a proof has to be a file in the project the lesson is about',
+    );
+  }
+  return path;
 }
 
 /**
- * The path of the proof of a lesson.
+ * Whether a result is one a run produced.
+ *
+ * A run holds the scenarios that ran, each with the hash of the command that
+ * ran and the assertions it made. A result with none of that was not run.
  */
-export function proofPath(root: string, proof: string): string {
-  return isAbsolute(proof) ? proof : join(root, proof);
+function isRunProduced(result: EvalResult): boolean {
+  if (!Array.isArray(result.scenarios) || result.scenarios.length === 0) return false;
+  return result.scenarios.every(
+    (scenario) =>
+      typeof scenario.command_sha256 === 'string' &&
+      scenario.command_sha256.length > 0 &&
+      scenario.assertions !== undefined &&
+      Object.keys(scenario.assertions).length > 0,
+  );
 }
 
 /**
  * The checks a result has to pass before a decision rests on it.
  *
- * A result is not trusted: it has to agree with its own assertions, it has
- * to be about this lesson, and it has to have passed. A result that a person
- * wrote by hand fails the first check as soon as its verdicts disagree with
- * its assertions.
+ * A result is not trusted: it has to be an eval result, it has to agree
+ * with its own assertions, it has to be about this lesson, and it has to
+ * have passed.
  */
 function checkResult(
   result: EvalResult,
   lesson: Lesson,
 ): { ok: false; reason: string; hint: string } | undefined {
+  if (!EvalResultShape.safeParse(result).success) {
+    return {
+      ok: false,
+      reason: 'the proof result is not an eval result',
+      hint: 'the result has to be the JSON the runner wrote',
+    };
+  }
   try {
     assertConsistent(result);
   } catch (error) {
@@ -163,12 +185,12 @@ function checkResult(
 }
 
 /**
- * The proof of a lesson, checked and, where it can be, run.
+ * The proof of a lesson, checked and, where the runner can, run.
  *
- * A proof that is an artifact is run here, so the verdict is the runner's
- * and not a file somebody wrote. A proof that is an evals/ suite is run by
- * the safety suite's own runner, so the result of its three runs is handed
- * to the decision, and it is checked against the lesson.
+ * A proof that is an eval artifact is run here, so the verdict is the
+ * runner's and not a file somebody wrote. A proof that is an evals/ suite is
+ * run by the safety suite, so the result of its three runs is handed to the
+ * decision - and it is only accepted when it is the shape a run writes.
  */
 async function verifyProof(
   root: string,
@@ -191,7 +213,9 @@ async function verifyProof(
  * The proof of a lesson that is an evals/ suite.
  *
  * The suite runs through the safety suite's own runner, so the result of its
- * three runs is handed to the decision, and it is checked against the lesson.
+ * three runs is handed to the decision. The result has to be a run: a result
+ * with no scenarios, or with scenarios that carry no command, was never run
+ * and proves nothing.
  */
 function verifySuiteProof(
   lesson: Lesson,
@@ -206,6 +230,13 @@ function verifySuiteProof(
   }
   const problem = checkResult(supplied, lesson);
   if (problem !== undefined) return problem;
+  if (!isRunProduced(supplied)) {
+    return {
+      ok: false,
+      reason: 'the proof result carries no run',
+      hint: 'a suite result has to hold the scenarios that ran, each with the hash of its command',
+    };
+  }
   if (supplied.runs < SUITE_RUNS) {
     return {
       ok: false,
@@ -219,9 +250,9 @@ function verifySuiteProof(
 /**
  * The proof of a lesson that is an eval artifact.
  *
- * The artifact is run here, so the verdict is the runner's and not a file
- * somebody wrote. A result that was handed to the decision has to agree with
- * the run.
+ * The artifact has to be about this lesson, and it is run here, so the
+ * verdict is the runner's. A result that was handed to the decision has to
+ * agree with the run.
  */
 async function verifyArtifactProof(
   root: string,
@@ -229,10 +260,30 @@ async function verifyArtifactProof(
   proof: string,
   supplied: EvalResult | undefined,
 ): Promise<{ ok: true; result: EvalResult } | { ok: false; reason: string; hint: string }> {
+  let path: string;
+  let artifact: EvalArtifact;
+  try {
+    path = proofPath(root, proof);
+    artifact = await readArtifact(path);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: error instanceof Error ? error.message : 'the proof could not be read',
+      hint: 'the proof has to be an eval artifact of this project',
+    };
+  }
+  if (artifact.lesson_id !== lesson.id) {
+    return {
+      ok: false,
+      reason: `the proof is about ${artifact.lesson_id}, not about this lesson`,
+      hint: 'the proof has to be written for the lesson it proves',
+    };
+  }
+
   let run: EvalResult;
   try {
     run = await runEvalArtifact({
-      artifactPath: proofPath(root, proof),
+      artifactPath: path,
       workspace: root,
       stateRoot: root,
       lessonId: lesson.id,
@@ -323,12 +374,28 @@ export async function decideLesson(
 }
 
 /**
- * The proof file of a lesson, as it is read.
+ * The result of a proof, read from a file.
+ *
+ * A file that cannot be read is an error and not an absent result: the
+ * person who asked has to know which of the two it was.
  */
-export async function readProof(root: string, proof: string): Promise<string | undefined> {
+export async function readEvalResult(
+  root: string,
+  path: string,
+): Promise<{ result?: EvalResult; error?: string }> {
+  let text: string;
   try {
-    return await readFile(proofPath(root, proof), 'utf8');
-  } catch {
-    return undefined;
+    text = await readFile(isAbsolute(path) ? path : resolve(root, path), 'utf8');
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : `the proof result ${path} could not be read`,
+    };
+  }
+  try {
+    return { result: JSON.parse(text) as EvalResult };
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : `the proof result ${path} is not JSON`,
+    };
   }
 }

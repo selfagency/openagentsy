@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import {
   decideLesson,
   type EvalResult,
@@ -8,6 +7,7 @@ import {
   listLessons,
   type ObserveOutcome,
   pendingLessons,
+  readEvalResult,
 } from '@openagentsy/hooks';
 
 /**
@@ -116,30 +116,6 @@ export function formatLessonsReport(report: LessonsReport): string {
 }
 
 /**
- * The proof a decision rests on, read from the result file.
- *
- * A file that cannot be read is an error and not an absent proof: the
- * person who ran the command has to know which of the two it was.
- */
-async function readEvalResult(path: string): Promise<{ result?: EvalResult; error?: string }> {
-  let text: string;
-  try {
-    text = await readFile(path, 'utf8');
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : `the proof result ${path} could not be read`,
-    };
-  }
-  try {
-    return { result: JSON.parse(text) as EvalResult };
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : `the proof result ${path} is not JSON`,
-    };
-  }
-}
-
-/**
  * Record a decision.
  */
 export async function runLessonDecision(
@@ -160,7 +136,7 @@ export async function runLessonDecision(
 
   let evalResult = options.evalResult;
   if (evalResult === undefined && options.evalResultPath !== undefined) {
-    const read = await readEvalResult(options.evalResultPath);
+    const read = await readEvalResult(root, options.evalResultPath);
     if (read.error !== undefined) {
       return {
         ok: false,

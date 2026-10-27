@@ -373,6 +373,12 @@ async function exists(path: string): Promise<boolean> {
  * because a proof nobody can reconcile is not a proof.
  */
 export function assertConsistent(result: EvalResult): void {
+  if (!Array.isArray(result.scenarios) || result.scenarios.length === 0) {
+    throw new ProofError(
+      'the result carries no scenario',
+      'a result has to hold the scenarios that ran; a result with none was never run',
+    );
+  }
   for (const scenario of result.scenarios) {
     if (allPassed(scenario.assertions) !== scenario.passed) {
       throw new ProofError(
@@ -500,6 +506,25 @@ function parseArtifact(text: string): EvalArtifact {
     );
   }
   return parsed.data;
+}
+
+/**
+ * The artifact, read and checked.
+ *
+ * The schema is the contract: an artifact that does not match it is not a
+ * proof, and the issues say what is wrong with it.
+ */
+export async function readArtifact(path: string): Promise<EvalArtifact> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    throw new ProofError(
+      'the eval artifact could not be read',
+      error instanceof Error ? error.message : 'the proof is missing',
+    );
+  }
+  return parseArtifact(text);
 }
 
 /**
