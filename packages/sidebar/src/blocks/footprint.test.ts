@@ -1,9 +1,8 @@
 import type { SessionMessageInfo } from '@opencode/client';
-import type { Plugin } from '@opencode/plugin/tui';
-import { RGBA } from '@opentui/core';
-import { testRender } from '@opentui/solid';
 import { describe, expect, it } from 'vitest';
 import { buildFootprintConfig } from '../config.js';
+import { collapseStore } from '../persist.js';
+import { fakeHost, renderFrame } from '../testing/harness.js';
 import { footprintTree } from './footprint.render.js';
 
 /**
@@ -41,64 +40,41 @@ const CONFIG = buildFootprintConfig({
   },
 });
 
-/** The host, as far as the block can tell. */
-function fakeContext(messages: SessionMessageInfo[]): Plugin.Context {
-  const data = {
-    session: {
-      family: (sessionID: string) => [sessionID],
-      message: {
-        list: () => messages,
-        sync: async () => undefined,
-      },
-    },
-  };
-  const theme = {
-    text: { base: RGBA.fromHex('#e6e6e6'), muted: RGBA.fromHex('#8a8a8a') },
-  };
-  const ui = { panel: { open: () => true } };
-  return { data, theme, ui } as unknown as Plugin.Context;
-}
-
 /** The frame the block draws, as text. */
-async function renderFrame(config = CONFIG): Promise<string> {
-  const setup = await testRender(() => footprintTree(fakeContext(MESSAGES), config), {
-    width: 72,
-    height: 24,
-  });
-  await setup.renderOnce();
-  const frame = setup.captureCharFrame();
-  await setup.dispose();
-  return frame;
+async function frame(config = CONFIG): Promise<string> {
+  const host = fakeHost({ messages: MESSAGES });
+  const collapse = collapseStore(host.context);
+  return renderFrame(() => footprintTree(host.context, config, collapse));
 }
 
 describe('the footprint block', () => {
   it('renders the footprint of a fixture', async () => {
-    const frame = await renderFrame();
+    const text = await frame();
 
-    expect(frame).toContain('Footprint');
-    expect(frame).toContain('Electricity');
-    expect(frame).toContain('Water');
-    expect(frame).toContain('Carbon');
-    expect(frame).toContain('Warming');
+    expect(text).toContain('Footprint');
+    expect(text).toContain('Electricity');
+    expect(text).toContain('Water');
+    expect(text).toContain('Carbon');
+    expect(text).toContain('Warming');
   });
 
   it('shows every value as a range and not as a single number', async () => {
-    const frame = await renderFrame();
+    const text = await frame();
 
-    expect(frame).toMatch(/Electricity \d[\d.]*–[\d.]* (Wh|kWh)/);
-    expect(frame).toMatch(/Carbon \d[\d.]*–[\d.]* (g|kg) WORLD/);
-    expect(frame).toMatch(/Warming \d[\d.]*–[\d.]* × 10/);
+    expect(text).toMatch(/Electricity \d[\d.]*–[\d.]* (Wh|kWh)/);
+    expect(text).toMatch(/Carbon \d[\d.]*–[\d.]* (g|kg) WORLD/);
+    expect(text).toMatch(/Warming \d[\d.]*–[\d.]* × 10/);
   });
 
   it('says what the range comes mostly from', async () => {
-    const frame = await renderFrame();
+    const text = await frame();
 
-    expect(frame).toContain('the range comes mostly from');
+    expect(text).toContain('the range comes mostly from');
   });
 
   it('stays hidden when the project configured nothing', async () => {
-    const frame = await renderFrame(buildFootprintConfig({}));
+    const text = await frame(buildFootprintConfig({}));
 
-    expect(frame).not.toContain('Footprint');
+    expect(text).not.toContain('Footprint');
   });
 });

@@ -8,8 +8,15 @@
     "emitDeclarationOnly": true,
     "jsx": "react-jsx",
     "jsxImportSource": "@opentui/solid",
-    "types": ["node"]
+    "types": ["node", "bun-types"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "references": [{ "path": "../footprint" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../footprint" },
+    { "path": "../hooks" },
+    { "path": "../ledger" },
+    { "path": "../memory" },
+    { "path": "../tasks" }
+  ]
 }

@@ -82,6 +82,36 @@ export function fmtCo2(range: Range): string {
 }
 
 /**
+ * A number, with the thousands separated.
+ *
+ * The counts the sidebar shows are counts of things - tokens, records,
+ * leases - and a count of 12000 is harder to read than 12,000.
+ */
+export function fmtCount(value: number): string {
+  return value.toLocaleString('en-US');
+}
+
+/**
+ * A count and its noun, the noun in the right number.
+ *
+ * A count of one reads as one thing and a count of none reads as none, and
+ * the word that follows is the word that fits.
+ */
+export function fmtPlural(count: number, singular: string, plural = `${singular}s`): string {
+  return `${fmtCount(count)} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * A price, or the word for a price nobody knows.
+ *
+ * The word is `unpriced` and not zero: a number that was never measured is
+ * not a number that came out as nothing.
+ */
+export function fmtUsd(usd: number | null): string {
+  return usd === null ? 'unpriced' : `$${usd.toFixed(4)}`;
+}
+
+/**
  * A range in scientific notation, the way a warming is written.
  *
  * The exponent is shared by the two ends, so the range reads as one

@@ -1,6 +1,8 @@
-import { type Plugin, PluginContextProvider } from '@opencode/plugin/tui';
+import type { Plugin } from '@opencode/plugin/tui';
 import { createComponent } from 'solid-js';
 import type { FootprintConfig } from '../config.js';
+import type { CollapseStore } from '../persist.js';
+import { blockTree } from '../tree.js';
 import { FootprintBlock } from './footprint.js';
 
 /**
@@ -10,11 +12,12 @@ import { FootprintBlock } from './footprint.js';
  * them inside its own render effect: a child that is built before the
  * provider runs would look for a context that is not there yet.
  */
-export function footprintTree(context: Plugin.Context, config: FootprintConfig) {
-  return createComponent(PluginContextProvider, {
-    value: context,
-    get children() {
-      return createComponent(FootprintBlock, { sessionID: 'ses_fixture', config });
-    },
-  });
+export function footprintTree(
+  context: Plugin.Context,
+  config: FootprintConfig,
+  collapse: CollapseStore,
+) {
+  return blockTree(context, () =>
+    createComponent(FootprintBlock, { sessionID: 'ses_fixture', config, collapse }),
+  );
 }

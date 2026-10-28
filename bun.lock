@@ -208,11 +208,17 @@
       "name": "@openagentsy/sidebar",
       "version": "0.1.0",
       "dependencies": {
+        "@openagentsy/core": "workspace:^",
         "@openagentsy/footprint": "workspace:^",
+        "@openagentsy/hooks": "workspace:^",
+        "@openagentsy/ledger": "workspace:^",
+        "@openagentsy/memory": "workspace:^",
+        "@openagentsy/tasks": "workspace:^",
       },
       "devDependencies": {
         "@opencode/client": "2.2.0",
         "@types/node": "^24.3.0",
+        "bun-types": "^1.4.4",
         "typescript": "^5.9.2",
       },
       "peerDependencies": {

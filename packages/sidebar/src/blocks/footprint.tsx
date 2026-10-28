@@ -1,11 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
 import { usePlugin } from '@opencode/plugin/tui';
-import { createMemo, createSignal, For, Show } from 'solid-js';
+import { createMemo, For, Show } from 'solid-js';
 import type { FootprintConfig } from '../config.js';
 import { fmtCo2, fmtL, fmtSci, fmtWh } from '../format.js';
 import { estimateImpact } from '../impact.js';
 import { PANEL_NAME } from '../panel.js';
+import { type CollapseStore, useCollapsed } from '../persist.js';
 import { useFamilyUsage } from '../usage.js';
 
 /**
@@ -24,11 +25,15 @@ const UNCERTAINTY: Record<string, string> = {
   tcre: 'the climate sensitivity',
 };
 
-export function FootprintBlock(props: { sessionID: string; config: FootprintConfig }) {
+export function FootprintBlock(props: {
+  sessionID: string;
+  config: FootprintConfig;
+  collapse: CollapseStore;
+}) {
   const context = usePlugin();
   const rows = useFamilyUsage(() => props.sessionID);
   const estimate = createMemo(() => estimateImpact(rows(), props.config));
-  const [open, setOpen] = createSignal(true);
+  const [open, toggle] = useCollapsed(props.collapse, 'footprint');
 
   const base = () => context.theme.text.base;
   const muted = () => context.theme.text.muted;
@@ -40,7 +45,7 @@ export function FootprintBlock(props: { sessionID: string; config: FootprintConf
   return (
     <Show when={estimate().estimated > 0}>
       <box>
-        <box flexDirection="row" gap={1} onMouseDown={() => setOpen(!open())}>
+        <box flexDirection="row" gap={1} onMouseDown={() => void toggle()}>
           <text fg={base()}>{open() ? '▼' : '▶'}</text>
           <text fg={base()}>
             <b>Footprint</b>
