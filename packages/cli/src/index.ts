@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { type ProjectRoots, resolveProjectRoots } from '@openagentsy/core';
@@ -487,13 +488,32 @@ const COMMANDS: Record<
  * The commands are a table and the options are parsed in one place, so this
  * function stays small enough to read.
  */
+/**
+ * The version this package carries.
+ *
+ * The manifest is the record, and a literal in the source goes stale the
+ * moment the release machinery bumps it. The manifest sits one directory
+ * above the build output, and the file is read at the point where the
+ * version is needed, so a package that cannot find it says so rather than
+ * naming a version that does not exist.
+ */
+function packageVersion(): string {
+  try {
+    const manifest = new URL('../package.json', import.meta.url);
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { version?: string };
+    return parsed.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 export async function main(argv: string[], options: CommandOptions = {}): Promise<number> {
   // The board's driver is bun:sqlite, so the whole tool needs Bun. A Node
   // install fails at the first query, and the message here says which
   // runtime to use instead of showing a module resolution error.
   if (!process.versions.bun) {
     process.stderr.write(
-      'openagentsy runs on Bun: the board uses bun:sqlite, which Node does not have.\nRun it with: bunx openagentsy@0.1.0 <command>\n',
+      `openagentsy runs on Bun: the board uses bun:sqlite, which Node does not have.\nRun it with: bunx @voxslopuli/openagentsy@${packageVersion()} <command>\n`,
     );
     return 1;
   }

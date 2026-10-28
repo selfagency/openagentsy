@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -198,8 +199,27 @@ function required<T>(value: T | undefined, name: string): T {
   return value;
 }
 
+/**
+ * The version this package carries.
+ *
+ * The manifest is the record, and a literal in the source goes stale the
+ * moment the release machinery bumps it. The manifest sits one directory
+ * above the build output.
+ */
+function packageVersion(): string {
+  try {
+    const manifest = new URL('../package.json', import.meta.url);
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { version?: string };
+    return parsed.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 const server = new McpServer(
-  { name: 'openagentsy', version: '0.1.0' },
+  // The manifest is the record of the version, and a literal here goes
+  // stale the moment the release machinery bumps it.
+  { name: 'openagentsy', version: packageVersion() },
   { capabilities: { tools: {} }, instructions: USAGE_CARD },
 );
 

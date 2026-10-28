@@ -13,7 +13,7 @@ The Lead is called **agentsy** in the agent selector.
 ## Install
 
 ```bash
-bunx openagentsy@0.1.0 setup
+bunx @voxslopuli/openagentsy@0.2.0 setup
 ```
 
 `setup` writes the OpenCode config, installs the plugin into
