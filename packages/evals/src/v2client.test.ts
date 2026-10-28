@@ -464,19 +464,30 @@ describe('the parsers of the client', () => {
   });
 
   it('reads a page of sessions', async () => {
-    // The captured page names its directory two ways (`/tmp` is a link to
-    // `/private/tmp`), so the client is scoped to the directory the
-    // sessions name and both of them are the case's.
-    const { transport } = fake(() => json(fixture('session-list.json')));
+    // The captured page names its directory two ways, and the two ways are
+    // made here rather than taken from the capture: on macOS `/tmp` is a
+    // link to `/private/tmp`, and the two spellings of a directory that
+    // exists are the same directory on every platform. A path that is a
+    // link on one platform alone would prove the behaviour on that
+    // platform alone.
+    const { root, directory, link } = await twoSpellings();
+    try {
+      const body = fixture('session-list.json')
+        .replaceAll('/private/tmp/oa-v2probe', link)
+        .replaceAll('/tmp/oa-v2probe', directory);
+      const { transport } = fake(() => json(body));
 
-    const list = await client(transport, undefined, '/tmp/oa-v2probe').listSessions();
+      const list = await client(transport, undefined, directory).listSessions();
 
-    expect(list.sessions.map((session) => session.id)).toEqual([
-      'ses_e81a0ebf6ffeuFpzQZmRvlcDLv',
-      'ses_e81a0ec08ffehgOio28jqJun5M',
-    ]);
-    expect(list.cursor?.next).toContain('eyJhbmNob3Ii');
-    expect(list.cursor?.previous).toContain('eyJhbmNob3Ii');
+      expect(list.sessions.map((session) => session.id)).toEqual([
+        'ses_e81a0ebf6ffeuFpzQZmRvlcDLv',
+        'ses_e81a0ec08ffehgOio28jqJun5M',
+      ]);
+      expect(list.cursor?.next).toContain('eyJhbmNob3Ii');
+      expect(list.cursor?.previous).toContain('eyJhbmNob3Ii');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('reads an empty page of sessions', async () => {
