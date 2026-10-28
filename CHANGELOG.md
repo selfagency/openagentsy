@@ -2,6 +2,12 @@
 
 Every release, from the commits that made it.
 
+## 0.2.2 - 2026-10-28
+
+### Fixed
+
+- **cli**: the bin runs on bun, because the board is bun:sqlite (`62700ce`)
+
 ## 0.2.1 - 2026-10-28
 
 ### Kept
