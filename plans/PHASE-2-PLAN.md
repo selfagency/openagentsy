@@ -2,6 +2,8 @@
 
 > **Revision 3 is available.** A delta document at [`PHASE-2-PLAN-REVISION3.md`](./PHASE-2-PLAN-REVISION3.md) extends this plan with eight new sections (§17 Ethics framework, §18 Safety benchmark suite, §19 Incident response, §20 Privacy and bounded personalization, §21 Policy module library, §22 Scope declarations, §23 Credential broker, §24 Sandbox for untrusted code) and extensions to §3, §4, §6, §8, §9, §10, §11, §13, §14, §15, §16. The delta is grounded in `selfagency/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` and the creative patterns from agentsy's packages (orchestrator task-board, runtime hooks, session recovery, cognitive memory / learning loop, secrets broker, tokenomics, retrieval, gateway). Revision notes R-17..R-32 in the delta document map every change to its source. To apply revision 3: insert §17–§24 after §16, apply the section extensions in place, update §15's build order with step 2f, and update §16's open questions 15–28. Until revision 3 is applied, this revision-2 document remains the authoritative spec.
 
+> **Status, 2026-10-28.** This plan was written for a project that spoke both OpenCode 1 and 2. **The project speaks OpenCode 2 only** now (decision of 2026-10-27): the v1 plugin path, the generator's v1 translation, the CLI's `--target` flag, the harness's v1 client and the CI's v1 leg are gone. The v2 facts this plan marked **VERIFY** are **[measured]** — the permission hook carries the agent, the shell key is `shell`, the turn-end events are `session.execution.*`, the session list is filtered by `directory` and not by `location[directory]`, an interrupt needs `resume=false`, and the shell environment policy lives in the v2 shell domain's `create.before` hook. Where a section below still describes a v1 path it is **history**: §7.7's V1 sidebar fallback is void, and §15's rows for 2c and 2d are met. The full list is under "Revision notes" below.
+
 **Position.** This revision assumes the Phase 1 remediation has **landed in full**: all 38 findings of the Phase 1 code review are fixed through its 20-step plan, the safety suite runs 14 cases, and `develop` is the baseline described under "Baseline" below. It also folds in every correction from the plan review (P-01..P-16): the MCP hook fact is stated as measured, the Magic Context dependency is replaced by a memory slice we actually build, compaction is on by default, the protected-files list covers the real trust boundary, and worktrees share the board instead of forking it.
 
 **Bottom line.** Phase 2 ships eight packages and two cross-cutting features:
@@ -46,6 +48,17 @@ What changed from revision 1 and why. Sources: the Phase 1 code review (findings
 | Doc sweep folded into every build step's definition of done (AGENTS.md package enumeration, plan references) | §15 | P-16 / R-15 |
 | The four blind-spot eval cases noted as the landed baseline the suite extends from | Baseline 14 | R-16 |
 | Ordering fix: the agent red-team for `pnpm add` moved from step 2.0 to 2c (the rule that blocks it ships in 2c) | §15 | — |
+
+### What changed after this revision was written (2026-10-27 to 2026-10-28)
+
+| Change | Where | Landed in |
+| --- | --- | --- |
+| The project speaks **OpenCode 2 only**. The v1 plugin path, the generator's v1 translation, the CLI's `--target` flag, the harness's v1 client and the CI's v1 leg are gone; the plugin registers through `setup` only. | §2, §7.7, §8.2, §15 | `316f758`, `79672b2` |
+| Every **VERIFY** on the v2 surface is now **[measured]**: the permission hook carries `agent` (so the write guard is not a lockout), the v2 permission key is `shell`, the turn-end event is `session.execution.succeeded`/`.failed`, the session list is filtered by `directory` and ignores `location[directory]`, an interrupt needs `resume=false`, and the shell environment policy lives in the shell domain's `create.before` hook. | §8.2, §10, §11 | `c22e3ea`, `9866ccf`, `1d6580d` |
+| The v2 path now carries the whole guard system: the quality check on every write, the seven blocking rules, the scope-drift and output checks, the round-status checks, the harvest janitor, and the approval as an `ask` effect on the permission hook — OpenCode 2 gives a plugin no way to write the host's permission map, so the v1 mechanism has no home. | §8, §10 | `9866ccf` |
+| The v2 shell domain's `create.before` hook is where the environment policy lives, so §2c's "agent shells see neither `HUSKY` nor `TYPESAFE_API_KEY`" is met on the only runtime. | §8.3, §15 (2c) | `1d6580d` |
+| §7.7's V1 sidebar fallback is **void**: there is no second runtime, so the sidebar is one package. | §7.7, §15 (2e) | — |
+| The safety suite runs on OpenCode 2 with **14 green cases**. The harness records the runtime it started and refuses a 1.x binary before the server spawns. | §15, Baseline | `d491264`, `316f758` |
 
 ---
 
@@ -1211,7 +1224,9 @@ export function useCollapsed(key: string, initial: boolean): [() => boolean, () 
 - No copy contains "you", "your fault", "streak", "today you" or a comparison with other users. A unit test checks this against a list of banned words.
 - `footprint.showWarming` defaults to `true`, and can be set to `false` in `openagentsy.jsonc`.
 
-### 7.7 V1 fallback
+### 7.7 V1 fallback — **void (2026-10-27)**
+
+> The project speaks OpenCode 2 only. There is no second runtime, so there is no V1 sidebar package, no `dist/v1.js`, and no per-major `engines.opencode` matrix for this package (§1.4's rule still applies to any package that is ever published for a second runtime). The text below is kept as the record of what the V1 surface was.
 
 ```ts
 // packages/sidebar/src/v1.ts
@@ -2074,6 +2089,8 @@ Doctor (2a extension) prints this map with the files that exist and flags overla
 
 ## 15. Build order and exit tests
 
+**Where the steps stand (2026-10-28).** **2a, 2b, 2c and 2d are landed** on `develop`: the eight packages exist, the guard system runs on the v2 path, and the safety suite's 14 cases are green against a live OpenCode 2 server. **2e** is what remains of this revision — the sidebar, the worktree shared state (§3.9), `oa conformance` and `oa report --ethical` — and **2f** is revision 3's eight sections, which live in the delta document. The exit tests below stand as written, with two exceptions: 2e's "V1 toast fires on `session.idle`" is **void** (§7.7), and 2e's sidebar row is the only 2e work not yet started.
+
 **Preconditions — landed.** The Phase 1 remediation (its Steps 1–20) is the baseline; see "Baseline" above. Every feature below cites what it stands on rather than re-fixing it. The standing rules from revision 1 still hold: after every step, `bun run check` (aliased per §1.6) is green; the safety suite's 14 cases stay green; `TURBO_TELEMETRY_DISABLED=1` is set in CI and in agent shells.
 
 One ordering fix from revision 1: its step 2.0 exit test required an agent told to `pnpm add x` to be blocked — but the rule that blocks it ships in 2c. The red-team now lives where its machinery lives.
@@ -2097,7 +2114,7 @@ One ordering fix from revision 1: its step 2.0 exit test required an agent told 
 - **Bundling `models.json`:** fetch-and-cache only, until the EcoLogits data license is confirmed?
 - **Upstream export:** should agentsy add a `./hooks` subpath export to `@agentsy/runtime`, or re-export the hooks from the package root?
 - **Beans compatibility:** keep OpenAgentsy's rendering byte-identical to Beans', or accept whitespace differences?
-- **V1 sidebar hook:** confirm whether issue #5971's sidebar hook merged.
+- **V1 sidebar hook:** ~~confirm whether issue #5971's sidebar hook merged~~ — **void**: the project speaks OpenCode 2 only (§7.7).
 - **Em dashes:** `quality.copy.emDash` is `off` by default. Switch it to `reflex` if the agents shouldn't use them in UI copy?
 - **Unsourced claims as `floor`:** block completion until a claim has a source or placeholder marker (recommended), or downgrade them to `reflex` so a person can waive them?
 - **Comment rules in Biome:** also ship them as a GritQL plugin once comment matching is confirmed, or keep them only in `packages/quality`?

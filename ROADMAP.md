@@ -16,7 +16,7 @@ says what that changed.
 | The board: records, leases, budgets, audit, classification | done |
 | The plugin: the lease guard, the effort ladder, the session harvest | done |
 | The model selector and the lock file | done |
-| The safety suite: ten cases against real sessions | built, the numbers below |
+| The safety suite: fourteen cases against real sessions | built, the numbers below |
 | The CLI: `build`, `setup`, `doctor`, `models` | done |
 | The System One client, and the classifier it serves | done, optional on a key |
 | Publishable packages, the changelog, the release workflow | done |
@@ -65,8 +65,17 @@ What the port measured, and what it costs:
   identity and the target paths arrive.
 - A command a person has to approve is an `ask` effect on that hook: OpenCode 2
   gives a plugin no way to write the host's permission map.
-- The shell of an agent runs with the environment of the host. There is no
-  `shell.env` hook, so the shell environment policy has no place to tighten it.
+- The shell of an agent runs with a **tightened environment**. OpenCode 2 has no
+  `shell.env` hook, but its shell domain has a `create.before` hook whose event
+  carries the environment the server is about to spawn with — so the policy
+  lives there. Measured on a live server: the child's own environment has
+  neither `TYPESAFE_API_KEY` nor `TOGETHER_API_KEY` nor the git-hook switches,
+  and carries `OPENAGENTSY_AGENT=1`. The approval path is untouched, because
+  the hook never touches the command.
+- The whole guard system runs on the v2 path: the lease write guard, the
+  quality check on every write, the seven blocking rules, the scope-drift and
+  output checks, the round-status checks, the harvest, and the approval as an
+  `ask` effect on the permission hook.
 
 Also in 0.2.0:
 
@@ -98,10 +107,17 @@ are dogfooded with the new agent rather than against a synthetic one.
   fires, the lessons and their eval runner, and `/oa approve` as the one-shot
   escape hatch (2026-10-27).
 - **`quality`**: the score a change earns, so the reviewer has something
-  sharper than a binary approve.
-- **`sidebar`**: the thing that shows a human what the agents are doing.
-- **`oa conformance`**: the report that says whether an agent is behaving.
-- **`oa report --ethical`**: what the run cost, and what it was worth.
+  sharper than a binary approve. Built (2026-10-28): the rule registry, nine
+  CSS rules and eight HTML and copy rules with a passing and a failing
+  fixture each, the comment lint, the hooks and the findings store, the
+  waivers, three on-demand skills, the reviewer gate, and the sloplint
+  bridge (which degrades cleanly when Hallmark is absent).
+- **`sidebar`**: the thing that shows a human what the agents are doing. Not
+  started; the plan's V1 fallback is void, so it is one package.
+- **`oa conformance`**: the report that says whether an agent is behaving. Not
+  started.
+- **`oa report --ethical`**: what the run cost, and what it was worth. Not
+  started.
 
 ## The baseline that was never measured
 
