@@ -2,6 +2,16 @@
 
 Every release, from the commits that made it.
 
+## 0.2.3 - 2026-10-28
+
+### Fixed
+
+- **ci**: the publish stages the packages outside the tree, and 0.2.3 (`8c96f34`)
+
+### Kept
+
+- **tasks**: the publish is by hand until the workflow stages the packages (`e4d8f74`)
+
 ## 0.2.2 - 2026-10-28
 
 ### Fixed
