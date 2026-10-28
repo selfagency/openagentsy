@@ -186,7 +186,8 @@ describe('the CLI', () => {
 describe('the models command', () => {
   it('writes the lock when a switch names a provider', async () => {
     const result = await runModels({
-      root,
+      workspace: root,
+      stateRoot: root,
       mode: 'switch',
       providers: ['ollama'],
       yes: true,
@@ -200,7 +201,8 @@ describe('the models command', () => {
 
   it('resolves the alias ollama to the cloud provider', async () => {
     const result = await runModels({
-      root,
+      workspace: root,
+      stateRoot: root,
       mode: 'switch',
       providers: ['ollama'],
       yes: true,
@@ -219,7 +221,8 @@ describe('the models command', () => {
       }),
     );
     const result = await runModels({
-      root,
+      workspace: root,
+      stateRoot: root,
       mode: 'refresh',
       providers: [],
       yes: true,
@@ -233,7 +236,8 @@ describe('the models command', () => {
 
   it('takes the flash variant when the preference is asked for', async () => {
     const result = await runModels({
-      root,
+      workspace: root,
+      stateRoot: root,
       mode: 'switch',
       providers: ['ollama'],
       preferFlash: true,

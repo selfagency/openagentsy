@@ -20,6 +20,9 @@ export { deciderBy };
  * with the ones that happened most often first. `/oa lesson <id>
  * validate|apply|reject|observe` records the decision, and the decision is
  * the person's: the command runs as the person, so `decidedBy` is the human.
+ *
+ * The lessons are the state root's: they are what the project learned, and
+ * a worktree of the project has the same lessons as the project.
  */
 
 /** One lesson, as the inbox shows it. */
@@ -71,11 +74,11 @@ export type LessonDecisionOptions = {
 /**
  * The inbox.
  */
-export async function runLessons(root: string): Promise<LessonsReport> {
-  const all = await listLessons(root);
+export async function runLessons(stateRoot: string): Promise<LessonsReport> {
+  const all = await listLessons(stateRoot);
   const pending = pendingLessons(all);
   return {
-    root,
+    root: stateRoot,
     lessons: pending.map((lesson) => ({
       id: lesson.id,
       state: lesson.state,
@@ -111,7 +114,7 @@ export function formatLessonsReport(report: LessonsReport): string {
  * Record a decision.
  */
 export async function runLessonDecision(
-  root: string,
+  stateRoot: string,
   id: string,
   action: string,
   options: LessonDecisionOptions = {},
@@ -128,7 +131,7 @@ export async function runLessonDecision(
 
   let evalResult = options.evalResult;
   if (evalResult === undefined && options.evalResultPath !== undefined) {
-    const read = await readEvalResult(root, options.evalResultPath);
+    const read = await readEvalResult(stateRoot, options.evalResultPath);
     if (read.error !== undefined) {
       return {
         ok: false,
@@ -141,7 +144,7 @@ export async function runLessonDecision(
     evalResult = read.result;
   }
 
-  const outcome = await decideLesson(root, {
+  const outcome = await decideLesson(stateRoot, {
     id,
     action: action as LessonAction,
     decidedBy: deciderBy(options.decidedBy),

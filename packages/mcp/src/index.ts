@@ -26,6 +26,7 @@ import {
   RECORD_KINDS,
   recordUsage,
   releaseLease,
+  resolveStateRoot,
   revokeLease,
   rotateAudit,
   setBudget,
@@ -39,8 +40,22 @@ import { failure, type McpToolResult, text } from './mcp-tool.js';
 import { createWaiverTools, WAIVER_TOOL_NAME } from './waivers.js';
 import { workspaceTools } from './workspace-tools.js';
 
-const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
-const stateDir = join(root, '.openagentsy');
+/**
+ * The two roots of the server (§3.9).
+ *
+ * The workspace is the session's own directory: the worktree, when the
+ * server runs in one. It holds the project files the session reads and the
+ * task files of .beans/, which travel with the branch.
+ *
+ * The state root is the directory that owns the shared OpenAgentsy state:
+ * the board database, the leases, the records, the audit log, the ledger,
+ * the lessons and the waivers. In a linked worktree it is the MAIN
+ * repository root, so a builder in a worktree posts to the board the Lead
+ * reads instead of to a board of its own.
+ */
+const workspace = process.env.OPENAGENTSY_ROOT ?? process.cwd();
+const stateRoot = resolveStateRoot(workspace);
+const stateDir = join(stateRoot, '.openagentsy');
 
 /**
  * The writer cap.
@@ -59,7 +74,7 @@ const auditPath = join(stateDir, 'audit.jsonl');
  * the check asks the ledger what a bean spent. A project without a ledger
  * falls back to the self-report the board already holds.
  */
-const usageReaders = ledgerReaders(root);
+const usageReaders = ledgerReaders(stateRoot);
 
 const AGENTS = await knownAgents();
 /**
@@ -76,7 +91,7 @@ const AGENTS = await knownAgents();
  */
 async function knownAgents(): Promise<Set<string> | undefined> {
   try {
-    const roles = await loadRoles(join(root, 'roles.yaml'));
+    const roles = await loadRoles(join(workspace, 'roles.yaml'));
     const names = new Set<string>();
     for (const [key, role] of Object.entries(roles.roles)) {
       names.add(key.toLowerCase());
@@ -374,7 +389,7 @@ async function postRecord(input: {
 // The lesson tools: an agent may PROPOSE a lesson, and only a person may
 // DECIDE one. The permission map keeps every agent role away from the
 // decision tool (roles.yaml), and the hook rule is the second layer.
-const LESSON_TOOLS = createLessonTools(root);
+const LESSON_TOOLS = createLessonTools(stateRoot);
 
 server.registerTool(
   'oa_lesson_propose',
@@ -400,7 +415,7 @@ server.registerTool(
 // the tool away from every agent role (roles.yaml), and the hook rule is
 // the second layer: the hook cannot see an MCP call on the pinned binary,
 // so the map is the enforcement and the rule is the backstop.
-const WAIVER_TOOLS = createWaiverTools(root);
+const WAIVER_TOOLS = createWaiverTools(stateRoot);
 
 server.registerTool(
   WAIVER_TOOL_NAME,
@@ -417,7 +432,7 @@ server.registerTool(
 // offer tools of their own, and the board server is where a session finds
 // them. The names, the descriptions and the schemas come from the
 // packages; the server opens the stores they read and writes.
-const WORKSPACE_TOOLS = await workspaceTools({ root, db });
+const WORKSPACE_TOOLS = await workspaceTools({ workspace, stateRoot, db });
 
 for (const tool of WORKSPACE_TOOLS) {
   server.registerTool(
@@ -546,7 +561,7 @@ async function checkOneLease(input: {
 }): Promise<{ content: { type: 'text'; text: string }[] }> {
   const decision = checkLease(db, {
     path: required(input.path, 'path'),
-    root,
+    root: stateRoot,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
   });
   if (decision.status === 'conflict') {

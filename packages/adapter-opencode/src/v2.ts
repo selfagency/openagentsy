@@ -27,6 +27,7 @@ import { recordIdleFailure } from './idle-failure.js';
 import { claimedStatusOf, observeSessionIdle, recordNoProgressRounds } from './idle-observer.js';
 import { assistantMessageOf, bridgeToLedger } from './ledger-bridge.js';
 import { readApprovalFor } from './project-config.js';
+import { type Roots, resolveRoots } from './roots.js';
 import { applyApproval, SHELL_ACTION } from './v2-approval.js';
 import { createV2Bridge, type V2Bridge, type V2ToolEvent } from './v2-bridge.js';
 import { checkWrite } from './write-guard.js';
@@ -220,7 +221,7 @@ export type { V2ToolDefinition, V2ToolEvent };
  * returns structured content. The definition holds the Zod schema, and the
  * V2 registration takes the JSON schema out of it.
  */
-function effortTool(root: string, ctx: V2Context) {
+function effortTool(roots: Roots, ctx: V2Context) {
   return defineTool({
     description:
       'Climb one rung on the reasoning effort ladder. Only call this when a trigger fired, for example a test failed twice or the change touches concurrency, auth or migrations. The reason must name the trigger.',
@@ -231,15 +232,15 @@ function effortTool(root: string, ctx: V2Context) {
       if (typeof args.reason !== 'string') {
         return 'The reason must be a string that names the trigger.';
       }
-      const role = await roleKeyForAgent(root, context.agent);
-      const plan = await planClimb(root, role, context.sessionID, args.reason);
+      const role = await roleKeyForAgent(roots.workspace, context.agent);
+      const plan = await planClimb(roots, role, context.sessionID, args.reason);
 
       if (!plan.ok) {
-        await refuseClimb(root, role, args.reason);
+        await refuseClimb(roots.stateRoot, role, args.reason);
         return plan.message;
       }
 
-      await recordClimb(root, context.sessionID, role, plan.rungIndex, args.reason);
+      await recordClimb(roots.stateRoot, context.sessionID, role, plan.rungIndex, args.reason);
 
       const target = plan.target;
       const separator = target.model.indexOf('/');
@@ -268,13 +269,13 @@ function effortTool(root: string, ctx: V2Context) {
  * session to the model and the effort level together.
  */
 async function applyRung(
-  root: string,
+  roots: Roots,
   ctx: V2Context,
   sessionID: string,
   agent: string,
 ): Promise<void> {
-  const role = await roleKeyForAgent(root, agent);
-  const target = await rungTarget(root, role, sessionID);
+  const role = await roleKeyForAgent(roots.workspace, agent);
+  const target = await rungTarget(roots.stateRoot, role, sessionID);
   if (!target) return;
   const separator = target.model.indexOf('/');
   if (separator === -1) return;
@@ -294,7 +295,7 @@ async function applyRung(
  * needs, and it is where the effort rung of a role is applied.
  */
 async function registerContextHook(
-  root: string,
+  roots: Roots,
   ctx: V2Context,
   sessionAgents: Map<string, string>,
   switched: Set<string>,
@@ -306,7 +307,7 @@ async function registerContextHook(
     if (switched.has(event.sessionID)) return;
 
     switched.add(event.sessionID);
-    await applyRung(root, ctx, event.sessionID, event.agent);
+    await applyRung(roots, ctx, event.sessionID, event.agent);
   });
 }
 
@@ -360,7 +361,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * parent the context cannot name.
  */
 async function onMessageUpdated(
-  root: string,
+  roots: Roots,
   event: V2Event,
   sessionAgents: Map<string, string>,
 ): Promise<void> {
@@ -370,7 +371,7 @@ async function onMessageUpdated(
   if (sessionID === undefined) return;
   const agent = sessionAgents.get(sessionID);
   if (agent === undefined) return;
-  await bridgeToLedger(root, { raw: message, sessionID, rootSessionID: sessionID, agent });
+  await bridgeToLedger(roots, { raw: message, sessionID, rootSessionID: sessionID, agent });
 }
 
 /**
@@ -418,7 +419,7 @@ async function registerShellEnvHook(ctx: V2Context): Promise<void> {
  * command first.
  */
 async function onPermission(
-  root: string,
+  roots: Roots,
   event: V2PermissionEvent,
   sessionAgents: Map<string, string>,
   approvalFor: readonly string[],
@@ -431,7 +432,7 @@ async function onPermission(
     return;
   }
   if (!WRITE_ACTIONS.has(event.action)) return;
-  await guardWriteDecision(root, event, sessionAgents);
+  await guardWriteDecision(roots, event, sessionAgents);
 }
 
 /**
@@ -444,7 +445,7 @@ async function onPermission(
  * held to is a write the rule cannot judge.
  */
 async function guardWriteDecision(
-  root: string,
+  roots: Roots,
   event: V2PermissionEvent,
   sessionAgents: Map<string, string>,
 ): Promise<void> {
@@ -453,7 +454,7 @@ async function guardWriteDecision(
     event.effect = 'deny';
     event.message =
       'OpenAgentsy blocked this write. The permission event named no agent and the session names none either, so the lease rule cannot be applied. Ask the Lead to run this session under a role.';
-    await appendAudit(root, {
+    await appendAudit(roots.stateRoot, {
       policyId: POLICIES.leaseWrite.id,
       policyVersion: POLICIES.leaseWrite.version,
       actor: 'unknown',
@@ -473,7 +474,7 @@ async function guardWriteDecision(
     event.effect = 'deny';
     event.message =
       'OpenAgentsy blocked this write. The action names no path, so the lease rule cannot be applied.';
-    await appendAudit(root, {
+    await appendAudit(roots.stateRoot, {
       policyId: POLICIES.leaseWrite.id,
       policyVersion: POLICIES.leaseWrite.version,
       actor: agent,
@@ -487,7 +488,7 @@ async function guardWriteDecision(
   }
 
   for (const resource of event.resources) {
-    const result = await checkWrite(root, {
+    const result = await checkWrite(roots, {
       toolName: event.action,
       path: resource,
       agent,
@@ -525,22 +526,28 @@ async function onTextEnded(bridge: V2Bridge, event: V2Event): Promise<void> {
  * unloads, which is what the V2 documentation asks for.
  */
 export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined> {
-  const root = ctx.location.directory;
+  // The session's own directory is the workspace, and the state root is the
+  // directory that owns the shared state: the board, the leases, the audit
+  // log, the rungs and the ledger. In a linked worktree the state root is
+  // the MAIN repository root, so a builder in a worktree reads the Lead's
+  // board and not a board of its own.
+  const roots = resolveRoots(ctx.location.directory);
+  const { workspace, stateRoot } = roots;
   const sessionAgents = new Map<string, string>();
   const switched = new Set<string>();
 
-  await registerContextHook(root, ctx, sessionAgents, switched);
+  await registerContextHook(roots, ctx, sessionAgents, switched);
 
   // The environment of the shell of an agent, before the first command runs.
   await registerShellEnvHook(ctx);
 
   // The rules of the package, on the V2 hook points.
   const bridge = await createV2Bridge({
-    root,
+    roots,
     sessionAgents,
     onFindings: async (findings, sessionID) => {
       const agent = sessionAgents.get(sessionID) ?? 'unknown';
-      await appendAudit(root, {
+      await appendAudit(stateRoot, {
         policyId: POLICIES.outputFlagged.id,
         policyVersion: POLICIES.outputFlagged.version,
         actor: agent,
@@ -555,14 +562,14 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
   await registerToolHooks(ctx, bridge);
 
   // The write guard and the approval of a command.
-  const approvalFor = await readApprovalFor(root);
+  const approvalFor = await readApprovalFor(workspace);
   await ctx.permission.hook('evaluate', async (event) => {
-    await onPermission(root, event, sessionAgents, approvalFor);
+    await onPermission(roots, event, sessionAgents, approvalFor);
   });
 
   // The effort tool.
   await ctx.tool.transform((editor) => {
-    editor.add(v2Tool('oa_effort', effortTool(root, ctx)));
+    editor.add(v2Tool('oa_effort', effortTool(roots, ctx)));
   });
 
   // The events. A session that goes idle gives its effort rung back, so the
@@ -572,7 +579,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
   void (async () => {
     for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
       if (event.type === 'message.updated') {
-        await onMessageUpdated(root, event, sessionAgents);
+        await onMessageUpdated(roots, event, sessionAgents);
         continue;
       }
       if (event.type === 'session.text.ended') {
@@ -589,7 +596,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
       sessionAgents.delete(sessionID);
       switched.delete(sessionID);
       if (!agent) continue;
-      await onIdle(root, ctx, sessionID, agent);
+      await onIdle(roots, ctx, sessionID, agent);
     }
   })();
 
@@ -621,7 +628,7 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
  * not wait for the archivist's whole run, and the V2 event loop must not
  * stop reading events while it waits.
  */
-function v2HarvestSession(root: string, ctx: V2Context): HarvestSession {
+function v2HarvestSession(stateRoot: string, ctx: V2Context): HarvestSession {
   return {
     messages: async (sessionID) => {
       const messages = await ctx.session.context({ sessionID });
@@ -652,7 +659,7 @@ function v2HarvestSession(root: string, ctx: V2Context): HarvestSession {
             await ctx.session.remove({ sessionID });
           },
         },
-        root,
+        stateRoot,
       );
     },
   };
@@ -714,16 +721,16 @@ async function lastTextOf(ctx: V2Context, sessionID: string): Promise<string> {
  * throw of the ledger is caught here, and every failure goes on the record.
  */
 async function observeRound(
-  root: string,
+  stateRoot: string,
   ctx: V2Context,
   sessionID: string,
   agent: string,
 ): Promise<void> {
   try {
     const claimed = claimedStatusOf(await lastTextOf(ctx, sessionID));
-    const finding = observeSessionIdle(claimed, () => boardRoundStatus(root), sessionID);
+    const finding = observeSessionIdle(claimed, () => boardRoundStatus(stateRoot), sessionID);
     if (finding !== undefined) {
-      await appendAudit(root, {
+      await appendAudit(stateRoot, {
         policyId: POLICIES.roundStatusMismatch.id,
         policyVersion: POLICIES.roundStatusMismatch.version,
         actor: agent,
@@ -735,18 +742,18 @@ async function observeRound(
       });
     }
   } catch (error) {
-    await recordIdleFailure(root, { agent, sessionID, error });
+    await recordIdleFailure(stateRoot, { agent, sessionID, error });
   }
 
   try {
-    const ledger = openLedger(root);
+    const ledger = openLedger(stateRoot);
     try {
-      recordNoProgressRounds(ledger, join(root, '.openagentsy', 'board.sqlite'));
+      recordNoProgressRounds(ledger, join(stateRoot, '.openagentsy', 'board.sqlite'));
     } finally {
       closeLedger(ledger);
     }
   } catch (error) {
-    await recordIdleFailure(root, { agent, sessionID, error });
+    await recordIdleFailure(stateRoot, { agent, sessionID, error });
   }
 }
 
@@ -762,19 +769,19 @@ async function observeRound(
  * fault cases exist to catch.
  */
 async function onIdle(
-  root: string,
+  roots: Roots,
   ctx: V2Context,
   sessionID: string,
   agent: string,
 ): Promise<void> {
   try {
-    const rungs = await readRungs(root);
+    const rungs = await readRungs(roots.stateRoot);
     if (rungs[sessionID]) {
       delete rungs[sessionID];
-      await writeRungs(root, rungs);
+      await writeRungs(roots.stateRoot, rungs);
     }
   } catch (error) {
-    await appendAudit(root, {
+    await appendAudit(roots.stateRoot, {
       policyId: POLICIES.eventsFailed.id,
       policyVersion: POLICIES.eventsFailed.version,
       actor: agent,
@@ -788,7 +795,7 @@ async function onIdle(
   // The round that just finished is checked before the archivist runs: the
   // archivist may open a session of its own, and the round that went
   // nowhere is the one that is still open.
-  await observeRound(root, ctx, sessionID, agent);
+  await observeRound(roots.stateRoot, ctx, sessionID, agent);
 
   // A harvest that fails must not break the session that is closing, so it
   // is caught here and put on the record. The V1 path keeps the two
@@ -796,16 +803,16 @@ async function onIdle(
   // is a failure of the events, and a harvest that cannot run is a failure
   // of the harvest.
   try {
-    if (!(await harvestEnabled(root))) return;
-    const role = await roleKeyForAgent(root, agent);
+    if (!(await harvestEnabled(roots.stateRoot))) return;
+    const role = await roleKeyForAgent(roots.workspace, agent);
     await harvest({
-      session: v2HarvestSession(root, ctx),
-      root,
+      session: v2HarvestSession(roots.stateRoot, ctx),
+      stateRoot: roots.stateRoot,
       sessionID,
       role,
       agent,
     });
   } catch (error) {
-    await recordHarvestFailure(root, { agent, sessionID, error });
+    await recordHarvestFailure(roots.stateRoot, { agent, sessionID, error });
   }
 }

@@ -19,6 +19,9 @@ import {
  * module is the thin layer a person drives it through. What it adds is the
  * audit: a grant and a use are both on the record, because an approval that
  * leaves no trace is an approval nobody can look at afterwards.
+ *
+ * The store and the audit are the state root's, so a grant given in a
+ * worktree is a grant of the project.
  */
 
 /**
@@ -27,8 +30,8 @@ import {
  * It is the board's own log, beside the board: the same file the leases and
  * the records are audited in.
  */
-function auditPath(root: string): string {
-  return join(root, '.openagentsy', 'audit.jsonl');
+function auditPath(stateRoot: string): string {
+  return join(stateRoot, '.openagentsy', 'audit.jsonl');
 }
 
 /**
@@ -61,8 +64,8 @@ const MAX_TTL_MS = 24 * 60 * 60 * 1000;
 
 /** What the command was asked to do. */
 export type ApproveOptions = {
-  /** The project root: the state lives under it. */
-  root: string;
+  /** The state root: the approvals store and the audit live under it. */
+  stateRoot: string;
   /** The call the grant covers, as the person typed it. */
   callID?: string | undefined;
   /** How long the grant lives, as the person typed it: milliseconds. */
@@ -174,7 +177,7 @@ export async function runApprove(options: ApproveOptions): Promise<ApproveResult
   }
 
   const now = options.now ?? Date.now();
-  const store = createApprovalStore(options.root);
+  const store = createApprovalStore(options.stateRoot);
   const attempt = await grantCall(store, callID, now, ttlMs);
   if ('error' in attempt) {
     return {
@@ -197,7 +200,7 @@ export async function runApprove(options: ApproveOptions): Promise<ApproveResult
   // The grant is on file, and the trail is part of the grant: a grant that
   // nobody can look at afterwards is a grant nobody gave.
   try {
-    await appendAudit(auditPath(options.root), {
+    await appendAudit(auditPath(options.stateRoot), {
       policyId: POLICIES.approveGranted.id,
       policyVersion: POLICIES.approveGranted.version,
       actor: options.actor ?? HUMAN,
@@ -237,8 +240,8 @@ export async function runApprove(options: ApproveOptions): Promise<ApproveResult
 
 /** What the consumer of a grant needs to spend it. */
 export type UseApprovalOptions = {
-  /** The project root: the state lives under it. */
-  root: string;
+  /** The state root: the approvals store lives under it. */
+  stateRoot: string;
   /** The call the grant covers. */
   callID: string;
   /** The agent that made the call. */
@@ -256,7 +259,7 @@ export type UseApprovalOptions = {
  * the person who granted it is not the one that used it.
  */
 export async function useApproval(options: UseApprovalOptions): Promise<boolean> {
-  const store = createApprovalStore(options.root);
+  const store = createApprovalStore(options.stateRoot);
   return store.consumeApproval(options.callID, options.now ?? Date.now(), options.actor);
 }
 

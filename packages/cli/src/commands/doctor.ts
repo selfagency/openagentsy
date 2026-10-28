@@ -8,6 +8,7 @@ import {
   listLeases,
   loadRoles,
   openDatabase,
+  type ProjectRoots,
   type RolesFile,
   type Target,
 } from '@openagentsy/core';
@@ -517,8 +518,8 @@ type RegenerationDiff = {
  * the project it is describing, because the person who runs it may be about
  * to change that project.
  */
-async function regenerationDiff(root: string, ours: Set<string>): Promise<RegenerationDiff> {
-  const installedDir = join(root, '.opencode', 'agents');
+async function regenerationDiff(roots: ProjectRoots, ours: Set<string>): Promise<RegenerationDiff> {
+  const installedDir = join(roots.workspace, '.opencode', 'agents');
   // A tree that was never built has nothing to drift from, and the setup
   // warning already says the plugin is not installed.
   if (!(await fileExists(installedDir))) return { drifted: [], target: undefined };
@@ -538,7 +539,7 @@ async function regenerationDiff(root: string, ours: Set<string>): Promise<Regene
 
   const temp = await mkdtemp(join(tmpdir(), 'openagentsy-regeneration-'));
   try {
-    await runBuild({ root, outDir: temp });
+    await runBuild({ workspace: roots.workspace, stateRoot: roots.stateRoot, outDir: temp });
     const fresh = await agentFiles(join(temp, 'agents'));
 
     const drifted: string[] = [];
@@ -566,10 +567,13 @@ async function regenerationDiff(root: string, ours: Set<string>): Promise<Regene
  * A doctor that cannot run the comparison says so rather than pretending
  * the tree is clean.
  */
-async function regenerationReport(root: string, roles: RolesFile): Promise<RegenerationReport> {
+async function regenerationReport(
+  roots: ProjectRoots,
+  roles: RolesFile,
+): Promise<RegenerationReport> {
   const ours = new Set(Object.values(roles.roles).map((role) => agentFileName(role)));
   try {
-    const diff = await regenerationDiff(root, ours);
+    const diff = await regenerationDiff(roots, ours);
     return {
       drifted: diff.drifted,
       reconcile:
@@ -585,7 +589,17 @@ async function regenerationReport(root: string, roles: RolesFile): Promise<Regen
   }
 }
 
-export async function runDoctor(root: string): Promise<DoctorReport> {
+/**
+ * The doctor, as a person reads it.
+ *
+ * The report has two halves and they have two roots. The project half — the
+ * config, the roles, the skills and the installed plugin — is the
+ * workspace's, because those are the files of the project. The state half —
+ * the model lock, the board and the audit log — is the state root's, because
+ * those are the files of the project as a whole.
+ */
+export async function runDoctor(roots: ProjectRoots): Promise<DoctorReport> {
+  const { workspace, stateRoot } = roots;
   const warnings: string[] = [];
   const version = await detectOpenCode();
   const target: Target = 'v2';
@@ -594,8 +608,8 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     warnings.push('opencode binary not found on PATH, assuming v2 layout');
   }
 
-  const config = await readProjectConfig(root);
-  const configMap = await readConfigMap(root, config.paths);
+  const config = await readProjectConfig(workspace);
+  const configMap = await readConfigMap(workspace, config.paths);
 
   warnings.push(...compactionWarnings(config));
   if (!config.exists) {
@@ -605,10 +619,12 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     warnings.push('the openagentsy MCP server is not registered in the project config');
   }
 
-  const roles = await loadRoles(join(root, 'roles.yaml'));
-  const lock = await readModelLock(join(root, 'openagentsy.models.lock.json'));
+  const roles = await loadRoles(join(workspace, 'roles.yaml'));
+  // The model lock is the state root's: it is the choice of models the
+  // project made, and a worktree of the project has the same lock.
+  const lock = await readModelLock(join(stateRoot, 'openagentsy.models.lock.json'));
 
-  const regeneration = await regenerationReport(root, roles);
+  const regeneration = await regenerationReport(roots, roles);
   for (const entry of regeneration.drifted) {
     warnings.push(`the generated agent file ${entry}, run: ${regeneration.reconcile} to reconcile`);
   }
@@ -632,8 +648,9 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     warnings.push('no model lock file, run: openagentsy models init');
   }
 
-  const skills = await findSkills(root);
-  const stateDir = join(root, '.openagentsy');
+  const skills = await findSkills(workspace);
+  // The board and the audit log are the state root's.
+  const stateDir = join(stateRoot, '.openagentsy');
   const databasePath = join(stateDir, 'board.sqlite');
   const auditPath = join(stateDir, 'audit.jsonl');
 
@@ -657,7 +674,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
   }
 
   const bundlePath = await findPluginBundle();
-  const pluginPath = join(root, '.opencode', 'plugins', 'openagentsy.js');
+  const pluginPath = join(workspace, '.opencode', 'plugins', 'openagentsy.js');
   const pluginInstalled = await stat(pluginPath).then(
     () => true,
     () => false,
@@ -681,7 +698,7 @@ export async function runDoctor(root: string): Promise<DoctorReport> {
     roles: roleReports,
     skills,
     board: {
-      root: relative(root, stateDir) || '.openagentsy',
+      root: relative(stateRoot, stateDir) || '.openagentsy',
       databasePath,
       databaseExists,
       leases: leaseCount,

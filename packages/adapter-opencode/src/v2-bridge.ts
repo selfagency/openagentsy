@@ -2,6 +2,7 @@ import type { OutputFinding } from '@openagentsy/hooks/output-checks';
 import { type BridgeHooks, createBridge } from './bridge.js';
 import { activeBean, roleKeyForAgent, statedPathsOf } from './guard.js';
 import { readQualityMode } from './project-config.js';
+import type { Roots } from './roots.js';
 
 /**
  * The bridge, on the V2 path.
@@ -61,8 +62,8 @@ export type V2ToolResult = {
 
 /** What the bridge needs to know. */
 export type V2BridgeOptions = {
-  /** The project the agent works in. */
-  root: string;
+  /** The two roots of the session: the workspace and the state root. */
+  roots: Roots;
   /** The agent of every session, from the context hook. */
   sessionAgents: Map<string, string>;
   /** Where the findings of the output checks go. */
@@ -125,35 +126,40 @@ function applyResultText(result: V2ToolResult | undefined, text: string): void {
  * The registry is the one `createBridge` builds, with the same options the
  * V1 path gives it: the same rules, the same quality mode, the same
  * findings sink.
+ *
+ * The two roots are not the same directory. The workspace is the session's
+ * own directory and the state root is the directory that owns the board, so
+ * a session in a worktree reads the board of the main repository.
  */
 export async function createV2Bridge(options: V2BridgeOptions): Promise<V2Bridge> {
-  const { root, sessionAgents } = options;
+  const { roots, sessionAgents } = options;
+  const { workspace, stateRoot } = roots;
 
   /** The role of a session, when the session has one. */
   const roleForSession = async (sessionID: string): Promise<string | undefined> => {
     const agent = sessionAgents.get(sessionID);
-    return agent === undefined ? undefined : roleKeyForAgent(root, agent);
+    return agent === undefined ? undefined : roleKeyForAgent(workspace, agent);
   };
 
   const hooks: BridgeHooks = createBridge({
-    workspace: root,
-    stateRoot: root,
+    workspace,
+    stateRoot,
     roleForSession,
     statedPathsForSession: async (sessionID) => {
       // The scope of the task is the set of files the task holds a lease
       // on, and the leases are read from the board.
       const agent = sessionAgents.get(sessionID);
       if (agent === undefined) return [];
-      return statedPathsOf(root, agent);
+      return statedPathsOf(roots, agent);
     },
     quality: {
-      mode: await readQualityMode(root),
+      mode: await readQualityMode(workspace),
       taskIdForSession: async (sessionID) => {
         // The task of a session is the bean its agent holds a lease on, so
         // the findings of a write land on the task that asked for it.
         const agent = sessionAgents.get(sessionID);
         if (agent === undefined) return undefined;
-        return await activeBean(root, agent);
+        return await activeBean(roots, agent);
       },
     },
     ...(options.onFindings === undefined ? {} : { onFindings: options.onFindings }),

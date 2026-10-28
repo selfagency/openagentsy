@@ -10,13 +10,16 @@ import { appendAudit, POLICIES } from './guard.js';
  * Both paths use it: the V1 path reads the failure off the server client,
  * and the V2 path reads it off the event stream, and neither may let a
  * failed check take a session down.
+ *
+ * The audit log is the state root's: the failure is on the board of the
+ * project, not on the disk of one worktree.
  */
 export async function recordIdleFailure(
-  root: string,
+  stateRoot: string,
   input: { agent: string; sessionID: string; error: unknown },
 ): Promise<void> {
   try {
-    await appendAudit(root, {
+    await appendAudit(stateRoot, {
       policyId: POLICIES.eventsFailed.id,
       policyVersion: POLICIES.eventsFailed.version,
       actor: input.agent,

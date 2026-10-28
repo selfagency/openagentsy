@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { type ProjectRoots, resolveProjectRoots } from '@openagentsy/core';
 import { formatApproveResult, runApprove } from './commands/approve.js';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
@@ -26,6 +27,10 @@ import { runSetup } from './commands/setup.js';
 
 const USAGE = `openagentsy <command> [options]
 
+Two roots: the directory the command runs in, and the state root of the
+project. The state root is the main repository root, so a command run in a
+linked worktree reads the board, the ledger and the lock of the project.
+
 Commands:
   audit              Report the quality findings of the change, and say which path ran
   board              Show the records, leases and budgets, for a human to read
@@ -47,13 +52,13 @@ Commands:
   models switch      Switch the provider, re-pick the models, and write the lock file
 
 Options:
-  --root <dir>        Project root (default: current directory)
+  --root <dir>        Project directory (default: current directory)
   --all               Audit the whole project instead of the changed files
   --base <ref>        The ref the changed files are measured against (default: HEAD)
   --since <when>      How far back to look (default: 30 days ago)
   --out <dir>         Output directory for build (default: <root>/.opencode)
   --roles <file>      Roles file (default: <root>/roles.yaml)
-  --lock <file>       Model lock file (default: <root>/openagentsy.models.lock.json)
+  --lock <file>       Model lock file (default: <state root>/openagentsy.models.lock.json)
   --config <file>     Config file for setup (default: <root>/opencode.json)
   --providers <list>  Providers for models init, comma separated
   --prefer-flash      Take the flash variant of the family a role would get
@@ -92,9 +97,10 @@ export type Values = {
   help?: boolean | undefined;
 };
 
-async function buildCommand(root: string, values: Values): Promise<number> {
+async function buildCommand(roots: ProjectRoots, values: Values): Promise<number> {
   const result = await runBuild({
-    root,
+    workspace: roots.workspace,
+    stateRoot: roots.stateRoot,
     ...(values.out ? { outDir: values.out } : {}),
     ...(values.roles ? { rolesPath: values.roles } : {}),
     ...(values.lock ? { lockPath: values.lock } : {}),
@@ -116,9 +122,9 @@ async function buildCommand(root: string, values: Values): Promise<number> {
  * the whole rule set carries the TypeScript compiler; the other commands
  * must not pay for it.
  */
-async function auditCommand(root: string, values: Values): Promise<number> {
+async function auditCommand(roots: ProjectRoots, values: Values): Promise<number> {
   const { formatAuditReport, runAudit } = await import('./commands/audit.js');
-  const report = await runAudit(root, {
+  const report = await runAudit(roots, {
     scope: values.all === true ? 'all' : 'changed',
     ...(values.base === undefined ? {} : { base: values.base }),
   });
@@ -126,34 +132,38 @@ async function auditCommand(root: string, values: Values): Promise<number> {
   return report.exitCode;
 }
 
-async function boardCommand(root: string): Promise<number> {
-  const view = await runBoard(root);
+async function boardCommand(roots: ProjectRoots): Promise<number> {
+  const view = await runBoard(roots.stateRoot);
   process.stdout.write(`${formatBoard(view)}\n`);
   return 0;
 }
 
-async function doctorCommand(root: string): Promise<number> {
-  const report = await runDoctor(root);
+async function doctorCommand(roots: ProjectRoots): Promise<number> {
+  const report = await runDoctor(roots);
   process.stdout.write(formatDoctorReport(report));
   return 0;
 }
 
-async function ledgerCommand(root: string, values: Values, positionals: string[]): Promise<number> {
+async function ledgerCommand(
+  roots: ProjectRoots,
+  values: Values,
+  positionals: string[],
+): Promise<number> {
   const sub = positionals[1];
   const since = values.since;
 
   if (sub === 'scan-reverts') {
-    const report = await runLedgerScanReverts(root, since === undefined ? {} : { since });
+    const report = await runLedgerScanReverts(roots, since === undefined ? {} : { since });
     process.stdout.write(formatScanRevertsReport(report));
     return 0;
   }
   if (sub === 'outcomes') {
-    const report = await runLedgerOutcomes(root, since === undefined ? {} : { since });
+    const report = await runLedgerOutcomes(roots, since === undefined ? {} : { since });
     process.stdout.write(formatOutcomesReport(report));
     return 0;
   }
   if (sub === 'waste') {
-    const report = await runLedgerWaste(root, since === undefined ? {} : { since });
+    const report = await runLedgerWaste(roots.stateRoot, since === undefined ? {} : { since });
     process.stdout.write(formatWasteReport(report));
     return 0;
   }
@@ -162,7 +172,7 @@ async function ledgerCommand(root: string, values: Values, positionals: string[]
     return 1;
   }
 
-  const report = await runLedger(root);
+  const report = await runLedger(roots.stateRoot);
   if (sub === 'export' || values.json === true) {
     process.stdout.write(`${JSON.stringify(report.counters, null, 2)}\n`);
     return 0;
@@ -171,9 +181,9 @@ async function ledgerCommand(root: string, values: Values, positionals: string[]
   return 0;
 }
 
-async function setupCommand(root: string, values: Values): Promise<number> {
+async function setupCommand(roots: ProjectRoots, values: Values): Promise<number> {
   const result = await runSetup({
-    root,
+    root: roots.workspace,
     ...(values.config ? { configPath: values.config } : {}),
     ...(values['dry-run'] ? { dryRun: true } : {}),
     ...(values['magic-context'] ? { magicContext: true } : {}),
@@ -245,7 +255,11 @@ function reportTouches(touches: SwitchTouches): void {
   );
 }
 
-async function modelsCommand(root: string, values: Values, positionals: string[]): Promise<number> {
+async function modelsCommand(
+  roots: ProjectRoots,
+  values: Values,
+  positionals: string[],
+): Promise<number> {
   const sub = positionals[1] ?? 'init';
   if (sub !== 'init' && sub !== 'refresh' && sub !== 'switch') {
     process.stderr.write(`unknown models subcommand: ${sub}\n`);
@@ -258,7 +272,8 @@ async function modelsCommand(root: string, values: Values, positionals: string[]
   const requested = [...positionals.slice(2), ...(values.providers?.split(',') ?? [])];
 
   const result = await runModels({
-    root,
+    workspace: roots.workspace,
+    stateRoot: roots.stateRoot,
     mode: sub,
     providers: requested,
     ...(values['prefer-flash'] ? { preferFlash: true } : {}),
@@ -282,8 +297,8 @@ async function modelsCommand(root: string, values: Values, positionals: string[]
 /**
  * The lessons that are waiting for a decision.
  */
-async function lessonsCommand(root: string): Promise<number> {
-  const report = await runLessons(root);
+async function lessonsCommand(roots: ProjectRoots): Promise<number> {
+  const report = await runLessons(roots.stateRoot);
   process.stdout.write(formatLessonsReport(report));
   return 0;
 }
@@ -295,7 +310,7 @@ async function lessonsCommand(root: string): Promise<number> {
  * only when a person says so.
  */
 async function lessonCommand(
-  root: string,
+  roots: ProjectRoots,
   _values: Values,
   positionals: string[],
 ): Promise<number> {
@@ -305,7 +320,7 @@ async function lessonCommand(
     process.stderr.write('usage: openagentsy lesson <id> <validate|apply|reject|observe>\n');
     return 1;
   }
-  const report = await runLessonDecision(root, id, action);
+  const report = await runLessonDecision(roots.stateRoot, id, action);
   process.stdout.write(formatLessonDecision(report));
   return report.ok ? 0 : 1;
 }
@@ -322,7 +337,11 @@ async function lessonCommand(
  * set whether a rule may be waived, and the whole rule set carries the
  * TypeScript compiler; the other commands must not pay for it.
  */
-async function waiveCommand(root: string, _values: Values, positionals: string[]): Promise<number> {
+async function waiveCommand(
+  roots: ProjectRoots,
+  _values: Values,
+  positionals: string[],
+): Promise<number> {
   const ruleId = positionals[1];
   const path = positionals[2];
   const reason = positionals.slice(3).join(' ');
@@ -331,7 +350,7 @@ async function waiveCommand(root: string, _values: Values, positionals: string[]
     return 1;
   }
   const { formatWaiver, runWaiver } = await import('./commands/waivers.js');
-  const report = await runWaiver(root, ruleId, path, reason);
+  const report = await runWaiver(roots.stateRoot, ruleId, path, reason);
   process.stdout.write(formatWaiver(report));
   return report.ok ? 0 : 1;
 }
@@ -340,12 +359,12 @@ async function waiveCommand(root: string, _values: Values, positionals: string[]
  * Grant one call the permission it asked for.
  */
 async function approveCommand(
-  root: string,
+  roots: ProjectRoots,
   values: Values,
   positionals: string[],
 ): Promise<number> {
   const result = await runApprove({
-    root,
+    stateRoot: roots.stateRoot,
     ...(positionals[1] === undefined ? {} : { callID: positionals[1] }),
     ...(values.ttl === undefined ? {} : { ttl: values.ttl }),
   });
@@ -356,7 +375,7 @@ async function approveCommand(
 /** The command table. One entry per command, so the dispatch is a lookup. */
 const COMMANDS: Record<
   string,
-  (root: string, values: Values, positionals: string[]) => Promise<number>
+  (roots: ProjectRoots, values: Values, positionals: string[]) => Promise<number>
 > = {
   build: buildCommand,
   audit: auditCommand,
@@ -415,7 +434,6 @@ export async function main(argv: string[]): Promise<number> {
   });
 
   const command = positionals[0];
-  const root = values.root ?? process.cwd();
 
   if (values.help === true || command === undefined) {
     process.stdout.write(USAGE);
@@ -429,7 +447,12 @@ export async function main(argv: string[]): Promise<number> {
     return 1;
   }
 
-  return handler(root, values, positionals);
+  // The two roots of the command: the directory it runs in, and the
+  // directory that owns the shared state of the project. In a linked
+  // worktree the second is the main repository root.
+  const roots = resolveProjectRoots(values.root ?? process.cwd());
+
+  return handler(roots, values, positionals);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -10,6 +10,10 @@ import { deciderBy } from '../who.js';
  * is recorded: the tool the board server registers is denied to every
  * agent role, so an agent may propose a waiver in chat and never record
  * one.
+ *
+ * The waivers are the state root's: a waiver is a decision about the
+ * project, and a worktree of the project has the same waivers as the
+ * project.
  */
 
 /** What the command did. */
@@ -43,16 +47,16 @@ export type WaiverOptions = {
  * rule is honesty, function or accessibility, and no reason waives it.
  */
 export async function runWaiver(
-  root: string,
+  stateRoot: string,
   ruleId: string,
   path: string,
   reason: string,
   options: WaiverOptions = {},
 ): Promise<WaiverReport> {
-  const store = createWaiverStore(root);
+  const store = createWaiverStore(stateRoot);
   try {
     const waiver = await waive({
-      stateRoot: root,
+      stateRoot,
       ruleId,
       path,
       reason,
