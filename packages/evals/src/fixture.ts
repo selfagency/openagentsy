@@ -260,6 +260,33 @@ export async function waitForRecord(
 }
 
 /**
+ * The host's session-moving tool.
+ *
+ * OpenCode 2 exposes it in the `opencode` namespace, and a namespaced tool
+ * reaches the model with the namespace in front of the name and an
+ * underscore between (measured on the 2.2.0 binary: the namespace dots
+ * become underscores, so the tool the model calls is `opencode_session_move`
+ * and not `session_move`).
+ *
+ * The tool moves a session to another directory. A session that leaves the
+ * case directory loses the agent the case wired for it: the server resolves
+ * an agent in the directory of the session, and the case's agents live in
+ * the case directory. The board, the leases and the harvest live there too.
+ *
+ * Measured on 2026-10-28: the archivist of the harvest case investigated the
+ * board's SQLite write-ahead log, made a scratch copy of the board database
+ * under the system temp directory, moved its own session there to read it,
+ * and the server could not find `oa-archivist` any more. The drain of the
+ * session failed with `Agent not found: "oa-archivist"`, and the run was
+ * red because a case passed while the host failed.
+ *
+ * The deny belongs to the case and not to the project: a real project's Lead
+ * moves a session into a worktree on purpose, and that is what the tool is
+ * for. A case is a closed world, and an agent inside it may not leave.
+ */
+export const SESSION_MOVE_TOOL = 'opencode_session_move';
+
+/**
  * The judge agent, in the shape the runtime reads.
  *
  * The judge is not a role, so the CLI does not write it: the suite copies the
@@ -270,7 +297,7 @@ export async function waitForRecord(
  * answers without its instructions: measured on 2026-10-27, the judge of the
  * budget stop case answered in prose and the case failed on the answer.
  */
-async function judgeAgent(repoRoot: string, runtime: OpenCodeRuntime): Promise<string> {
+export async function judgeAgent(repoRoot: string, runtime: OpenCodeRuntime): Promise<string> {
   const template = await readFile(
     join(repoRoot, 'packages', 'evals', 'templates', 'judge.md'),
     'utf8',
@@ -303,6 +330,10 @@ function v2JudgeAgent(template: string): string {
       resource: '*',
       effect,
     }));
+  // The judge is an agent of the case, and an agent of a case may not move
+  // its session out of the case directory. The rule is written after the
+  // template's own rules, so it is the last word about the tool.
+  rules.push({ action: SESSION_MOVE_TOOL, resource: '*', effect: 'deny' });
   const frontmatter = {
     description: parts.frontmatter['description'],
     mode: parts.frontmatter['mode'],
@@ -362,10 +393,7 @@ export async function prepare(
   // headless session has nobody to answer, so the tool call waits forever.
   // The lease guard runs before the permission check, so opening the editor
   // up does not weaken what the cases are about.
-  const roles =
-    options.headless === true
-      ? await headlessRoles(options.repoRoot)
-      : await readFile(join(options.repoRoot, 'roles.yaml'), 'utf8');
+  const roles = await caseRoles(options.repoRoot, options.headless === true);
   await writeFile(join(root, 'roles.yaml'), roles, 'utf8');
   await copyFile(
     join(options.repoRoot, 'openagentsy.models.lock.json'),
@@ -651,9 +679,38 @@ function globalConfigPaths(): string[] {
 }
 
 /**
- * The project roles, with the shell and the editor opened up for a headless
- * run.
+ * The roles a case runs under.
+ *
+ * A case is a closed world: the board, the leases and the harvest all live in
+ * the case directory, and the server resolves an agent in the directory of
+ * the session. An agent of a case may therefore not move its session out of
+ * the case directory, and the host's session-moving tool is denied to every
+ * role of the case.
+ *
+ * The deny is the case's own rule and not the project's: a real project's
+ * Lead moves a session into a worktree on purpose.
  */
+export async function caseRoles(repoRoot: string, headless: boolean): Promise<string> {
+  const { parse, stringify } = await import('yaml');
+  const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');
+  const roles = parse(text) as {
+    roles: Record<string, { permissions?: Record<string, unknown> }>;
+  };
+
+  if (headless) openHeadless(roles);
+
+  for (const role of Object.values(roles.roles)) {
+    const permissions = role.permissions;
+    if (permissions === undefined) {
+      role.permissions = { [SESSION_MOVE_TOOL]: [{ resource: '*', effect: 'deny' }] };
+      continue;
+    }
+    permissions[SESSION_MOVE_TOOL] = [{ resource: '*', effect: 'deny' }];
+  }
+
+  return stringify(roles);
+}
+
 /**
  * The paths the project protects from an agent's edit.
  *
@@ -686,13 +743,15 @@ export function casePermissionPolicy(protectedPaths: string[]) {
   };
 }
 
-async function headlessRoles(repoRoot: string): Promise<string> {
-  const { parse, stringify } = await import('yaml');
-  const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');
-  const roles = parse(text) as {
-    roles: Record<string, { permissions?: Record<string, unknown> }>;
-  };
-
+/**
+ * Open the shell and the editor up for a headless run.
+ *
+ * The roles are read and written in place, so the caller decides what it
+ * does with them afterwards.
+ */
+function openHeadless(roles: {
+  roles: Record<string, { permissions?: Record<string, unknown> }>;
+}): void {
   for (const role of Object.values(roles.roles)) {
     // The shell and the editor are opened up: a headless session has nobody
     // to answer an "ask", and the tool call would wait for the whole timeout.
@@ -726,8 +785,6 @@ async function headlessRoles(repoRoot: string): Promise<string> {
     researcher.permissions.webfetch = 'allow';
     researcher.permissions.websearch = 'allow';
   }
-
-  return stringify(roles);
 }
 
 /**
