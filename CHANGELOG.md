@@ -2,6 +2,12 @@
 
 Every release, from the commits that made it.
 
+## 0.2.4 - 2026-10-28
+
+### Fixed
+
+- **ci**: the publish names the exact version, so it does not skip every release (`2255369`)
+
 ## 0.2.3 - 2026-10-28
 
 ### Fixed
