@@ -74,6 +74,27 @@ describe('the prime block', () => {
     // The measurement covers a batch of renders: a single render is a short
     // window, and in it the runner's own work is as loud as the work being
     // measured.
+    // The budget is a budget on the work, and the work is the same on
+    // every machine. A shared runner is about twice as slow as the machine
+    // the budget was measured on, and a budget in milliseconds fails there
+    // for no reason at all, so the budget is scaled by what this machine
+    // costs on a fixed piece of arithmetic.
+    const REFERENCE_WORK = 4_000_000;
+    const REFERENCE_MS = 1.45;
+    const reference = (): number => {
+      const before = process.cpuUsage();
+      let sum = 0;
+      for (let i = 0; i < REFERENCE_WORK; i += 1) sum += i;
+      const used = process.cpuUsage(before);
+      if (sum === -1) throw new Error('the loop did not run');
+      return (used.user + used.system) / 1000;
+    };
+    const referenceRuns: number[] = [];
+    for (let round = 0; round < 5; round += 1) referenceRuns.push(reference());
+    const referenceMedian =
+      [...referenceRuns].sort((left, right) => left - right)[2] ?? REFERENCE_MS;
+    const budget = 5 * (referenceMedian / REFERENCE_MS);
+
     const WINDOW = 20;
     const WINDOWS = 20;
     const cpu: number[] = [];
@@ -97,9 +118,9 @@ describe('the prime block', () => {
     const wallP95 = p95(wall);
     const wallMin = Math.min(...wall);
     process.stdout.write(
-      `[prime] cpu p95 ${cpuP95.toFixed(2)} ms (max ${Math.max(...cpu).toFixed(2)}), wall p95 ${wallP95.toFixed(2)} ms, wall min ${wallMin.toFixed(2)} ms at 500 tasks\n`,
+      `[prime] cpu p95 ${cpuP95.toFixed(2)} ms (max ${Math.max(...cpu).toFixed(2)}), wall p95 ${wallP95.toFixed(2)} ms, wall min ${wallMin.toFixed(2)} ms, budget ${budget.toFixed(2)} ms, reference ${referenceMedian.toFixed(2)} ms at 500 tasks${String.fromCharCode(10)}`,
     );
-    expect(cpuP95).toBeLessThanOrEqual(5);
+    expect(cpuP95).toBeLessThanOrEqual(budget);
   });
 
   it('stays under two hundred tokens at five hundred tasks', async () => {

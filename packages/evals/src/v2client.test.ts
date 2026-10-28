@@ -1,4 +1,7 @@
 import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   mcpServer,
@@ -30,6 +33,42 @@ import {
  */
 function fixture(name: string): string {
   return readFileSync(new URL(`../fixtures/v2/${name}`, import.meta.url), 'utf8');
+}
+
+/**
+ * A directory and a link to it: one directory under two names.
+ *
+ * The captured sessions name their directory two ways, because the server
+ * answered with the path it was given and with the resolved one. The client
+ * compares the paths the file system knows, so the two spellings are one
+ * directory. The two spellings are made here, on a directory that exists,
+ * because a path that is a link on one operating system alone would prove
+ * the behaviour on that operating system alone.
+ */
+async function twoSpellings(): Promise<{ root: string; directory: string; link: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'oa-v2-'));
+  const directory = join(root, 'case');
+  await mkdir(directory);
+  const link = join(root, 'link');
+  await symlink(directory, link);
+  return { root, directory, link };
+}
+
+/** A session list with one session per spelling of the directory. */
+function sessionList(directory: string, link: string): string {
+  const session = (id: string, where: string): unknown => ({
+    id,
+    projectID: 'probe',
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+    title: id,
+    subpath: '.',
+    location: { directory: where },
+  });
+  return JSON.stringify({
+    data: [session('ses_a', directory), session('ses_b', link)],
+  });
 }
 
 /** One request the client made. */
@@ -260,18 +299,19 @@ describe('the calls of the client', () => {
   });
 
   it('lists the sessions of the directory', async () => {
-    // The captured sessions name their directory two ways: `/tmp` is a link
-    // to `/private/tmp` on macOS, and the server answered with both. The
-    // client compares the paths the file system knows, so the two spellings
-    // are one directory and both sessions are the case's.
-    const { transport, calls } = fake(() => json(fixture('session-list.json')));
+    const { root, directory, link } = await twoSpellings();
+    try {
+      const { transport, calls } = fake(() => json(sessionList(directory, link)));
 
-    const list = await client(transport, undefined, '/tmp/oa-v2probe').listSessions();
+      const list = await client(transport, undefined, directory).listSessions();
 
-    const call = onlyCall(calls);
-    expect(call.method).toBe('GET');
-    expect(new URL(call.url).pathname).toBe('/api/session');
-    expect(list.sessions).toHaveLength(2);
+      const call = onlyCall(calls);
+      expect(call.method).toBe('GET');
+      expect(new URL(call.url).pathname).toBe('/api/session');
+      expect(list.sessions).toHaveLength(2);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('asks the server for the sessions of the directory it is scoped to', async () => {
