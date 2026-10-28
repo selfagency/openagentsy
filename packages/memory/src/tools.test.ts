@@ -34,6 +34,9 @@ describe('the memory tools', () => {
         category: 'build',
         source: '7 · 2a-1',
         confidence: 'inferred',
+        // A memory is trusted on write; this one is marked unverified, so
+        // the search redacts it until the caller asks for it.
+        verified: false,
       });
 
       const hidden = (await tools.oa_memory_search.execute({ q: 'lease' }, ctx)) as {
@@ -129,6 +132,8 @@ describe('the memory tools', () => {
         category: 'build',
         source: '7 · 2a-1',
         confidence: 'guess',
+        // Marked unverified, so the listing redacts its text.
+        verified: false,
       });
 
       const listed = (await tools.oa_memory_list.execute({}, ctx)) as {

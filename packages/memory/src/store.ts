@@ -162,7 +162,11 @@ export class MemoryStore {
       source: input.source,
       confidence: input.confidence,
       created_at: this.now().toISOString(),
-      verified: input.verified ?? false,
+      // A memory is trusted on write (the human's decision of 2026-10-28):
+      // the archivist's judgement is the source, and a person marks a
+      // memory unverified when they disagree. The flag is what the search
+      // reads before anyone has said anything about the memory.
+      verified: input.verified ?? true,
     };
     await this.appendLine(entry);
     return { ok: true, entry, redactions };
@@ -223,9 +227,9 @@ export class MemoryStore {
   /**
    * Mark a memory verified.
    *
-   * A memory is unverified until a person says it is true, and a person is
-   * the only one who can say it. The archivist's label is not a
-   * verification: the archivist never looked at the memory.
+   * A memory is trusted on write, and this is the other direction: a
+   * person says it is true. The archivist's label is not a verification:
+   * the archivist never looked at the memory.
    */
   async verify(id: string, decidedBy: string): Promise<boolean> {
     const { entries } = await this.read();

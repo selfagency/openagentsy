@@ -42,10 +42,12 @@ export interface MemoryEntry {
   /**
    * Whether a person has verified this memory.
    *
-   * It is false on append and stays false until a person marks it, because
-   * approving a candidate and verifying it are two different acts. The
-   * search redacts an unverified memory by default, so this flag decides
-   * what an agent sees before anyone has said anything about it.
+   * It is true on append (the human's decision of 2026-10-28: the
+   * archivist's judgement is the source, and a person marks a memory
+   * unverified when they disagree) and a person can mark it either way
+   * afterwards. The search redacts an unverified memory by default, so this
+   * flag decides what an agent sees before anyone has said anything about
+   * it.
    */
   verified: boolean;
 }

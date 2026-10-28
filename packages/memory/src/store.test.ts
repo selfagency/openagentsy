@@ -41,7 +41,9 @@ describe('the memory store', () => {
       expect(entry.source).toBe('7 · 2a-1');
       expect(entry.confidence).toBe('inferred');
       expect(entry.created_at).toBe('2026-10-26T12:00:00.000Z');
-      expect(entry.verified).toBe(false);
+      // A memory is trusted on write; a person marks it unverified when
+      // they disagree (the human's decision of 2026-10-28).
+      expect(entry.verified).toBe(true);
     } finally {
       await remove();
     }
@@ -164,6 +166,9 @@ describe('the memory store', () => {
         category: 'build',
         source: '7 · 2a-1',
         confidence: 'guess',
+        // A person marked it unverified when it was written; the call
+        // below marks it verified.
+        verified: false,
       });
       expect(outcome.ok).toBe(true);
       if (!outcome.ok) return;

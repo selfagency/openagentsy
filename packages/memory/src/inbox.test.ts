@@ -57,7 +57,9 @@ describe('the memory inbox', () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]?.source).toBe('7 · 2a-1');
       expect(entries[0]?.category).toBe('build');
-      expect(entries[0]?.verified).toBe(false);
+      // An approved candidate becomes a trusted memory (the human's
+      // decision of 2026-10-28); the approval is the person's act.
+      expect(entries[0]?.verified).toBe(true);
       expect(records[0]?.state).toBe('promoted');
       expect(audited).toEqual([
         {

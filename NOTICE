@@ -51,5 +51,14 @@ the terms noted:
   @opencode/theme (MIT) are the host's own SDK, the host's types and the
   host's theme. The sidebar keeps all of them outside its bundle, so the host
   resolves them and one copy of the Solid runtime is in play.
+- voxslopuli/agentsy (GPL-3.0-or-later): the first-party documents at the
+  repository root - ETHICS.md, SAFETY.md and GOVERNANCE.md - are adapted
+  from its documents of the same names, translated from a general-purpose
+  assistant's domain to a coding agent framework's, and each carries the
+  attribution in its footer. The plan's extension sections follow the
+  patterns of its packages: the task board, the recovery loop, the sandbox,
+  the learning loop, the credential broker, the budgets, the routing and
+  the retrieval ordering. GPL-3.0-or-later code may be included in GPL-3
+  works; this NOTICE records the origin and the license.
 - models.dev (MIT): model and cost data, bundled at build time through
   the @opencode-ai/models package.
