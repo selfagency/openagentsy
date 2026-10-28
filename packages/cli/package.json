@@ -1,6 +1,6 @@
 {
   "name": "@voxslopuli/openagentsy",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": "Grand Slopulissimo <slopulissimo@voxslopuli.org>",
   "type": "module",
   "bin": {
@@ -45,7 +45,7 @@
     "bun"
   ],
   "engines": {
-    "node": ">=22.5.0"
+    "bun": ">=1.2.0"
   },
   "publishConfig": {
     "access": "public"
