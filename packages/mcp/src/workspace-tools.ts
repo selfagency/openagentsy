@@ -26,6 +26,11 @@ import { type PackageTool, type ServerTool, serverTool } from './mcp-tool.js';
  * the project finds them - through `.beans.yml`. The memory store is the
  * state's: `.openagentsy/memory.jsonl` under the state root, beside the
  * board's own database.
+ *
+ * The two roots are kept apart (§3.9). The task store is the workspace's,
+ * because a task file travels with the branch and a worktree carries its
+ * own. The memory store and the findings are the state's, because they
+ * are project-wide and a worktree has no state of its own.
  */
 
 /** How many records one page of the board holds. */
@@ -33,8 +38,10 @@ const PAGE_SIZE = 100;
 
 /** What the wiring needs. */
 export type WorkspaceToolsOptions = {
-  /** The state root: where the board and the memory store live. */
-  root: string;
+  /** The workspace: the session's own directory, where `.beans/` lives. */
+  workspace: string;
+  /** The state root: where the board, the findings and the memories live. */
+  stateRoot: string;
   /** The board the memory inbox reads its candidates from. */
   db: BoardDatabase;
 };
@@ -47,15 +54,15 @@ export type WorkspaceToolsOptions = {
  * root would read another project's tasks and another project's memories.
  */
 export async function workspaceTools(options: WorkspaceToolsOptions): Promise<ServerTool[]> {
-  const findings = createFindingsStore(options.root);
-  const store = await openStore(options.root, {
+  const findings = createFindingsStore(options.stateRoot);
+  const store = await openStore(options.workspace, {
     // A task with an open floor finding cannot be completed, and the
     // findings are the ones the check recorded in the state root.
     openFloorFindings: async (taskId) => await findings.openFloor(taskId),
   });
-  const memory = new MemoryStore({ root: options.root });
+  const memory = new MemoryStore({ root: options.stateRoot });
   const inbox = new MemoryInbox({
-    root: options.root,
+    root: options.stateRoot,
     store: memory,
     read: async () => everyRecord(options.db),
     markState: async (recordId, state) => {
@@ -66,7 +73,7 @@ export async function workspaceTools(options: WorkspaceToolsOptions): Promise<Se
   const tools: Record<string, PackageTool> = {
     ...taskTools(store),
     ...createMemoryTools({ store: memory, inbox }),
-    ...qualityTools({ workspace: options.root }),
+    ...qualityTools({ workspace: options.stateRoot }),
   };
   return Object.entries(tools).map(([name, def]) => serverTool(name, def));
 }
