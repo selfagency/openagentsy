@@ -16,7 +16,7 @@ One rule from revision 2 carries forward unchanged: **a security property never 
 
 ---
 
-## Revision notes (R-17..R-32)
+## Revision notes (R-17..R-65)
 
 | Change | Where | Source |
 | --- | --- | --- |

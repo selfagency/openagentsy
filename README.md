@@ -37,7 +37,16 @@ bun run test
 | `@openagentsy/models` | the provider inventory and the model lock file |
 | `@openagentsy/mcp` | the board server, over stdio |
 | `@openagentsy/adapter-opencode` | the OpenCode plugin: the guard, the effort ladder, the harvest |
-| `@openagentsy/sidebar` | the OpenCode 2 TUI sidebar: the footprint block |
+| `@openagentsy/tasks` | the Beans-compatible task store, with the `oa_task_*` tools and the prime block |
+| `@openagentsy/memory` | the memory slice: the archivist's candidates, a person decides, the store and the search |
+| `@openagentsy/footprint` | the EcoLogits-method energy, water and carbon estimator, ranges only |
+| `@openagentsy/ledger` | the numbers-only usage ledger: tokens, cost, waste and outcomes per message |
+| `@openagentsy/offload` | the local-model router for the housekeeping jobs |
+| `@openagentsy/hooks` | the guardrail core: the rule registry, the default rules, the output checks, the lessons and their eval runner |
+| `@openagentsy/quality` | the anti-slop rules: the tiers, the findings, the waivers and the static checks |
+| `@openagentsy/sidebar` | the OpenCode 2 TUI sidebar: the board, tasks, budget, footprint, memory, accountability and method blocks |
+| `@openagentsy/jev` | the System One client |
+| `@openagentsy/evals` | the safety suite: fourteen cases against real sessions |
 
 `roles.yaml` is the source of truth for the seven roles. Everything else is
 generated from it, and the generator maps one permission vocabulary onto the
@@ -102,9 +111,11 @@ Two things the OpenCode 2 host decides, and the plugin cannot:
 - **A command a person has to approve is an `ask` effect on the permission
   hook.** OpenCode 2 gives a plugin no way to write the host's permission map,
   so the approval list is asked for where the decision is made.
-- **The shell of an agent runs with the environment of the host.** OpenCode 2
-  has no `shell.env` hook, so the shell environment policy has no place to
-  tighten it: what an agent's shell sees is what the host's shell sees.
+- **The shell of an agent runs with a tightened environment.** OpenCode 2 has no
+  `shell.env` hook, but its shell domain has a `create.before` hook whose event
+  carries the environment the server is about to spawn with — so the policy runs
+  there, and the child never sees the board's keys or the git-hook switches.
+  The command is not touched: it is the resource of the permission event.
 
 ## Models
 

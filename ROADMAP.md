@@ -77,6 +77,10 @@ What the port measured, and what it costs:
   output checks, the round-status checks, the harvest, and the approval as an
   `ask` effect on the permission hook.
 
+**State: shipped (2026-10-28).** The port, the guard system on the v2 path and
+the tightened shell environment are on `develop`, and the packages below are
+built on top of them.
+
 Also in 0.2.0:
 
 - The board's tools are grouped, so a session carries fewer of them.
@@ -112,12 +116,17 @@ are dogfooded with the new agent rather than against a synthetic one.
   fixture each, the comment lint, the hooks and the findings store, the
   waivers, three on-demand skills, the reviewer gate, and the sloplint
   bridge (which degrades cleanly when Hallmark is absent).
-- **`sidebar`**: the thing that shows a human what the agents are doing. Not
-  started; the plan's V1 fallback is void, so it is one package.
-- **`oa conformance`**: the report that says whether an agent is behaving. Not
-  started.
-- **`oa report --ethical`**: what the run cost, and what it was worth. Not
-  started.
+- **`sidebar`**: the thing that shows a human what the agents are doing. Built
+  (2026-10-28): the OpenCode 2 TUI blocks (board, tasks, budget, footprint,
+  memory, accountability, method), their readers, the framing checks and the
+  inbox keys. The plan's V1 fallback is void, so it is one package.
+- **`oa conformance`**: the report that says whether an agent is behaving. Built
+  (2026-10-28): every capability is reported as `proven_static`, `observed` or
+  `unverified`, per host version.
+- **`oa report --ethical`**: what the run cost, and what it was worth. Built
+  (2026-10-28): the one-screen account, rendered from the ledger and the
+  footprint tables, with a `--check` gate that exits nonzero on an open floor
+  finding.
 
 ## The baseline that was never measured
 

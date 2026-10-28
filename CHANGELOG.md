@@ -19,6 +19,19 @@ Every release, from the commits that made it.
 - the project speaks OpenCode 2 only: the adapter, the generator and the CLI dropped the OpenCode 1 path, the `--target` flag is gone, the permission key is `shell` and the spawn tool is `subagent`
 - a command a person has to approve is an `ask` effect on the permission hook, because OpenCode 2 gives a plugin no way to write the host's permission map
 - the cases run five at a time instead of three: a case is a Lead and the builder it dispatches, so five cases are about ten sessions, and the number of provider calls does not change with the cap, so the cost of a run does not change either (`e1a3053`)
+- the shell of an agent runs with a tightened environment: OpenCode 2 has no `shell.env` hook, so the policy moved to the shell domain's `create.before` hook, and the child never sees the board's keys or the git-hook switches (`1d6580d`)
+
+### Built
+
+- the `quality` package: the rule registry, the CSS, HTML and copy rules, the comment lint, the ship gate, the sloplint bridge, the waivers and the three on-demand skills (`8aab499`, `0219532`, `bfdde20`, `138b853`, `6ce713e`, `78797b9`)
+- the `sidebar` package: the OpenCode 2 TUI blocks and their readers, the framing checks, the inbox keys and the method panel (`26a6b72`, `1c84f72`, `b2da7d3`)
+- `oa conformance`: what is proven, observed or unverified, per host capability (`46306f5`)
+- `oa report --ethical`: the one-screen account of what a run cost and what it was worth (`72fa51e`)
+- the shared state resolves to the main repository root, so a builder in a worktree sees the main board and its `.beans/` edits stay worktree-local (`14bf07e`, `efa7ede`, `232a28d`, `13171bd`)
+
+### Added
+
+- the phase 2 plan is revision 3: the ethics framework, the safety benchmark suite, the incident response runbook, the privacy consolidation, the policy module library, the scope declarations, the credential broker and the sandbox for untrusted code are specified as §17–§24, and the delta document is the record of what changed
 
 ## 0.1.0 - 2026-10-23
 
