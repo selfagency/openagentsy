@@ -92,7 +92,11 @@ jobs:
             stage="$RUNNER_TEMP/publish/$name"
             bun scripts/stage-package.mjs "$package" "$stage"
             echo "::group::publishing $name@$version"
-            if (cd "$stage" && npm view "$name" "$version" version >/dev/null 2>&1); then
+            # The check names the exact version: npm view with a bare
+            # version prints the latest one and exits zero, so it would skip
+            # every publish. The exact specifier answers 404 for a version
+            # that is not there.
+            if (cd "$stage" && npm view "$name@$version" version >/dev/null 2>&1); then
               echo "$name@$version is already on the registry"
             else
               (cd "$stage" && npm publish --access public)

@@ -1,6 +1,6 @@
 {
   "name": "@openagentsy/ledger",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "author": "Grand Slopulissimo <slopulissimo@voxslopuli.org>",
   "type": "module",
   "exports": {
