@@ -2,6 +2,23 @@
 
 Every release, from the commits that made it.
 
+## 0.2.1 - 2026-10-28
+
+### Kept
+
+- **release**: 0.2.1, the author on the main package and the decisions (`32cf6f9`)
+- **tasks**: the workflow the trusted publisher needs (`2a6ad25`)
+- **tasks**: what the publish needs from a person (`e351866`)
+- **packages**: the author on every package (`92f2f23`)
+- **tasks**: the remaining beans as the todo list (`2f7cbc8`)
+- **memory, notice**: the decisions the human made, applied (`4364f24`)
+
+### Added
+
+- **cli**: the main package is @voxslopuli/openagentsy (`399d2d9`)
+- **core**: the scope declarations and the command that prints them (`9b0ed46`)
+- **hooks**: the policy module library and its firing log (`3bf7938`)
+
 ## 0.2.0 - 2026-10-28
 
 ### Added
