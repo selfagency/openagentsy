@@ -122,9 +122,73 @@ async function seedLedger(root: string): Promise<void> {
     outcome.run('ses_1', '2e-4a', 'abc123', 'commit', NOW);
 
     recordFootprint(db, 'msg-1', IMPACT);
+    seedPolicyFirings(db);
   } finally {
     closeLedger(db);
   }
+}
+
+/**
+ * The policy firings of the fixture.
+ *
+ * The rows are the ones §21.3 holds: the policy id, the version it carried
+ * when it fired, the session and the outcome.
+ */
+function seedPolicyFirings(db: ReturnType<typeof openLedger>): void {
+  const insert = db.query(
+    `INSERT INTO policy_firing
+      (id, session_id, policy_id, policy_version, layer, action, severity, reason, origin, ts)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
+  );
+  insert.run(
+    'f1',
+    'ses_1',
+    'oa.anti-sycophancy',
+    '1.0.0',
+    4,
+    'flag',
+    'warn',
+    null,
+    'first-party',
+    NOW,
+  );
+  insert.run(
+    'f2',
+    'ses_1',
+    'oa.anti-sycophancy',
+    '1.0.0',
+    4,
+    'flag',
+    'warn',
+    null,
+    'first-party',
+    NOW,
+  );
+  insert.run(
+    'f3',
+    'ses_1',
+    'oa.anti-sycophancy',
+    '1.0.0',
+    4,
+    'block',
+    null,
+    'high risk',
+    'first-party',
+    NOW,
+  );
+  insert.run('f4', 'ses_1', 'oa.agi-framing', '1.0.0', 4, 'flag', 'info', null, 'first-party', NOW);
+  insert.run(
+    'f5',
+    'ses_1',
+    'oa.policy.stack',
+    '1.0.0',
+    2,
+    'allow',
+    null,
+    'stack-assembled',
+    'first-party',
+    NOW,
+  );
 }
 
 /** The board of the fixture. */
@@ -323,6 +387,26 @@ describe('the ethical report', () => {
     expect(text).toContain('open floor findings: 1');
     expect(text).toContain('Conformance');
     expect(text).toContain('unverified:');
+  });
+
+  it('shows the policies with the most firings', async () => {
+    const roots = await scratch();
+
+    const text = formatEthicalReport(await runEthicalReport(roots));
+
+    expect(text).toContain('Policies');
+    expect(text).toContain('oa.anti-sycophancy 3 firings (1.0.0) · 1 blocks · 2 flags');
+    expect(text).toContain('oa.agi-framing 1 firing (1.0.0) · 0 blocks · 1 flags');
+    const never = text.split('\n').find((entry) => entry.includes('never fired:')) ?? '';
+    expect(never).toContain('oa.structural-bias');
+  });
+
+  it('reads the firings of one session', async () => {
+    const roots = await scratch();
+
+    const text = formatEthicalReport(await runEthicalReport(roots, { session: 'ses_1' }));
+
+    expect(text).toContain('oa.anti-sycophancy 3 firings');
   });
 
   it('says what nobody computes instead of showing a zero', async () => {

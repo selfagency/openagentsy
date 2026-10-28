@@ -5,6 +5,7 @@ export * from './dispatch.js';
 export * from './etag.js';
 export * from './paths.js';
 export * from './permissions.js';
+export * from './policy.js';
 export * from './quality-skills.js';
 export * from './redact.js';
 export * from './report/index.js';

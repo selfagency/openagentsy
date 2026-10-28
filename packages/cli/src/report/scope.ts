@@ -105,7 +105,7 @@ export function parseScope(flags: ScopeFlags): ScopeResult {
 }
 
 /** The tables the scope is applied to. */
-const TABLES = ['usage', 'waste', 'outcome'] as const;
+const TABLES = ['usage', 'waste', 'outcome', 'policy_firing'] as const;
 
 /**
  * The rows a table holds for the scope.
@@ -128,11 +128,20 @@ function predicate(
       if (table === 'usage') {
         return { sql: '(root_session_id = ? OR session_id = ?)', params: [scope.id, scope.id] };
       }
+      if (table === 'policy_firing') {
+        return { sql: 'session_id = ?', params: [scope.id] };
+      }
       return { sql: 'root_session_id = ?', params: [scope.id] };
     case 'bean':
       if (table === 'waste') {
         return {
           sql: 'message_id IN (SELECT message_id FROM main.usage WHERE task_id = ?)',
+          params: [scope.id],
+        };
+      }
+      if (table === 'policy_firing') {
+        return {
+          sql: 'session_id IN (SELECT session_id FROM main.usage WHERE task_id = ?)',
           params: [scope.id],
         };
       }

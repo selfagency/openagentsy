@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS policy_firing (
   finding_id TEXT,
   classification TEXT,
   detail TEXT,
+  origin TEXT,                     -- 'first-party' | 'external' (§21)
   ts TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_policy_firing_session ON policy_firing(session_id, ts);
@@ -124,7 +125,29 @@ CREATE TABLE IF NOT EXISTS safety_metric (
 );
 `;
 
+/**
+ * The columns the policy_firing table gained after it was first written.
+ *
+ * A ledger that was written before a column existed still has to take the
+ * rows of the policies that fire now, so the column is added on open. The
+ * check makes it happen once: a column that is there is not added again.
+ */
+const POLICY_FIRING_COLUMNS: readonly { name: string; ddl: string }[] = [
+  { name: 'origin', ddl: 'ALTER TABLE policy_firing ADD COLUMN origin TEXT' },
+];
+
+/** Add the columns a ledger that was written before does not have. */
+function migratePolicyFiring(db: Database): void {
+  const columns = db.query('PRAGMA table_info(policy_firing)').all() as { name: string }[];
+  const names = new Set(columns.map((column) => column.name));
+  for (const column of POLICY_FIRING_COLUMNS) {
+    if (names.has(column.name)) continue;
+    db.exec(column.ddl);
+  }
+}
+
 /** Bring the database up to the schema. Opening twice changes nothing. */
 export function applySchema(db: Database): void {
   db.exec(SCHEMA_SQL);
+  migratePolicyFiring(db);
 }

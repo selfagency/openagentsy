@@ -207,6 +207,45 @@ export type ConformanceFacts = {
   pluginOrderWarnings: { plugin: string; detail: string }[];
 };
 
+/**
+ * The firings of one policy.
+ *
+ * The count is of every evaluation, and the block and flag counts are of
+ * the evaluations that acted, so a reader sees a policy that was asked
+ * often and never acted and one that acted every time. The versions are
+ * the ones the policy carried, and a policy that carried two of them was
+ * changed between the firings.
+ */
+export type PolicyFireFacts = {
+  /** The stable id of the policy. */
+  policyId: string;
+  /** How many times the policy was asked. */
+  count: number;
+  /** How many of those times it blocked. */
+  blocks: number;
+  /** How many of those times it flagged. */
+  flags: number;
+  /** The versions the policy carried. */
+  versions: string[];
+};
+
+/**
+ * The policies of the scope (§21.3).
+ *
+ * Every number here is the ledger's `policy_firing` table, read through the
+ * ledger's own queries.
+ */
+export type PolicyFacts = {
+  /** Whether the table holds a row for the scope. */
+  present: boolean;
+  /** How many firings the scope holds in all. */
+  firings: number;
+  /** The policies with the most firings, the largest first. */
+  top: PolicyFireFacts[];
+  /** The first-party policies that never fired. */
+  neverFired: string[];
+};
+
 /** The facts of a run report. */
 export type ReportFacts = {
   /** The scope the report is about. */
@@ -223,4 +262,6 @@ export type ReportFacts = {
   oversight: OversightFacts;
   /** The conformance. */
   conformance: ConformanceFacts;
+  /** The policies. */
+  policies: PolicyFacts;
 };

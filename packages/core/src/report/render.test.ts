@@ -80,6 +80,21 @@ function facts(over: Partial<ReportFacts> = {}): ReportFacts {
         { plugin: 'yaml-hooks', detail: 'yaml-hooks runs after the OpenAgentsy checks' },
       ],
     },
+    policies: {
+      present: true,
+      firings: 42,
+      top: [
+        {
+          policyId: 'oa.anti-sycophancy',
+          count: 12,
+          blocks: 1,
+          flags: 4,
+          versions: ['1.0.0'],
+        },
+        { policyId: 'oa.agi-framing', count: 8, blocks: 0, flags: 2, versions: ['1.0.0'] },
+      ],
+      neverFired: ['oa.structural-bias'],
+    },
     ...over,
   };
 }
@@ -134,6 +149,22 @@ describe('the ethical report', () => {
     expect(text).toContain('unverified: mcp-tool-prefix, prompt-insert, memory-inbox-keymap');
   });
 
+  it('shows the policies with the most firings', () => {
+    const text = renderEthicalReport(facts());
+    expect(text).toContain('Policies');
+    expect(text).toContain('42 firings');
+    expect(text).toContain('oa.anti-sycophancy 12 firings (1.0.0) · 1 blocks · 4 flags');
+    expect(text).toContain('oa.agi-framing 8 firings (1.0.0) · 0 blocks · 2 flags');
+    expect(text).toContain('never fired: oa.structural-bias');
+  });
+
+  it('says that a scope with no policy firing is empty', () => {
+    const empty = facts({
+      policies: { present: false, firings: 0, top: [], neverFired: [] },
+    });
+    expect(renderEthicalReport(empty)).toContain('no policy fired for the scope');
+  });
+
   it('carries no colour', () => {
     const text = renderEthicalReport(facts());
     expect(text.includes('\u001b')).toBe(false);
@@ -180,8 +211,10 @@ describe('the ethical report', () => {
     const json = ethicalReportJson(facts()) as {
       scope: { kind: string };
       cost: { tokens: number };
+      policies: { top: { policyId: string }[] };
     };
     expect(json.scope.kind).toBe('project');
     expect(json.cost.tokens).toBe(1_728_000);
+    expect(json.policies.top[0]?.policyId).toBe('oa.anti-sycophancy');
   });
 });

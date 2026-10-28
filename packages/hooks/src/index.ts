@@ -17,6 +17,25 @@ export * from './event.js';
 export * from './lessons/index.js';
 export * from './output-checks.js';
 export * from './paths.js';
+export {
+  discoverPolicyModules,
+  FIRST_PARTY_POLICY_IDS,
+  firstPartyPolicyModules,
+  type PolicyCatalogueOptions,
+} from './policies/index.js';
+export type {
+  FileChange,
+  PolicyContext,
+  PolicyFinding,
+  PolicyLayer,
+  PolicyModule,
+  PolicyMoment,
+  PolicyOutcome,
+  PolicyResult,
+} from './policy.js';
+export * from './policy-engine.js';
+export * from './policy-registry.js';
+export * from './policy-release.js';
 export * from './quality/index.js';
 export * from './registry.js';
 export * from './rules.js';

@@ -4,6 +4,7 @@ import type {
   FootprintFacts,
   Measured,
   OversightFacts,
+  PolicyFacts,
   ReportFacts,
   ReportRange,
   ReportScope,
@@ -225,6 +226,29 @@ function conformanceLines(conformance: ConformanceFacts): string[] {
 }
 
 /**
+ * The policies.
+ *
+ * The counts are the ledger's `policy_firing` table: the ten policies with
+ * the most firings, the largest first, and the first-party policies that
+ * never fired — a policy that never fires is dead code or a coverage gap,
+ * and the report says which one it is.
+ */
+function policyLines(policies: PolicyFacts): string[] {
+  if (!policies.present || policies.top.length === 0) {
+    return ['  no policy fired for the scope'];
+  }
+  const lines: string[] = [];
+  lines.push(`  ${count(policies.firings, 'firing', 'firings')}`);
+  for (const policy of policies.top) {
+    const versions = policy.versions.length === 0 ? '' : ` (${policy.versions.join(', ')})`;
+    lines.push(
+      `  ${policy.policyId} ${count(policy.count, 'firing', 'firings')}${versions} · ${policy.blocks} blocks · ${policy.flags} flags`,
+    );
+  }
+  return lines;
+}
+
+/**
  * The report, as plain text.
  *
  * The text carries no colour and no escape, so it reads the same in a
@@ -248,6 +272,12 @@ export function renderEthicalReport(facts: ReportFacts): string {
   lines.push('');
   lines.push('Conformance');
   lines.push(...conformanceLines(facts.conformance));
+  lines.push('');
+  lines.push('Policies');
+  lines.push(...policyLines(facts.policies));
+  if (facts.policies.neverFired.length > 0) {
+    lines.push(`  never fired: ${facts.policies.neverFired.join(', ')}`);
+  }
   return `${lines.join('\n')}\n`;
 }
 
@@ -267,5 +297,6 @@ export function ethicalReportJson(facts: ReportFacts): unknown {
     value: facts.value,
     oversight: facts.oversight,
     conformance: facts.conformance,
+    policies: facts.policies,
   };
 }

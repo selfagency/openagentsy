@@ -1,5 +1,12 @@
 import { access } from 'node:fs/promises';
-import type { CostFacts, ReportScope, ValueFacts, WasteFacts } from '@openagentsy/core';
+import type {
+  CostFacts,
+  PolicyFacts,
+  ReportScope,
+  ValueFacts,
+  WasteFacts,
+} from '@openagentsy/core';
+import { FIRST_PARTY_POLICY_IDS } from '@openagentsy/hooks';
 import {
   closeLedger,
   type FetchLike,
@@ -10,8 +17,11 @@ import {
   outcomeTotals,
   type PriceLookup,
   perRoleTotals,
+  policyFireCounts,
+  policyFiringTotal,
   priceMessage,
   tokensPerResult,
+  topPoliciesByFireCount,
   wasteByKind,
   wasteTotals,
 } from '@openagentsy/ledger';
@@ -33,6 +43,8 @@ export type LedgerFacts = {
   value: ValueFacts;
   /** The footprint of the scope, from the ledger's footprint table. */
   footprint: ReturnType<typeof footprintFacts>;
+  /** The policies of the scope, from the ledger's policy firing table. */
+  policies: PolicyFacts;
 };
 
 /**
@@ -150,6 +162,31 @@ async function worthOf(db: LedgerDb, scope: ReportScope): Promise<ValueFacts> {
   };
 }
 
+/**
+ * The policies of the scope.
+ *
+ * The ten policies with the most firings are what the report shows, and the
+ * first-party policies that never fired are named: a policy that never fires
+ * is dead code or a coverage gap, and a reader cannot tell which one it is
+ * without being told.
+ */
+function policiesOf(db: LedgerDb): PolicyFacts {
+  const counts = topPoliciesByFireCount(db, 10);
+  const fired = new Set(policyFireCounts(db).map((entry) => entry.policyId));
+  return {
+    present: policyFiringTotal(db) > 0,
+    firings: policyFiringTotal(db),
+    top: counts.map((entry) => ({
+      policyId: entry.policyId,
+      count: entry.count,
+      blocks: entry.blocks,
+      flags: entry.flags,
+      versions: entry.versions,
+    })),
+    neverFired: FIRST_PARTY_POLICY_IDS.filter((id) => !fired.has(id)),
+  };
+}
+
 /** The facts of a project with no ledger. */
 function emptyFacts(): LedgerFacts {
   return {
@@ -179,6 +216,12 @@ function emptyFacts(): LedgerFacts {
       offloadSavedUsd: null,
     },
     footprint: footprintFacts(null),
+    policies: {
+      present: false,
+      firings: 0,
+      top: [],
+      neverFired: [...FIRST_PARTY_POLICY_IDS],
+    },
   };
 }
 
@@ -204,6 +247,7 @@ export async function ledgerFacts(stateRoot: string, scope: ReportScope): Promis
       waste: wasteOf(db),
       value: await worthOf(db, scope),
       footprint: footprintFacts(db),
+      policies: policiesOf(db),
     };
   } finally {
     closeLedger(db);

@@ -11,6 +11,7 @@ export * from './footprint.js';
 export * from './git.js';
 export * from './ingest.js';
 export * from './outcomes.js';
+export * from './policy.js';
 export * from './pricing.js';
 export * from './query.js';
 export * from './schema.js';

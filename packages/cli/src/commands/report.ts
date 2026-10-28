@@ -113,6 +113,7 @@ function emptyFacts(scope: ReportFacts['scope']): ReportFacts {
       unverifiedIds: [],
       pluginOrderWarnings: [],
     },
+    policies: { present: false, firings: 0, top: [], neverFired: [] },
   };
 }
 
@@ -181,6 +182,7 @@ export async function runEthicalReport(
     value: ledger.value,
     oversight,
     conformance,
+    policies: ledger.policies,
   };
 
   const refusing = !gate.accepted;
