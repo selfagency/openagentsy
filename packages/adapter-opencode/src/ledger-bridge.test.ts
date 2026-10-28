@@ -5,6 +5,7 @@ import { closeDatabase, grantLeases, migrate, openDatabase } from '@openagentsy/
 import { closeLedger, openLedger, perTaskTotals } from '@openagentsy/ledger';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assistantMessageOf, bridgeToLedger } from './ledger-bridge.js';
+import type { Roots } from './roots.js';
 
 const roots: string[] = [];
 
@@ -42,6 +43,11 @@ async function rootWith(lease?: { bean: string; agent: string }): Promise<string
   return root;
 }
 
+/** The two roots of a project that is its own state root. */
+function rootsOf(root: string): Roots {
+  return { workspace: root, stateRoot: root };
+}
+
 describe('assistantMessageOf', () => {
   it('takes a finished assistant message', () => {
     const event = { type: 'message.updated', properties: { info: assistant } };
@@ -73,7 +79,7 @@ describe('assistantMessageOf', () => {
 describe('the bridge', () => {
   it('records the message in the ledger under the bean of the lease', async () => {
     const root = await rootWith({ bean: '2b-4', agent: 'oa-builder' });
-    await bridgeToLedger(root, {
+    await bridgeToLedger(rootsOf(root), {
       raw: assistant,
       sessionID: 'ses-1',
       rootSessionID: 'ses-1',
@@ -100,7 +106,7 @@ describe('the bridge', () => {
 
   it('records a message of a session that holds no lease, with no task', async () => {
     const root = await rootWith();
-    await bridgeToLedger(root, {
+    await bridgeToLedger(rootsOf(root), {
       raw: assistant,
       sessionID: 'ses-1',
       rootSessionID: 'ses-1',
@@ -123,7 +129,7 @@ describe('the bridge', () => {
     const broken = { ...assistant, id: undefined };
 
     await expect(
-      bridgeToLedger(root, {
+      bridgeToLedger(rootsOf(root), {
         raw: broken,
         sessionID: 'ses-1',
         rootSessionID: 'ses-1',
@@ -145,7 +151,7 @@ describe('the bridge', () => {
     await writeFile(join(root, '.openagentsy', 'ledger.db'), 'not a database', 'utf8');
 
     await expect(
-      bridgeToLedger(root, {
+      bridgeToLedger(rootsOf(root), {
         raw: assistant,
         sessionID: 'ses-1',
         rootSessionID: 'ses-1',

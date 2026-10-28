@@ -18,9 +18,12 @@ import {
  * Both paths read it: the V1 path reads the board through the server
  * client, and the V2 path reads the same file, because the board is one
  * file and the runtime does not change where it lives.
+ *
+ * The board is the state root's, so a session in a worktree reads the
+ * status of the round the Lead persisted on the main board.
  */
-export function boardRoundStatus(root: string): RoundStatus | undefined {
-  const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
+export function boardRoundStatus(stateRoot: string): RoundStatus | undefined {
+  const db = openDatabase(join(stateRoot, '.openagentsy', 'board.sqlite'));
   try {
     const { records } = listRecords(db, { limit: 100, markRead: false });
     for (const record of [...records].reverse()) {

@@ -11,15 +11,15 @@ import {
   pruneHarvestChildren,
 } from './harvest.js';
 
-let root: string;
+let stateRoot: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), 'openagentsy-harvest-'));
-  await mkdir(join(root, '.openagentsy'), { recursive: true });
+  stateRoot = await mkdtemp(join(tmpdir(), 'openagentsy-harvest-'));
+  await mkdir(join(stateRoot, '.openagentsy'), { recursive: true });
 });
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(stateRoot, { recursive: true, force: true });
 });
 
 /** A session that records what it was asked to do. */
@@ -53,7 +53,7 @@ function fakeSession(
 
 async function writeAudit(lines: object[]): Promise<void> {
   await writeFile(
-    join(root, '.openagentsy', 'audit.jsonl'),
+    join(stateRoot, '.openagentsy', 'audit.jsonl'),
     `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`,
     'utf8',
   );
@@ -63,7 +63,9 @@ async function writeAudit(lines: object[]): Promise<void> {
 async function auditEntries(): Promise<
   { policyId?: string; detail?: string; resource?: string }[]
 > {
-  const text = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8').catch(() => '');
+  const text = await readFile(join(stateRoot, '.openagentsy', 'audit.jsonl'), 'utf8').catch(
+    () => '',
+  );
   return text
     .split('\n')
     .filter((line) => line.trim().length > 0)
@@ -75,7 +77,7 @@ describe('harvest', () => {
     const { session, prompts } = fakeSession([{ parts: [{ type: 'text', text: 'hello' }] }]);
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_lead',
       role: 'lead',
       agent: 'agentsy',
@@ -88,7 +90,7 @@ describe('harvest', () => {
     const { session, prompts } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_archivist',
       role: 'archivist',
       agent: 'oa-archivist',
@@ -101,7 +103,7 @@ describe('harvest', () => {
     const { session, prompts } = fakeSession([]);
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_silent',
       role: 'scout',
       agent: 'oa-scout',
@@ -122,7 +124,7 @@ describe('harvest', () => {
 
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -146,7 +148,7 @@ describe('harvest', () => {
     const { session, prompts } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -165,7 +167,7 @@ describe('harvest', () => {
     const { session, created } = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -180,7 +182,7 @@ describe('harvest', () => {
     ]);
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -200,7 +202,7 @@ describe('harvest', () => {
     );
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -227,7 +229,7 @@ describe('harvest', () => {
     );
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -250,7 +252,7 @@ describe('harvest', () => {
     });
     const result = await harvest({
       session,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',
@@ -321,7 +323,7 @@ describe('the harvest janitor', () => {
       },
     ]);
 
-    await pruneHarvestChildren(session, root, now);
+    await pruneHarvestChildren(session, stateRoot, now);
 
     expect(deleted).toEqual(['ses_old']);
   });
@@ -343,14 +345,14 @@ describe('the harvest janitor', () => {
     const harvestSession: HarvestSession = {
       ...fake.session,
       prune: () => {
-        pruning = pruneHarvestChildren(session, root, now);
+        pruning = pruneHarvestChildren(session, stateRoot, now);
         return pruning;
       },
     };
 
     const result = await harvest({
       session: harvestSession,
-      root,
+      stateRoot,
       sessionID: 'ses_scout',
       role: 'scout',
       agent: 'oa-scout',

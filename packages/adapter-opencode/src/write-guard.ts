@@ -1,6 +1,7 @@
 import { isAbsolute, join } from 'node:path';
 import { appendAudit, decideWrite } from './guard.js';
 import { patchPaths } from './patch-paths.js';
+import type { Roots } from './roots.js';
 
 /**
  * The path a write is aimed at, in absolute form.
@@ -59,7 +60,7 @@ export function targetPathsOf(toolName: string, args: unknown): string[] {
  * is always on record.
  */
 async function recordDecision(
-  root: string,
+  stateRoot: string,
   entry: {
     actor: string;
     action: string;
@@ -70,7 +71,7 @@ async function recordDecision(
     sessionID?: string | undefined;
   },
 ): Promise<void> {
-  await appendAudit(root, {
+  await appendAudit(stateRoot, {
     policyId: entry.policyId,
     policyVersion: 'v1',
     actor: entry.actor,
@@ -90,7 +91,7 @@ async function recordDecision(
  * so the rule lives here.
  */
 export async function checkWrite(
-  root: string,
+  roots: Roots,
   input: {
     toolName: string;
     path: string;
@@ -99,11 +100,13 @@ export async function checkWrite(
   },
 ): Promise<{ effect: 'allow' | 'deny'; reason: string } | undefined> {
   const { toolName, path, agent, sessionID } = input;
-  const absolute = joinRoot(root, path);
-  const decision = await decideWrite(root, absolute, agent);
+  // A relative path is relative to the session's own directory, so it is
+  // joined against the workspace.
+  const absolute = joinRoot(roots.workspace, path);
+  const decision = await decideWrite(roots, absolute, agent);
 
   if (decision.effect === 'deny') {
-    await recordDecision(root, {
+    await recordDecision(roots.stateRoot, {
       policyId: 'oa.lease.write',
       actor: agent,
       action: toolName,
@@ -112,7 +115,7 @@ export async function checkWrite(
       detail: decision.reason,
       sessionID,
     });
-    await recordDecision(root, {
+    await recordDecision(roots.stateRoot, {
       policyId: 'oa.scope.violation',
       actor: agent,
       action: toolName,
@@ -124,7 +127,7 @@ export async function checkWrite(
     return { effect: 'deny', reason: decision.reason };
   }
 
-  await recordDecision(root, {
+  await recordDecision(roots.stateRoot, {
     policyId: 'oa.lease.write',
     actor: agent,
     action: toolName,

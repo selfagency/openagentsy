@@ -9,17 +9,37 @@ import {
   openDatabase,
   type RoleDefinition,
 } from '@openagentsy/core';
+import type { Roots } from './roots.js';
 
-function stateDir(root: string): string {
-  return join(root, '.openagentsy');
+/**
+ * The guard.
+ *
+ * The guard reads two roots, and it reads each of them for one thing.
+ *
+ * The **state root** owns the shared state: the board database with the
+ * leases, the audit log, the rungs and the model lock. Every function below
+ * that takes a `stateRoot` reads state and writes state.
+ *
+ * The **workspace** owns the project files: `roles.yaml` is what says which
+ * role a name stands for. Every function below that takes a `workspace`
+ * reads the project.
+ *
+ * The functions that need both take the pair, so the two cannot be swapped
+ * by accident: the lease check reads the leases of the state root and
+ * matches a path against it, and resolves the names with the roles of the
+ * workspace.
+ */
+
+function stateDir(stateRoot: string): string {
+  return join(stateRoot, '.openagentsy');
 }
 
-function auditPath(root: string): string {
-  return join(stateDir(root), 'audit.jsonl');
+function auditPath(stateRoot: string): string {
+  return join(stateDir(stateRoot), 'audit.jsonl');
 }
 
-function rungsPath(root: string): string {
-  return join(stateDir(root), 'rungs.json');
+function rungsPath(stateRoot: string): string {
+  return join(stateDir(stateRoot), 'rungs.json');
 }
 
 /**
@@ -28,10 +48,13 @@ function rungsPath(root: string): string {
  * The plugin runtime is Bun, and bun:sqlite is a Bun builtin, so the plugin
  * opens the same database the board server writes. No snapshot file, no
  * staleness window: the guard always sees the leases as they are.
+ *
+ * The database is the one of the state root, so a builder in a worktree sees
+ * the leases the Lead granted on the main board.
  */
-function readLeases(root: string): Lease[] {
+function readLeases(stateRoot: string): Lease[] {
   try {
-    const db = openDatabase(join(stateDir(root), 'board.sqlite'));
+    const db = openDatabase(join(stateDir(stateRoot), 'board.sqlite'));
     try {
       return listLeases(db);
     } finally {
@@ -71,8 +94,8 @@ export const POLICIES = {
   permissionRefused: { id: 'oa.permission.refused', version: 'v1' },
 } as const;
 
-export async function appendAudit(root: string, entry: AuditInput): Promise<void> {
-  const path = auditPath(root);
+export async function appendAudit(stateRoot: string, entry: AuditInput): Promise<void> {
+  const path = auditPath(stateRoot);
   await mkdir(dirname(path), { recursive: true });
   await appendFile(path, `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`, 'utf8');
 }
@@ -94,9 +117,9 @@ export type Rung = {
  */
 export type RungState = Record<string, Rung>;
 
-export async function readRungs(root: string): Promise<RungState> {
+export async function readRungs(stateRoot: string): Promise<RungState> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(rungsPath(root), 'utf8'));
+    const parsed: unknown = JSON.parse(await readFile(rungsPath(stateRoot), 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return {};
     const state = parsed as Record<string, Partial<Rung> & { rungIndex?: number }>;
     // A file in the old shape is keyed by role and has no role in it. The
@@ -110,7 +133,7 @@ export async function readRungs(root: string): Promise<RungState> {
     // A file that cannot be read is not a failure: a project that never
     // climbed has no file. A file that cannot be parsed is a failure, and
     // saying so saves a session of guessing.
-    await reportUnreadable(root, rungsPath(root), error);
+    await reportUnreadable(stateRoot, rungsPath(stateRoot), error);
     return {};
   }
 }
@@ -129,16 +152,16 @@ const reported = new Set<string>();
  * The audit log is the project's channel for anything that has to be
  * noticed, and a state file the guard cannot read is exactly that.
  *
- * The root comes from the caller. It used to be cut out of the path by
+ * The state root comes from the caller. It used to be cut out of the path by
  * string surgery, and the lock file does not live under `.openagentsy/`, so
  * the cut produced a root of the file name minus its last character, and
  * the audit line landed in a directory nobody reads.
  */
-async function reportUnreadable(root: string, path: string, error: unknown): Promise<void> {
+async function reportUnreadable(stateRoot: string, path: string, error: unknown): Promise<void> {
   if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
   if (reported.has(path)) return;
   reported.add(path);
-  await appendAudit(root, {
+  await appendAudit(stateRoot, {
     policyId: POLICIES.stateUnreadable.id,
     policyVersion: POLICIES.stateUnreadable.version,
     actor: 'guard',
@@ -149,8 +172,8 @@ async function reportUnreadable(root: string, path: string, error: unknown): Pro
   });
 }
 
-export async function writeRungs(root: string, state: RungState): Promise<void> {
-  const path = rungsPath(root);
+export async function writeRungs(stateRoot: string, state: RungState): Promise<void> {
+  const path = rungsPath(stateRoot);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
 }
@@ -196,10 +219,13 @@ function roleKeyOf(roles: { roles: Record<string, RoleDefinition> }, name: strin
  * rung and a trigger are all stored under the role key, so a lookup under
  * the agent id finds nothing at all. A name that is not a role keeps its own
  * spelling, so a custom agent still works.
+ *
+ * The roles file is the workspace's: it travels with the branch, and it says
+ * which roles this project has.
  */
-export async function roleKeyForAgent(root: string, agent: string): Promise<string> {
+export async function roleKeyForAgent(workspace: string, agent: string): Promise<string> {
   try {
-    const roles = await loadRoles(join(root, 'roles.yaml'));
+    const roles = await loadRoles(join(workspace, 'roles.yaml'));
     return roleKeyOf(roles, agent);
   } catch {
     return roleNameOf(agent);
@@ -213,11 +239,11 @@ export async function roleKeyForAgent(root: string, agent: string): Promise<stri
  * are resolved to the role key before they are compared. The file is read
  * once for all of them.
  */
-async function roleKeysOf(root: string, names: string[]): Promise<Map<string, string>> {
+async function roleKeysOf(workspace: string, names: string[]): Promise<Map<string, string>> {
   const keys = new Map<string, string>();
   let roles: { roles: Record<string, RoleDefinition> };
   try {
-    roles = await loadRoles(join(root, 'roles.yaml'));
+    roles = await loadRoles(join(workspace, 'roles.yaml'));
   } catch {
     for (const name of names) keys.set(name, roleNameOf(name));
     return keys;
@@ -237,11 +263,14 @@ async function roleKeysOf(root: string, names: string[]): Promise<Map<string, st
  * A session that holds no lease, or that holds leases on more than one
  * bean, has no bean that can be named: the answer is nothing rather than a
  * guess, because a wrong task id puts the usage on the wrong bean's bill.
+ *
+ * The leases come from the state root and the roles from the workspace, so
+ * this is a function of both.
  */
-export async function activeBean(root: string, agent: string): Promise<string | undefined> {
-  const leases = readLeases(root);
+export async function activeBean(roots: Roots, agent: string): Promise<string | undefined> {
+  const leases = readLeases(roots.stateRoot);
   if (leases.length === 0) return undefined;
-  const keys = await roleKeysOf(root, [agent, ...leases.map((lease) => lease.agent)]);
+  const keys = await roleKeysOf(roots.workspace, [agent, ...leases.map((lease) => lease.agent)]);
   const role = keys.get(agent);
   if (role === undefined) return undefined;
   const beans = new Set<string>();
@@ -262,11 +291,11 @@ export async function activeBean(root: string, agent: string): Promise<string | 
  * of it is what a reply can be compared against. A glob that names one file
  * is that file.
  *
- * A glob outside the workspace names nothing the workspace holds, so the
+ * A glob outside the state root names nothing the project holds, so the
  * answer is nothing.
  */
-function relativeGlob(glob: string, root: string): string | undefined {
-  const prefix = root.endsWith('/') ? root : `${root}/`;
+function relativeGlob(glob: string, stateRoot: string): string | undefined {
+  const prefix = stateRoot.endsWith('/') ? stateRoot : `${stateRoot}/`;
   if (!glob.startsWith(prefix)) return undefined;
   const relative = glob.slice(prefix.length);
   const wildcard = relative.search(/[*?]/);
@@ -289,13 +318,13 @@ function relativeGlob(glob: string, root: string): string | undefined {
  * workspace, has no scope either: the answer is nothing rather than a
  * guess.
  */
-export async function statedPathsOf(root: string, agent: string): Promise<string[]> {
-  const bean = await activeBean(root, agent);
+export async function statedPathsOf(roots: Roots, agent: string): Promise<string[]> {
+  const bean = await activeBean(roots, agent);
   if (bean === undefined) return [];
   const paths: string[] = [];
-  for (const lease of readLeases(root)) {
+  for (const lease of readLeases(roots.stateRoot)) {
     if (lease.bean !== bean) continue;
-    const relative = relativeGlob(lease.glob, root);
+    const relative = relativeGlob(lease.glob, roots.stateRoot);
     if (relative === undefined) continue;
     if (relative === '') return [];
     paths.push(relative);
@@ -307,13 +336,18 @@ export async function statedPathsOf(root: string, agent: string): Promise<string
  * Decide whether one path may be written.
  *
  * The rules are the ones in the core package, not a second copy.
+ *
+ * The leases are read from the state root and a path is matched against it,
+ * so a lease the Lead granted on the main board covers a file in a
+ * worktree. The roles come from the workspace, because the roles file
+ * travels with the branch.
  */
 export async function decideWrite(
-  root: string,
+  roots: Roots,
   path: string,
   agent: string,
 ): Promise<WriteDecision> {
-  const leases = readLeases(root);
+  const leases = readLeases(roots.stateRoot);
   if (leases.length === 0) {
     return {
       effect: 'deny',
@@ -321,9 +355,9 @@ export async function decideWrite(
     };
   }
 
-  const roles = await loadRoles(join(root, 'roles.yaml'));
+  const roles = await loadRoles(join(roots.workspace, 'roles.yaml'));
   const resolve = (name: string) => roleKeyOf(roles, name);
-  const decision = decideFromLeases(leases, path, root, agent, resolve);
+  const decision = decideFromLeases(leases, path, roots.stateRoot, agent, resolve);
   if (decision.status === 'unleased') {
     return {
       effect: 'deny',
@@ -357,14 +391,17 @@ export type ClimbPlan =
  *
  * A climb moves one rung, needs a reason that names a trigger, and stays
  * inside the ladder the lock file recorded.
+ *
+ * The ladder and the rungs are the state root's and the triggers are the
+ * workspace's, so a climb is a function of both.
  */
 export async function planClimb(
-  root: string,
+  roots: Roots,
   role: string,
   sessionID: string,
   reason: string,
 ): Promise<ClimbPlan> {
-  const lock = await loadLock(root);
+  const lock = await loadLock(roots.stateRoot);
   const entry = lock?.roles[role];
   if (!entry) {
     return { ok: false, message: `no model lock for ${role}. Run: openagentsy models init` };
@@ -376,7 +413,7 @@ export async function planClimb(
     };
   }
 
-  const roleDef = await loadRole(root, role);
+  const roleDef = await loadRole(roots.workspace, role);
   const triggers = roleDef?.effort.climbTriggers ?? [];
   if (triggers.length === 0) {
     return { ok: false, message: `${role} has no climb triggers, so it does not climb.` };
@@ -395,7 +432,7 @@ export async function planClimb(
     };
   }
 
-  const rungs = await readRungs(root);
+  const rungs = await readRungs(roots.stateRoot);
   const current = rungs[sessionID]?.rungIndex ?? 0;
   const next = current + 1;
   const target = entry.ladder[next];
@@ -412,16 +449,16 @@ export async function planClimb(
 }
 
 export async function recordClimb(
-  root: string,
+  stateRoot: string,
   sessionID: string,
   role: string,
   rungIndex: number,
   reason: string,
 ): Promise<void> {
-  const rungs = await readRungs(root);
+  const rungs = await readRungs(stateRoot);
   rungs[sessionID] = { role, rungIndex, reason, updatedAt: new Date().toISOString() };
-  await writeRungs(root, rungs);
-  await appendAudit(root, {
+  await writeRungs(stateRoot, rungs);
+  await appendAudit(stateRoot, {
     policyId: POLICIES.effortClimb.id,
     policyVersion: POLICIES.effortClimb.version,
     actor: role,
@@ -432,8 +469,8 @@ export async function recordClimb(
   });
 }
 
-export async function refuseClimb(root: string, role: string, reason: string): Promise<void> {
-  await appendAudit(root, {
+export async function refuseClimb(stateRoot: string, role: string, reason: string): Promise<void> {
+  await appendAudit(stateRoot, {
     policyId: POLICIES.effortRefused.id,
     policyVersion: POLICIES.effortRefused.version,
     actor: role,
@@ -451,14 +488,14 @@ type LockFile = {
   >;
 };
 
-async function loadLock(root: string): Promise<LockFile | undefined> {
-  const path = join(root, 'openagentsy.models.lock.json');
+async function loadLock(stateRoot: string): Promise<LockFile | undefined> {
+  const path = join(stateRoot, 'openagentsy.models.lock.json');
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
     if (typeof parsed !== 'object' || parsed === null) return undefined;
     return parsed as LockFile;
   } catch (error) {
-    await reportUnreadable(root, path, error);
+    await reportUnreadable(stateRoot, path, error);
     return undefined;
   }
 }
@@ -471,21 +508,21 @@ async function loadLock(root: string): Promise<LockFile | undefined> {
  * way, so the answer is computed once.
  */
 export async function rungTarget(
-  root: string,
+  stateRoot: string,
   role: string,
   sessionID: string,
 ): Promise<{ model: string; variant?: string } | undefined> {
-  const rungs = await readRungs(root);
+  const rungs = await readRungs(stateRoot);
   const rung = rungs[sessionID];
   if (!rung || rung.rungIndex === 0) return undefined;
 
-  const lock = await loadLock(root);
+  const lock = await loadLock(stateRoot);
   return lock?.roles[role]?.ladder[rung.rungIndex];
 }
 
-async function loadRole(root: string, name: string): Promise<RoleDefinition | undefined> {
+async function loadRole(workspace: string, name: string): Promise<RoleDefinition | undefined> {
   try {
-    const roles = await loadRoles(join(root, 'roles.yaml'));
+    const roles = await loadRoles(join(workspace, 'roles.yaml'));
     const byKey = roles.roles[name];
     if (byKey) return byKey;
     // An agent may carry its own name, which the Lead does so the selector

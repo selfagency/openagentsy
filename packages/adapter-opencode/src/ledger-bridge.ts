@@ -5,6 +5,7 @@ import {
   recordAssistantMessage,
 } from '@openagentsy/ledger';
 import { activeBean, appendAudit, POLICIES, roleKeyForAgent } from './guard.js';
+import type { Roots } from './roots.js';
 
 /**
  * The bridge from the session's messages to the ledger (§6.7).
@@ -69,12 +70,12 @@ export type BridgeInput = {
  * the session that is running.
  */
 async function recordBridgeFailure(
-  root: string,
+  stateRoot: string,
   input: BridgeInput,
   error: unknown,
 ): Promise<void> {
   try {
-    await appendAudit(root, {
+    await appendAudit(stateRoot, {
       policyId: POLICIES.ledgerFailed.id,
       policyVersion: POLICIES.ledgerFailed.version,
       actor: input.agent,
@@ -95,14 +96,17 @@ async function recordBridgeFailure(
  * role key before the message is written, so the ledger never sees 'oa-builder'
  * where it means 'builder'. The bean is the task the message belongs to, and
  * the board joins its bean id against the ledger's task id.
+ *
+ * The ledger and the board are the state root's, so a session in a worktree
+ * writes its usage to the ledger of the project and not to one of its own.
  */
-export async function bridgeToLedger(root: string, input: BridgeInput): Promise<void> {
+export async function bridgeToLedger(roots: Roots, input: BridgeInput): Promise<void> {
   try {
     const message = normalizeOcMessage(input.raw);
-    const role = await roleKeyForAgent(root, input.agent);
-    const bean = input.bean ?? (await activeBean(root, input.agent));
+    const role = await roleKeyForAgent(roots.workspace, input.agent);
+    const bean = input.bean ?? (await activeBean(roots, input.agent));
 
-    const db = openLedger(root);
+    const db = openLedger(roots.stateRoot);
     try {
       recordAssistantMessage(db, message, {
         rootSessionId: input.rootSessionID,
@@ -114,6 +118,6 @@ export async function bridgeToLedger(root: string, input: BridgeInput): Promise<
       closeLedger(db);
     }
   } catch (error) {
-    await recordBridgeFailure(root, input, error);
+    await recordBridgeFailure(roots.stateRoot, input, error);
   }
 }

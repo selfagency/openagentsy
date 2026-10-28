@@ -39,10 +39,10 @@ const HARVEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * off, and anything else leaves it on. A pipeline that stops on a typo
  * loses memories silently, so only the word `off` stops it.
  */
-export async function harvestEnabled(root: string): Promise<boolean> {
+export async function harvestEnabled(stateRoot: string): Promise<boolean> {
   let text: string;
   try {
-    text = await readFile(join(root, '.openagentsy', 'harvest'), 'utf8');
+    text = await readFile(join(stateRoot, '.openagentsy', 'harvest'), 'utf8');
   } catch {
     return true;
   }
@@ -105,7 +105,8 @@ export type HarvestSession = {
 
 export type HarvestInput = {
   session: HarvestSession;
-  root: string;
+  /** The state root: the audit log the decisions are read from lives there. */
+  stateRoot: string;
   sessionID: string;
   /** The role that ran the session. */
   role: string;
@@ -123,14 +124,14 @@ export type HarvestInput = {
 export async function harvest(
   input: HarvestInput,
 ): Promise<{ harvested: boolean; reason: string }> {
-  const { session, root, sessionID, role, agent } = input;
+  const { session, stateRoot, sessionID, role, agent } = input;
   if (NOT_HARVESTED.has(role)) {
     return { harvested: false, reason: `${role} sessions are not harvested` };
   }
 
   const messages = await session.messages(sessionID);
   const transcript = transcriptOf(messages);
-  const decisions = await decisionsOf(root, sessionID);
+  const decisions = await decisionsOf(stateRoot, sessionID);
 
   // Nothing new means nothing to keep: no writes, no refusals, no words.
   if (transcript.length === 0 && decisions.length === 0) {
@@ -155,7 +156,7 @@ export async function harvest(
       error instanceof Error
         ? error
         : new Error('the server refused to create the archivist session');
-    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    await recordHarvestFailure(stateRoot, { agent, sessionID, error: failure });
     return { harvested: false, reason: failure.message };
   }
   if (archivistSession === undefined) {
@@ -177,7 +178,7 @@ export async function harvest(
   const promptable = await mayPrompt(session, archivistSession);
   if (!promptable.ok) {
     const error = new Error(promptable.reason);
-    await recordHarvestFailure(root, { agent, sessionID, error });
+    await recordHarvestFailure(stateRoot, { agent, sessionID, error });
     return { harvested: false, reason: error.message };
   }
 
@@ -186,7 +187,7 @@ export async function harvest(
   } catch (error) {
     const failure =
       error instanceof Error ? error : new Error('the archivist could not be prompted');
-    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    await recordHarvestFailure(stateRoot, { agent, sessionID, error: failure });
     return { harvested: false, reason: failure.message };
   }
 
@@ -241,10 +242,10 @@ async function mayPrompt(session: HarvestSession, sessionID: string): Promise<Pr
  * this the same way.
  */
 export async function recordHarvestFailure(
-  root: string,
+  stateRoot: string,
   input: { agent: string; sessionID: string; error: unknown },
 ): Promise<void> {
-  await appendAudit(root, {
+  await appendAudit(stateRoot, {
     policyId: POLICIES.harvestFailed.id,
     policyVersion: POLICIES.harvestFailed.version,
     actor: input.agent,
@@ -294,14 +295,14 @@ export type PruneSession = {
  */
 export async function pruneHarvestChildren(
   session: PruneSession,
-  root: string,
+  stateRoot: string,
   now: number = Date.now(),
 ): Promise<void> {
   let rows: PruneSessionRow[];
   try {
     rows = await session.list();
   } catch (error) {
-    await recordHarvestPruneFailure(root, '(session list)', error);
+    await recordHarvestPruneFailure(stateRoot, '(session list)', error);
     return;
   }
 
@@ -314,7 +315,7 @@ export async function pruneHarvestChildren(
     } catch (error) {
       // One refused delete must not stop the sweep, and it must not reach
       // the harvest. It goes on the record like any other harvest failure.
-      await recordHarvestPruneFailure(root, sessionID, error);
+      await recordHarvestPruneFailure(stateRoot, sessionID, error);
     }
   }
 }
@@ -339,13 +340,13 @@ function isStaleHarvestChild(row: PruneSessionRow, now: number): boolean {
  * harvest it runs beside, so it is dropped.
  */
 async function recordHarvestPruneFailure(
-  root: string,
+  stateRoot: string,
   sessionID: string,
   error: unknown,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   try {
-    await recordHarvestFailure(root, {
+    await recordHarvestFailure(stateRoot, {
       agent: ARCHIVIST,
       sessionID,
       error: new Error(`harvest prune failed: ${message}`),
@@ -371,8 +372,8 @@ function transcriptOf(messages: { parts?: { type: string; text?: string }[] }[])
 }
 
 /** The decisions the guard took in the session: the writes and the refusals. */
-async function decisionsOf(root: string, sessionID: string): Promise<string[]> {
-  const path = join(root, '.openagentsy', 'audit.jsonl');
+async function decisionsOf(stateRoot: string, sessionID: string): Promise<string[]> {
+  const path = join(stateRoot, '.openagentsy', 'audit.jsonl');
   const lines: string[] = [];
   // The audit log grows for as long as the board lives, and it is read at
   // every session end, so it is read a line at a time.
