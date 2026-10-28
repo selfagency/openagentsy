@@ -23,13 +23,29 @@ const TYPES = {
 
 const git = (args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 
+/**
+ * The version this release carries.
+ *
+ * The tag does not exist yet when this runs: the workflow checks that the
+ * tag names the version every manifest carries, and the tag is cut from the
+ * commit this script makes. So the version comes from the manifest, and
+ * the tag follows it.
+ */
+const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+
 const tags = git(['tag', '--list', '--sort=-v:refname', 'v*'])
   .split('\n')
   .filter((line) => line !== '');
 
-const to = tags[0] ?? 'HEAD';
-const from = tags[1];
-const range = from === undefined ? ['HEAD'] : [`${from}..HEAD`];
+/**
+ * The commits of this release: everything since the last tag.
+ *
+ * The last tag is the one before this release. The range used to start at
+ * the tag before that, which put the previous release's commits into this
+ * release's notes, and with one tag there was no range at all, so every
+ * commit since the beginning was listed under the release.
+ */
+const range = tags.length > 0 ? [`${tags[0]}..HEAD`] : ['HEAD'];
 const log = git(['log', range.join(' '), '--no-merges', '--pretty=format:%H%x1f%s%x1f%b%x1e']);
 
 const groups = new Map();
@@ -53,12 +69,6 @@ for (const record of log.split('\x1e')) {
   }
 }
 
-const version =
-  from === undefined
-    ? // No tag yet: this is the first release, so it takes the version the
-      // root manifest names.
-      JSON.parse(readFileSync('package.json', 'utf8')).version
-    : to.replace(/^v/, '');
 const date = new Date().toISOString().slice(0, 10);
 const lines = [`## ${version} - ${date}`, ''];
 
@@ -73,6 +83,44 @@ if (breaking.length > 0) {
   lines.push('### Breaking', '', ...breaking, '');
 }
 
+/**
+ * The sections of a changelog file.
+ *
+ * The file is a header and then a run of sections, and a section starts at
+ * a line that begins with two hashes.
+ */
+function sections(text) {
+  const found = [];
+  let current = null;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('## ')) {
+      current = [line];
+      found.push(current);
+      continue;
+    }
+    if (current !== null) current.push(line);
+  }
+  return found;
+}
+
+/**
+ * The file: the new section, and the sections of the releases before it.
+ *
+ * The old releases stay: a reader who wants to know what 0.1.1 changed
+ * finds it there. The "Unreleased" section goes, because the commits it
+ * listed are the commits this release carries, and a section for this
+ * version that is already there goes too, because this is a re-run.
+ */
 const header = '# Changelog\n\nEvery release, from the commits that made it.\n';
-writeFileSync('CHANGELOG.md', `${header}\n${lines.join('\n')}`, 'utf8');
+const existing = readFileSync('CHANGELOG.md', 'utf8');
+const kept = sections(existing)
+  .filter((section) => {
+    const heading = section[0] ?? '';
+    if (heading === '## Unreleased') return false;
+    return !heading.startsWith(`## ${version} `) && heading !== `## ${version}`;
+  })
+  .map((section) => `${section.join('\n').replace(/\n+$/, '')}\n`)
+  .join('\n');
+
+writeFileSync('CHANGELOG.md', `${header}\n${lines.join('\n')}\n${kept}`, 'utf8');
 console.log(`CHANGELOG.md now holds ${version}`);
