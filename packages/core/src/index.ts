@@ -11,4 +11,6 @@ export * from './report/index.js';
 export * from './roles.js';
 export * from './roots.js';
 export * from './tool-names.js';
+export * from './tools/define-tool.js';
+export * from './tools/tool.js';
 export * from './types.js';

@@ -1,5 +1,4 @@
-import { defineTool, type ToolDef } from '@openagentsy/adapter-opencode';
-import { memoryToolNames } from '@openagentsy/core';
+import { defineTool, memoryToolNames, type ToolDef } from '@openagentsy/core';
 import { z } from 'zod';
 import type { MemoryInbox } from './inbox.js';
 import type { MemoryEntry } from './model.js';
@@ -87,8 +86,8 @@ export type MemoryTools = {
 /**
  * The three tools, defined once.
  *
- * The definitions are handed to the two runtimes through the adapter's
- * helper, so the shape is the same in both OpenCode versions.
+ * The definitions are handed to the two runtimes through the helper in
+ * core, so the shape is the same in both OpenCode versions.
  */
 export function createMemoryTools(deps: MemoryToolDeps): MemoryTools {
   return {
