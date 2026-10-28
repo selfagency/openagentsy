@@ -1,14 +1,13 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
-import { agentIdFor, agentIdOf, loadRoles, type RolesFile, type Target } from '@openagentsy/core';
+import { agentIdFor, agentIdOf, loadRoles, type RolesFile } from '@openagentsy/core';
 import { agentFileName, renderAgent } from '../generate/agent.js';
 import { COMMANDS, renderCommand } from '../generate/commands.js';
 import { lockEntryFor, lockVariants, type ModelLock, readModelLock } from '../generate/lock.js';
 
 export type BuildOptions = {
   root: string;
-  target: Target;
   rolesPath?: string;
   lockPath?: string;
   outDir?: string;
@@ -121,7 +120,6 @@ async function copySkills(
 async function renderAgents(
   roles: RolesFile,
   lock: ModelLock | undefined,
-  target: Target,
   agentsDir: string,
 ): Promise<string[]> {
   const ids: string[] = [];
@@ -129,10 +127,9 @@ async function renderAgents(
     const entry = lockEntryFor(lock, role.name);
     const variants = lockVariants(entry);
     const content = renderAgent(role, roles, {
-      target,
       ...(entry?.model ? { model: entry.model } : {}),
-      // V1 agent frontmatter has no variant field, so only V2 can pin one.
-      ...(target === 'v2' && variants.start !== undefined ? { modelVariant: variants.start } : {}),
+      // The agent frontmatter pins the variant of the model it starts on.
+      ...(variants.start !== undefined ? { modelVariant: variants.start } : {}),
       effort: variants,
     });
     await writeFileAt(join(agentsDir, agentFileName(role)), content);
@@ -157,7 +154,7 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     );
   }
 
-  const agents = await renderAgents(roles, lock, options.target, join(outDir, 'agents'));
+  const agents = await renderAgents(roles, lock, join(outDir, 'agents'));
   const knownNames = new Set(
     Object.values(roles.roles)
       .map((role) => role.agentName)
@@ -168,10 +165,7 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   const commands: string[] = [];
   for (const command of COMMANDS) {
     const path = join(outDir, 'commands', `${command.name}.md`);
-    await writeFileAt(
-      path,
-      renderCommand(command, options.target, agentIdFor(roles, command.role)),
-    );
+    await writeFileAt(path, renderCommand(command, agentIdFor(roles, command.role)));
     commands.push(command.name);
   }
 

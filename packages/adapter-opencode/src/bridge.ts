@@ -1,4 +1,3 @@
-import type { V1PermissionBlock } from '@openagentsy/core';
 import {
   applyShellEnvPolicy,
   baseToolName,
@@ -13,7 +12,11 @@ import {
   toolVocabulary,
 } from '@openagentsy/hooks';
 import { changedFiles } from './changed-files.js';
-import { mergePermissions, permissionEntriesFor } from './permission-merge.js';
+import {
+  mergePermissions,
+  permissionEntriesFor,
+  type V1PermissionBlock,
+} from './permission-merge.js';
 
 /**
  * The bridge from the guardrails to the OpenCode hooks (§8.2).

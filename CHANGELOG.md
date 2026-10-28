@@ -16,6 +16,8 @@ Every release, from the commits that made it.
 
 ### Changed
 
+- the project speaks OpenCode 2 only: the adapter, the generator and the CLI dropped the OpenCode 1 path, the `--target` flag is gone, the permission key is `shell` and the spawn tool is `subagent`
+- a command a person has to approve is an `ask` effect on the permission hook, because OpenCode 2 gives a plugin no way to write the host's permission map
 - the cases run five at a time instead of three: a case is a Lead and the builder it dispatches, so five cases are about ten sessions, and the number of provider calls does not change with the cap, so the cost of a run does not change either (`e1a3053`)
 
 ## 0.1.0 - 2026-10-23

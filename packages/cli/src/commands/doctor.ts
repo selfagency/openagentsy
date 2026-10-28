@@ -21,7 +21,6 @@ import {
   findConfigPaths,
   findSkills,
   type OpenCodeVersion,
-  targetForVersion,
 } from '../opencode.js';
 import { findPluginBundle } from '../plugin.js';
 import { runBuild } from './build.js';
@@ -458,7 +457,6 @@ function targetOfAgentFile(content: string): Target | undefined {
   if (match === null) return undefined;
   const frontmatter = asRecord(parseYaml(match[1] ?? ''));
   if (frontmatter.permissions !== undefined) return 'v2';
-  if (frontmatter.permission !== undefined) return 'v1';
   return undefined;
 }
 
@@ -500,10 +498,7 @@ function judgeTarget(files: Map<string, string>): TargetVerdict {
   }
   return {
     target: undefined,
-    error:
-      targets.size === 0
-        ? 'no installed agent file says which target it was built for'
-        : `the installed agent files disagree about the target: ${[...targets].sort().join(', ')}`,
+    error: 'no installed agent file says which target it was built for',
   };
 }
 
@@ -543,7 +538,7 @@ async function regenerationDiff(root: string, ours: Set<string>): Promise<Regene
 
   const temp = await mkdtemp(join(tmpdir(), 'openagentsy-regeneration-'));
   try {
-    await runBuild({ root, target, outDir: temp });
+    await runBuild({ root, outDir: temp });
     const fresh = await agentFiles(join(temp, 'agents'));
 
     const drifted: string[] = [];
@@ -593,10 +588,10 @@ async function regenerationReport(root: string, roles: RolesFile): Promise<Regen
 export async function runDoctor(root: string): Promise<DoctorReport> {
   const warnings: string[] = [];
   const version = await detectOpenCode();
-  const target: Target = version ? targetForVersion(version) : 'v1';
+  const target: Target = 'v2';
 
   if (!version) {
-    warnings.push('opencode binary not found on PATH, assuming v1 layout');
+    warnings.push('opencode binary not found on PATH, assuming v2 layout');
   }
 
   const config = await readProjectConfig(root);

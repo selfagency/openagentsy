@@ -1,6 +1,10 @@
-import type { PermissionEffect, V1PermissionBlock } from '@openagentsy/core';
+import type { PermissionEffect } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
-import { mergePermissions, permissionEntriesFor } from './permission-merge.js';
+import {
+  mergePermissions,
+  permissionEntriesFor,
+  type V1PermissionBlock,
+} from './permission-merge.js';
 
 /**
  * Whether a pattern matches a command.

@@ -1,4 +1,3 @@
-import type { Target } from '@openagentsy/core';
 import { stringify } from 'yaml';
 
 export type CommandDefinition = {
@@ -63,14 +62,13 @@ export const COMMANDS: CommandDefinition[] = [
   },
 ];
 
-export function renderCommand(command: CommandDefinition, target: Target, agent: string): string {
+export function renderCommand(command: CommandDefinition, agent: string): string {
   const frontmatter: Record<string, unknown> = {
     description: command.description,
     agent,
+    // OpenCode 2 calls the flag `subagent`.
+    subagent: command.background,
   };
-  // V1 calls the flag `subtask`, V2 calls it `subagent` and still accepts
-  // `subtask` as a deprecated alias.
-  frontmatter[target === 'v1' ? 'subtask' : 'subagent'] = command.background;
 
   return `---\n${stringify(frontmatter, { lineWidth: 0 }).trimEnd()}\n---\n\n${command.template}\n`;
 }

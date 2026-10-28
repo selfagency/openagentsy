@@ -39,11 +39,11 @@ bun run test
 | `@openagentsy/adapter-opencode` | the OpenCode plugin: the guard, the effort ladder, the harvest |
 
 `roles.yaml` is the source of truth for the seven roles. Everything else is
-generated from it, and the generator maps one permission vocabulary onto both
-OpenCode versions.
+generated from it, and the generator maps one permission vocabulary onto the
+permission keys OpenCode reads.
 
 ```bash
-openagentsy build --target v1   # or v2
+openagentsy build
 openagentsy models init --providers opencode-go
 ```
 
@@ -83,8 +83,8 @@ undecided gets a number rather than a shrug.
 
 ## The plugin
 
-One file serves both OpenCode versions: V1 reads `{ id, server }`, V2 reads
-`{ id, setup }`, and each ignores the other key. It is bundled into a single
+One file, one runtime: the plugin default-exports `{ id, setup }`, and OpenCode
+2 calls `setup` with the plugin context. It is bundled into a single
 self contained file, because a plugin is loaded from the config directory where
 bare imports do not resolve.
 
@@ -93,8 +93,17 @@ and puts the decision on the record. It applies the effort level of the rung a
 session climbed to, and `oa_effort` is the only way to climb. At the end of a
 session it collects what happened and asks the archivist to distil it into
 candidate memories, which the archivist posts on the board for the Lead to
-read. The archivist runs in a child session of the session it harvests, so it
-stays out of your session history.
+read. The archivist runs in a session of its own, titled after the role it
+distils, so it stays out of your session history.
+
+Two things the OpenCode 2 host decides, and the plugin cannot:
+
+- **A command a person has to approve is an `ask` effect on the permission
+  hook.** OpenCode 2 gives a plugin no way to write the host's permission map,
+  so the approval list is asked for where the decision is made.
+- **The shell of an agent runs with the environment of the host.** OpenCode 2
+  has no `shell.env` hook, so the shell environment policy has no place to
+  tighten it: what an agent's shell sees is what the host's shell sees.
 
 ## Models
 
@@ -209,12 +218,14 @@ that agent under the other.
 The plan was written against the documentation. Seven things changed when the
 code met the real binary.
 
-1. **V1 uses `bash`, not `shell`.** The live V1 docs describe `shell`, but
-   OpenCode 1.19.3 silently drops a `shell` key in agent frontmatter and only
-   honours `bash`. Verified with `opencode agent list`. V2 uses `shell`.
+1. **The runtime is OpenCode 2, and only OpenCode 2.** The permission key is
+   `shell` and the spawn tool is `subagent`. The OpenCode 1 path, the `bash`
+   key and the `--target` flag are gone: the generator writes one shape and
+   the doctor judges one target.
 
-2. **One adapter file, not two packages.** OpenCode reads `{ id, server }` on
-   V1 and `{ id, setup }` on V2 from the same file and ignores the other key.
+2. **One adapter file, not two packages.** The plugin is a single bundled file
+   that OpenCode 2 loads, and the rules of the package live in it once, not in
+   a copy per runtime.
 
 3. **The privacy filter cannot use models.dev.** models.dev exposes limits,
    cost, tool support and modalities. It exposes no retention or training

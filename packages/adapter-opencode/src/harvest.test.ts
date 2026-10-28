@@ -2,9 +2,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type SessionClient, sessionAdapter } from './client.js';
 import { POLICIES } from './guard.js';
-import { type HarvestSession, harvest } from './harvest.js';
+import {
+  type HarvestSession,
+  harvest,
+  type PruneSession,
+  type PruneSessionRow,
+  pruneHarvestChildren,
+} from './harvest.js';
 
 let root: string;
 
@@ -260,100 +265,31 @@ describe('harvest', () => {
   });
 });
 
-/** A client whose lookup is the only part that answers. */
-function fakeClient(get: SessionClient['get'], overrides: Partial<SessionClient> = {}) {
-  return {
-    session: {
-      get,
-      create: async () => ({}),
-      messages: async () => ({}),
-      promptAsync: async () => ({}),
-      list: async () => ({}),
-      delete: async () => ({}),
-      ...overrides,
-    },
-  };
-}
-
-describe('the V1 session adapter', () => {
-  /**
-   * The lookup of a session.
-   *
-   * The lookup is optional on the harvest, because a runtime may have none.
-   * The V1 adapter always has one, and this says so rather than pretending
-   * the harvest has one.
-   */
-  function lookupOf(session: HarvestSession): (sessionID: string) => Promise<boolean> {
-    const exists = session.exists;
-    if (exists === undefined) throw new Error('the V1 adapter has no lookup');
-    return exists;
-  }
-
-  it('answers that a session exists when the server returns it', async () => {
-    const session = sessionAdapter(
-      fakeClient(async () => ({ data: { id: 'ses_1' } })),
-      root,
-    );
-    await expect(lookupOf(session)('ses_1')).resolves.toBe(true);
-  });
-
-  it('answers that a session is gone when the server says not found', async () => {
-    const session = sessionAdapter(
-      fakeClient(async () => ({ error: { name: 'NotFoundError' } })),
-      root,
-    );
-    await expect(lookupOf(session)('ses_1')).resolves.toBe(false);
-  });
-
-  it('answers that a session is gone when a wrapped error carries not found under cause', async () => {
-    // `throwOnError` wraps the parsed body in a plain Error: the outer name
-    // is 'Error', and the body the SDK returned sits at cause.body.
-    const wrapped = new Error('not found', {
-      cause: { body: { name: 'NotFoundError' }, status: 404 },
-    });
-    const session = sessionAdapter(
-      fakeClient(async () => {
-        throw wrapped;
-      }),
-      root,
-    );
-    await expect(lookupOf(session)('ses_1')).resolves.toBe(false);
-  });
-
-  it('does not report an unrelated error as present', async () => {
-    const session = sessionAdapter(
-      fakeClient(async () => ({ error: { name: 'BadRequest' } })),
-      root,
-    );
-    await expect(lookupOf(session)('ses_1')).rejects.toThrow('BadRequest');
-  });
-});
-
 const DAY = 24 * 60 * 60 * 1000;
 
-/** A client whose list and delete are the janitor's only answers. */
-function janitorClient(
-  rows: { id: string; title: string; agent?: string; time?: { created?: number } }[],
-  options: { failDelete?: string; missingDelete?: string } = {},
-) {
+/** A session runtime whose list and delete are the janitor's only answers. */
+function janitor(
+  rows: PruneSessionRow[],
+  options: { failDelete?: string } = {},
+): { session: PruneSession; deleted: string[] } {
   const deleted: string[] = [];
-  const client = fakeClient(async () => ({ data: { id: 'ses_1' } }), {
-    list: async () => ({ data: rows }),
-    delete: async ({ path }) => {
-      if (options.failDelete === path.id) throw new Error(`delete ${path.id} was refused`);
-      if (options.missingDelete === path.id) return { error: { name: 'NotFoundError' } };
-      deleted.push(path.id);
-      return { data: true };
+  const session: PruneSession = {
+    list: async () => rows,
+    delete: async (sessionID) => {
+      if (options.failDelete === sessionID) {
+        throw new Error(`delete ${sessionID} was refused`);
+      }
+      deleted.push(sessionID);
     },
-  });
-  return { client, deleted };
+  };
+  return { session, deleted };
 }
 
 describe('the harvest janitor', () => {
   const now = Date.now();
 
   it('deletes a harvest child older than seven days and keeps every other session', async () => {
-    const { client, deleted } = janitorClient([
+    const { session, deleted } = janitor([
       {
         id: 'ses_old',
         title: 'harvest scout',
@@ -385,31 +321,13 @@ describe('the harvest janitor', () => {
       },
     ]);
 
-    await sessionAdapter(client, root).prune?.();
+    await pruneHarvestChildren(session, root, now);
 
     expect(deleted).toEqual(['ses_old']);
   });
 
-  it('treats a session the server no longer has as already pruned', async () => {
-    const { client, deleted } = janitorClient(
-      [
-        {
-          id: 'ses_gone',
-          title: 'harvest scout',
-          agent: 'oa-archivist',
-          time: { created: now - 8 * DAY },
-        },
-      ],
-      { missingDelete: 'ses_gone' },
-    );
-
-    await expect(sessionAdapter(client, root).prune?.()).resolves.toBeUndefined();
-    expect(deleted).toHaveLength(0);
-    expect(await auditEntries()).toHaveLength(0);
-  });
-
   it('records a failed delete without breaking the harvest', async () => {
-    const { client } = janitorClient(
+    const { session } = janitor(
       [
         {
           id: 'ses_old',
@@ -420,19 +338,18 @@ describe('the harvest janitor', () => {
       ],
       { failDelete: 'ses_old' },
     );
-    const adapter = sessionAdapter(client, root);
     const fake = fakeSession([{ parts: [{ type: 'text', text: 'a candidate' }] }]);
     let pruning: Promise<void> | undefined;
-    const session: HarvestSession = {
+    const harvestSession: HarvestSession = {
       ...fake.session,
       prune: () => {
-        pruning = adapter.prune?.() ?? Promise.resolve();
+        pruning = pruneHarvestChildren(session, root, now);
         return pruning;
       },
     };
 
     const result = await harvest({
-      session,
+      session: harvestSession,
       root,
       sessionID: 'ses_scout',
       role: 'scout',

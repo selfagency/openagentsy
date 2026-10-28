@@ -15,15 +15,13 @@ export function joinRoot(root: string, path: string): string {
 }
 
 /**
- * The write guard, the one rule both runtimes apply.
+ * The write guard, the one rule the runtime applies.
  *
  * A write is allowed only when a lease covers the path and the lease belongs
  * to the agent asking. Every decision is on record: the refusals, and the
  * writes that were allowed, because a log that only holds the refusals
  * cannot answer "was this file ever written?".
  */
-
-const WRITE_TOOLS = new Set(['edit', 'write', 'patch', 'apply_patch']);
 
 /** The path a write tool is aimed at, whatever the tool calls it. */
 function targetPathOf(args: unknown): string | undefined {
@@ -136,65 +134,4 @@ export async function checkWrite(
     sessionID,
   });
   return { effect: 'allow', reason: decision.reason };
-}
-
-/**
- * Check a write against the leases, and record the decision.
- *
- * Throws when the write is refused, so the agent is told and the tool call
- * ends.
- */
-export async function guardWrite(
-  root: string,
-  toolName: string,
-  args: unknown,
-  agent: string | undefined,
-  sessionID?: string,
-): Promise<void> {
-  if (!WRITE_TOOLS.has(toolName)) return;
-
-  // A write from a session whose agent is not known is a write nobody can
-  // be held to. The rule is a lease rule, and a lease needs a holder, so the
-  // write is refused rather than let through unchecked.
-  if (!agent) {
-    await recordDecision(root, {
-      policyId: 'oa.lease.write',
-      actor: 'unknown',
-      action: toolName,
-      resource: '(unidentified session)',
-      effect: 'deny',
-      detail: 'the session carries no agent, so no lease can be attributed to it',
-      sessionID,
-    });
-    throw new Error(
-      'OpenAgentsy blocked this write. The session carries no agent, so the lease rule cannot be applied. Ask the Lead to run this session under a role.',
-    );
-  }
-
-  const paths = targetPathsOf(toolName, args);
-  if (paths.length === 0) {
-    // A write tool with no readable target is a write whose path cannot be
-    // checked. It is refused for the same reason an unknown agent is.
-    await recordDecision(root, {
-      policyId: 'oa.lease.write',
-      actor: agent,
-      action: toolName,
-      resource: '(no readable path)',
-      effect: 'deny',
-      detail: 'the tool call names no path, so no lease can be checked',
-      sessionID,
-    });
-    throw new Error(
-      'OpenAgentsy blocked this write. The tool call names no path, so the lease rule cannot be applied.',
-    );
-  }
-
-  for (const path of paths) {
-    const result = await checkWrite(root, { toolName, path, agent, sessionID });
-    if (result?.effect === 'deny') {
-      throw new Error(
-        `OpenAgentsy blocked this write. ${result.reason} Ask the Lead for a lease, then retry.`,
-      );
-    }
-  }
 }

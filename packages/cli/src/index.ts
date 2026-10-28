@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import type { Target } from '@openagentsy/core';
 import { formatApproveResult, runApprove } from './commands/approve.js';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
@@ -24,14 +23,13 @@ import {
 } from './commands/lessons.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
 import { runSetup } from './commands/setup.js';
-import { detectOpenCode, targetForVersion } from './opencode.js';
 
 const USAGE = `openagentsy <command> [options]
 
 Commands:
   audit              Report the quality findings of the change, and say which path ran
   board              Show the records, leases and budgets, for a human to read
-  build              Generate the agent, command and skill files for a target OpenCode version
+  build              Generate the agent, command and skill files
   doctor             Report what is installed, where it came from, and what is missing
   ledger             Show the tokens, the cost and the waste of the work
   ledger export      Write the counters of the ledger as JSON
@@ -53,7 +51,6 @@ Options:
   --all               Audit the whole project instead of the changed files
   --base <ref>        The ref the changed files are measured against (default: HEAD)
   --since <when>      How far back to look (default: 30 days ago)
-  --target v1|v2      OpenCode version to generate for (default: detected)
   --out <dir>         Output directory for build (default: <root>/.opencode)
   --roles <file>      Roles file (default: <root>/roles.yaml)
   --lock <file>       Model lock file (default: <root>/openagentsy.models.lock.json)
@@ -76,7 +73,6 @@ Options:
 export type Values = {
   root?: string | undefined;
   since?: string | undefined;
-  target?: string | undefined;
   out?: string | undefined;
   roles?: string | undefined;
   lock?: string | undefined;
@@ -96,22 +92,14 @@ export type Values = {
   help?: boolean | undefined;
 };
 
-async function resolveTarget(explicit: string | undefined): Promise<Target> {
-  if (explicit === 'v1' || explicit === 'v2') return explicit;
-  const version = await detectOpenCode();
-  return version ? targetForVersion(version) : 'v1';
-}
-
 async function buildCommand(root: string, values: Values): Promise<number> {
-  const target = await resolveTarget(values.target);
   const result = await runBuild({
     root,
-    target,
     ...(values.out ? { outDir: values.out } : {}),
     ...(values.roles ? { rolesPath: values.roles } : {}),
     ...(values.lock ? { lockPath: values.lock } : {}),
   });
-  process.stdout.write(`built for ${target}\n`);
+  process.stdout.write('built\n');
   process.stdout.write(`  agents   ${result.agents.length}\n`);
   process.stdout.write(`  commands ${result.commands.join(', ')}\n`);
   process.stdout.write(`  skills   ${result.skills.join(', ') || 'none'}\n`);
@@ -184,17 +172,13 @@ async function ledgerCommand(root: string, values: Values, positionals: string[]
 }
 
 async function setupCommand(root: string, values: Values): Promise<number> {
-  const target = await resolveTarget(values.target);
   const result = await runSetup({
     root,
-    target,
     ...(values.config ? { configPath: values.config } : {}),
     ...(values['dry-run'] ? { dryRun: true } : {}),
     ...(values['magic-context'] ? { magicContext: true } : {}),
   });
-  process.stdout.write(
-    `${result.dryRun ? 'would write' : 'wrote'} ${result.configPath} for ${target}\n`,
-  );
+  process.stdout.write(`${result.dryRun ? 'would write' : 'wrote'} ${result.configPath}\n`);
   for (const key of result.changed) {
     process.stdout.write(`  ${key}\n`);
   }
@@ -410,7 +394,6 @@ export async function main(argv: string[]): Promise<number> {
     options: {
       root: { type: 'string' },
       since: { type: 'string' },
-      target: { type: 'string' },
       out: { type: 'string' },
       roles: { type: 'string' },
       lock: { type: 'string' },

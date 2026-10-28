@@ -4,7 +4,6 @@ import {
   openLedger,
   recordAssistantMessage,
 } from '@openagentsy/ledger';
-import type { ClientLike } from './client.js';
 import { activeBean, appendAudit, POLICIES, roleKeyForAgent } from './guard.js';
 
 /**
@@ -117,35 +116,4 @@ export async function bridgeToLedger(root: string, input: BridgeInput): Promise<
   } catch (error) {
     await recordBridgeFailure(root, input, error);
   }
-}
-
-/**
- * The session at the top of the chain, with a bound on the walk.
- *
- * The ledger rolls a subagent's usage up to the session that started it, so
- * the bridge walks the parents. A session whose parent cannot be read is its
- * own root: the walk stops rather than guess, and the usage stays on the
- * session that is known.
- */
-export async function rootSessionOf(
-  client: ClientLike,
-  sessionID: string,
-  directory: string,
-): Promise<string> {
-  let current = sessionID;
-  for (let depth = 0; depth < 64; depth += 1) {
-    let parent: string | undefined;
-    try {
-      const found = await client.session.get({
-        path: { id: current },
-        query: { directory },
-      });
-      parent = found.data?.parentID;
-    } catch {
-      return current;
-    }
-    if (parent === undefined || parent === current) return current;
-    current = parent;
-  }
-  return current;
 }

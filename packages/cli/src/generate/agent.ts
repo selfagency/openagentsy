@@ -2,8 +2,6 @@ import {
   agentId,
   type RoleDefinition,
   type RolesFile,
-  type Target,
-  toV1Permissions,
   toV2Permissions,
   withProtectedPaths,
 } from '@openagentsy/core';
@@ -11,29 +9,12 @@ import { stringify } from 'yaml';
 import { renderPrompt } from './prompt.js';
 
 export type AgentRenderOptions = {
-  target: Target;
   model?: string;
   modelVariant?: string;
   effort?: { start?: string; ceiling?: string };
 };
 
 type Frontmatter = Record<string, unknown>;
-
-function v1Frontmatter(
-  role: RoleDefinition,
-  permissions: Record<string, ReturnType<typeof toV1Permissions>[string]>,
-  model: string | undefined,
-): Frontmatter {
-  const frontmatter: Frontmatter = {
-    description: role.description,
-    mode: role.mode,
-  };
-  if (model) frontmatter.model = model;
-  frontmatter.steps = role.steps;
-  if (role.hidden) frontmatter.hidden = true;
-  frontmatter.permission = permissions;
-  return frontmatter;
-}
 
 function v2Frontmatter(
   role: RoleDefinition,
@@ -57,11 +38,11 @@ function renderFrontmatter(frontmatter: Frontmatter): string {
 }
 
 /**
- * Render one agent file for one OpenCode target.
+ * Render one agent file for OpenCode 2.
  *
- * V1 takes a `permission` map and calls the spawn tool `task`. V2 takes an
- * ordered `permissions` list and calls it `subagent`. The role definition is
- * identical for both, so the mapping lives here and nowhere else.
+ * The frontmatter takes an ordered `permissions` list and calls the spawn
+ * tool `subagent`. The role definition carries the vocabulary of the
+ * project, and the mapping onto the host lives in `@openagentsy/core`.
  */
 export function renderAgent(
   role: RoleDefinition,
@@ -70,10 +51,12 @@ export function renderAgent(
 ): string {
   const permissions = withProtectedPaths(role, roles.protectedPaths);
 
-  const frontmatter =
-    options.target === 'v1'
-      ? v1Frontmatter(role, toV1Permissions(permissions), options.model)
-      : v2Frontmatter(role, toV2Permissions(permissions), options.model, options.modelVariant);
+  const frontmatter = v2Frontmatter(
+    role,
+    toV2Permissions(permissions),
+    options.model,
+    options.modelVariant,
+  );
 
   return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role, options.effort ?? {})}`;
 }

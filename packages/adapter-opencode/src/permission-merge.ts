@@ -1,4 +1,17 @@
-import type { PermissionEffect, V1PermissionBlock, V1PermissionValue } from '@openagentsy/core';
+import type { PermissionEffect } from '@openagentsy/core';
+
+/**
+ * The value of one permission entry: an effect, or a map of patterns to
+ * effects.
+ *
+ * The shape is the host's own, and it is the shape of the host that reads
+ * OpenCode 1 permission configs. The types live here, next to the merge
+ * that uses them, so the shared package carries one vocabulary.
+ */
+export type V1PermissionValue = PermissionEffect | Record<string, PermissionEffect>;
+
+/** The permission block of a host config: an action name to its value. */
+export type V1PermissionBlock = Record<string, V1PermissionValue>;
 
 /**
  * The permission merge (§8.3).

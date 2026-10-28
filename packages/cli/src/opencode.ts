@@ -4,7 +4,6 @@ import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import type { Target } from '@openagentsy/core';
 
 const execFileAsync = promisify(execFile);
 
@@ -32,10 +31,6 @@ export async function detectOpenCode(): Promise<OpenCodeVersion | undefined> {
   } catch {
     return undefined;
   }
-}
-
-export function targetForVersion(version: OpenCodeVersion): Target {
-  return version.major >= 2 ? 'v2' : 'v1';
 }
 
 /** Project config file names, in the order OpenCode prefers them. */
