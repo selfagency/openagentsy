@@ -1,6 +1,6 @@
 {
   "name": "@openagentsy/footprint",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Grand Slopulissimo <slopulissimo@voxslopuli.org>",
   "type": "module",
   "exports": {
