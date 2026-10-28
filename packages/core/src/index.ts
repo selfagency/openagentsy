@@ -7,6 +7,7 @@ export * from './paths.js';
 export * from './permissions.js';
 export * from './quality-skills.js';
 export * from './redact.js';
+export * from './report/index.js';
 export * from './roles.js';
 export * from './roots.js';
 export * from './tool-names.js';

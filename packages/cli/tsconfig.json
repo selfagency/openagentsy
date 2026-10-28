@@ -11,6 +11,9 @@
       "path": "../core"
     },
     {
+      "path": "../footprint"
+    },
+    {
       "path": "../hooks"
     },
     {
@@ -18,6 +21,9 @@
     },
     {
       "path": "../ledger"
+    },
+    {
+      "path": "../quality"
     }
   ]
 }

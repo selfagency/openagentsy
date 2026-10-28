@@ -25,6 +25,7 @@ import {
   runLessons,
 } from './commands/lessons.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
+import { ethicalReportAsJson, formatEthicalReport, runEthicalReport } from './commands/report.js';
 import { runSetup } from './commands/setup.js';
 
 const USAGE = `openagentsy <command> [options]
@@ -52,13 +53,17 @@ Commands:
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
-  models switch      Switch the provider, re-pick the models, and write the lock file
-
+  models switch        Switch the provider, re-pick the models, and write the lock file
+  report --ethical     Report what the run cost, and what it was worth
 Options:
   --root <dir>        Project directory (default: current directory)
   --all               Audit the whole project instead of the changed files
   --base <ref>        The ref the changed files are measured against (default: HEAD)
   --since <when>      How far back to look (default: 30 days ago)
+  --session <id>      Report one session, and the subagents that rolled up into it
+  --bean <id>         Report one bean: the rows whose task is that bean
+  --check             Exit nonzero when a floor finding is open
+  --ethical           Report the run in the form of §12
   --out <dir>         Output directory for build (default: <root>/.opencode)
   --roles <file>      Roles file (default: <root>/roles.yaml)
   --lock <file>       Model lock file (default: <state root>/openagentsy.models.lock.json)
@@ -97,6 +102,10 @@ export type Values = {
   yes?: boolean | undefined;
   json?: boolean | undefined;
   ttl?: string | undefined;
+  session?: string | undefined;
+  bean?: string | undefined;
+  ethical?: boolean | undefined;
+  check?: boolean | undefined;
   help?: boolean | undefined;
 };
 
@@ -198,6 +207,28 @@ async function ledgerCommand(
   }
   process.stdout.write(formatLedgerReport(report));
   return 0;
+}
+
+/**
+ * The ethical report (§12).
+ *
+ * The report is local: it reads the ledger, the board and the stores of the
+ * state root, it writes nothing, and it reaches no network. The `--check`
+ * flag makes it a gate, and the exit code is the gate's answer.
+ */
+async function reportCommand(roots: ProjectRoots, values: Values): Promise<number> {
+  const report = await runEthicalReport(roots, {
+    ...(values.session === undefined ? {} : { session: values.session }),
+    ...(values.bean === undefined ? {} : { bean: values.bean }),
+    ...(values.since === undefined ? {} : { since: values.since }),
+    ...(values.check === true ? { check: true } : {}),
+  });
+  if (values.json === true) {
+    process.stdout.write(ethicalReportAsJson(report));
+    return report.exitCode;
+  }
+  process.stdout.write(formatEthicalReport(report));
+  return report.exitCode;
 }
 
 async function setupCommand(roots: ProjectRoots, values: Values): Promise<number> {
@@ -424,6 +455,7 @@ const COMMANDS: Record<
   approve: approveCommand,
   setup: setupCommand,
   models: modelsCommand,
+  report: reportCommand,
 };
 
 /**
@@ -465,6 +497,10 @@ export async function main(argv: string[], options: CommandOptions = {}): Promis
       yes: { type: 'boolean' },
       json: { type: 'boolean' },
       ttl: { type: 'string' },
+      session: { type: 'string' },
+      bean: { type: 'string' },
+      ethical: { type: 'boolean' },
+      check: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });

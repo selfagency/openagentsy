@@ -12,9 +12,11 @@
   },
   "dependencies": {
     "@openagentsy/core": "0.1.0",
+    "@openagentsy/footprint": "workspace:^",
     "@openagentsy/hooks": "workspace:^",
     "@openagentsy/ledger": "workspace:^",
     "@openagentsy/models": "0.1.0",
+    "@openagentsy/quality": "workspace:^",
     "jsonc-parser": "^3.3.1",
     "yaml": "^2.8.0"
   },
