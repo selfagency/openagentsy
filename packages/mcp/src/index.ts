@@ -34,6 +34,7 @@ import {
 } from '@openagentsy/core';
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
+import { CONFORMANCE_TOOL_NAME, createConformanceTools } from './conformance.js';
 import { ledgerReaders } from './ledger-usage.js';
 import { createLessonTools } from './lessons.js';
 import { failure, type McpToolResult, text } from './mcp-tool.js';
@@ -178,6 +179,7 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
 - oa_task_*: the todo list of the project. list, show, create, update, next, archive.
 - oa_memory_*: the memories a person decided to keep. search, list. The decide tool is a person's, not an agent's.
+- oa_conformance_report: what is proven, observed or unverified about the OpenCode host, one capability at a time, with the evidence of an observed one. It never writes the evidence.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
 
 /**
@@ -441,6 +443,22 @@ for (const tool of WORKSPACE_TOOLS) {
     async (input) => tool.handler(input),
   );
 }
+
+// --- conformance ------------------------------------------------------------
+
+// The conformance tool reports what is proven, observed or unverified. It
+// reads the project's own files and the evidence of the state root, and it
+// writes neither.
+const CONFORMANCE_TOOLS = createConformanceTools({ workspace, stateRoot });
+
+server.registerTool(
+  CONFORMANCE_TOOL_NAME,
+  {
+    description: CONFORMANCE_TOOLS.oa_conformance_report.description,
+    inputSchema: CONFORMANCE_TOOLS.oa_conformance_report.inputSchema,
+  },
+  async (input) => CONFORMANCE_TOOLS.oa_conformance_report.handler(input),
+);
 
 // --- leases -----------------------------------------------------------------
 
