@@ -60,9 +60,17 @@ function cleanEnv(): NodeJS.ProcessEnv {
  * The fsmonitor hook is off, as it is in the command: the hook of a
  * machine whose daemon is not running answers with an error, and the
  * scope would come back empty.
+ *
+ * The signing is off too, and for the same kind of reason: a machine whose
+ * global config asks for a signature would need a signing agent to answer,
+ * and a test that needs an agent to answer is a test that fails on a
+ * machine without one. A test signs nothing.
  */
 async function git(root: string, args: string[]): Promise<void> {
-  await exec('git', ['-c', 'core.fsmonitor=false', ...args], { cwd: root, env: cleanEnv() });
+  await exec('git', ['-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false', ...args], {
+    cwd: root,
+    env: cleanEnv(),
+  });
 }
 
 /** A project with a commit in it, so the changed scope has a base. */
