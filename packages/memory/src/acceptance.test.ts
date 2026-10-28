@@ -31,6 +31,21 @@ async function promptFiles(dir: string): Promise<string[]> {
 /** The two names the decide tool is called by. */
 const DECIDE_NAMES = ['oa_memory_decide', 'openagentsy_memory_decide'] as const;
 
+/**
+ * The prompt body, without the frontmatter.
+ *
+ * The frontmatter carries the permission map, and the permission map may
+ * name a tool: the agent is allowed to search. What the exit test is
+ * about is a prompt that calls it, so the frontmatter is not the text
+ * under test.
+ */
+function promptBody(content: string): string {
+  if (!content.startsWith('---')) return content;
+  const lines = content.split('\n');
+  const end = lines.indexOf('---', 1);
+  return end === -1 ? content : lines.slice(end + 1).join('\n');
+}
+
 describe('§4.6 the exit tests', () => {
   it('1. a candidate a person approved is found by a term in its text', async () => {
     const { root, remove } = await temporaryRoot();
@@ -133,7 +148,9 @@ describe('§4.6 the exit tests', () => {
       if (!existsSync(path)) continue;
       for (const file of await promptFiles(path)) {
         const content = await readFile(file, 'utf8');
-        expect(content).not.toContain('oa_memory_search');
+        // The permission map may name the tool: the agent is allowed to
+        // search. What must not happen is a prompt that calls it.
+        expect(promptBody(content)).not.toContain('oa_memory_search');
       }
     }
   });

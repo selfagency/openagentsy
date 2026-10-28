@@ -6,5 +6,12 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }]
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../quality"
+    }
+  ]
 }
