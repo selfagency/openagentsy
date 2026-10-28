@@ -1,11 +1,11 @@
 ---
 # oa-hbq1
 title: Publish the eleven packages to npm
-status: todo
+status: completed
 type: task
 priority: normal
 created_at: 2026-10-28T15:25:06Z
-updated_at: 2026-10-28T19:01:57Z
+updated_at: 2026-10-28T19:48:39Z
 ---
 
 The trusted publishers must name voxslopuli (GitHub Actions, repository openagentsy, workflow publish.yml, no environment) and the publish workflow must publish from a staged copy outside the tree. Both are the human's actions: the trusted publisher is on npm's site and the workflow is a person-only file.
@@ -14,7 +14,7 @@ The trusted publishers must name voxslopuli (GitHub Actions, repository openagen
 
 0.2.1 and 0.2.2 are published by hand (all eleven packages, with the author on every one, and the workspace ranges written out as real versions). The last publish was 0.2.2, which also carries the shebang fix: the bin ran under node and died on bun:sqlite, so the published package could not be started at all.
 
-WHAT IS STILL A PERSON'S ACTION: the publish workflow. Until it stages each package outside the tree and skips the versions already on the registry, every release made through it publishes packages that cannot be installed, because npm does not rewrite the workspace: ranges - the old 0.1.1 releases carry workspace:^ and fail to install.
+The publish workflow is fixed and it works: it stages each package outside the tree, it names the exact version when it checks the registry, it runs on Node 24, and the 0.2.4 release went through it with OIDC - all eleven packages on npm with the author, the workspace ranges written out as real versions, and the SLSA provenance attestation npm generates for a trusted publish. The trusted publisher is therefore validated, and it no longer expires on 2026-10-30.
 
 All eleven packages carry the trusted publisher that can publish from publish.yml (repository voxslopuli/openagentsy, no environment, with the permissions to publish, to stage and to manage dist-tags). Verified against the registry on 2026-10-28: 11 of 11.
 
@@ -156,3 +156,13 @@ TWO PERSON-ONLY ACTIONS REMAIN.
           done
 
 The stage step is scripts/stage-package.mjs, which copies the package and writes the workspace: ranges out as the versions they name. The skip is there because 0.2.0 is already on the registry for all eleven packages, and npm refuses to publish over a version.
+
+
+
+## Summary of Changes
+
+- The eleven packages are published at 0.2.4 through the publish workflow, with OIDC, and every one carries the author, the real dependency ranges and the provenance attestation.
+- The publish workflow stages each package outside the tree (npm refuses to run in this tree, and npm does not rewrite the workspace: ranges, so a package published from the tree cannot be installed), names the exact version when it checks the registry, and runs on Node 24.
+- The old unscoped openagentsy package is deprecated on every version with the message that it moved to @voxslopuli/openagentsy.
+- The CLI's bin runs on bun (the board is bun:sqlite), which is what made the published package startable at all.
+
