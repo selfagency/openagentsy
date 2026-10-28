@@ -2,38 +2,143 @@
 
 Every release, from the commits that made it.
 
-## Unreleased
-
-### Fixed
-
-- the Lead can dispatch again: the spawn catch-all is written with two asterisks, so the wildcard rewrite of the memory plugin cannot turn deny-all-except-six into deny-all (`8afd075`)
-- the roles can run the gates this project runs: the vitest command, the bun scripts, biome and fallow were missing from every shell map (`f7e95d3`)
-- the killed-builder case fails when the agent says nothing: it asks for the record that reports the non completion, and it reads a claim and a denial per clause (`0b44448`)
-- the harness surfaces the host errors: it reads the server log, attributes each to the case that owns the session, and fails the suite at teardown (`aec4f56`)
-- the harvest checks that the archivist child still exists before it prompts it, and the V2 harvest is off until the V2 context can answer (`aec4f56`)
-- a turn is given up only when its trial would have been: a Lead's turn waits for the builder it dispatches, so one turn covers the child's whole session, and the 600 second guard was shorter than that (`e1a3053`)
-- a provider refusal is written down, with its status and its wait: a run that is slow because the provider refuses looked exactly like a run that is slow because the model is slow (`e1a3053`)
-
-### Changed
-
-- the project speaks OpenCode 2 only: the adapter, the generator and the CLI dropped the OpenCode 1 path, the `--target` flag is gone, the permission key is `shell` and the spawn tool is `subagent`
-- a command a person has to approve is an `ask` effect on the permission hook, because OpenCode 2 gives a plugin no way to write the host's permission map
-- the cases run five at a time instead of three: a case is a Lead and the builder it dispatches, so five cases are about ten sessions, and the number of provider calls does not change with the cap, so the cost of a run does not change either (`e1a3053`)
-- the shell of an agent runs with a tightened environment: OpenCode 2 has no `shell.env` hook, so the policy moved to the shell domain's `create.before` hook, and the child never sees the board's keys or the git-hook switches (`1d6580d`)
-
-### Built
-
-- the `quality` package: the rule registry, the CSS, HTML and copy rules, the comment lint, the ship gate, the sloplint bridge, the waivers and the three on-demand skills (`8aab499`, `0219532`, `bfdde20`, `138b853`, `6ce713e`, `78797b9`)
-- the `sidebar` package: the OpenCode 2 TUI blocks and their readers, the framing checks, the inbox keys and the method panel (`26a6b72`, `1c84f72`, `b2da7d3`)
-- `oa conformance`: what is proven, observed or unverified, per host capability (`46306f5`)
-- `oa report --ethical`: the one-screen account of what a run cost and what it was worth (`72fa51e`)
-- the shared state resolves to the main repository root, so a builder in a worktree sees the main board and its `.beans/` edits stay worktree-local (`14bf07e`, `efa7ede`, `232a28d`, `13171bd`)
+## 0.2.0 - 2026-10-28
 
 ### Added
 
-- the phase 2 plan is revision 3: the ethics framework, the safety benchmark suite, the incident response runbook, the privacy consolidation, the policy module library, the scope declarations, the credential broker and the sandbox for untrusted code are specified as §17–§24, and the delta document is the record of what changed
-- the first-party documents at the repository root: `ETHICS.md` states the stance and the twelve commitments, `SAFETY.md` states the controls, the eight-layer guardrail stack, the benchmark categories, the metrics and the release criteria, `GOVERNANCE.md` states the process, the six-step incident runbook and the severity matrix, and `CHANGELOG-SAFETY.md` holds them to account. They are adapted from the agentsy documents and scoped to a coding agent framework, and they carry the policy ids the rest of step 2f keys off
-- `oa doctor` reports the first-party documents: whether the project carries them, which version each one is at, and which version they agree on. A missing document is a finding, not a crash
+- **release**: a package is staged outside the tree, so npm has no root to refuse (`3ee9517`)
+- **cli**: the ethical report (`72fa51e`)
+- **sidebar**: the framing checks, the inbox keys, and the method panel (`b2da7d3`)
+- **conformance**: what is proven, observed or unverified (`46306f5`)
+- **sidebar**: the blocks and their readers (`1c84f72`)
+- **sidebar**: the package, its build, and the footprint block (`26a6b72`)
+- **cli**: the state files resolve to the main repository root (`13171bd`)
+- **adapter**: the guard reads the board of the main repository (`232a28d`)
+- **mcp**: the board resolves to the main repository root (`efa7ede`)
+- **core**: the shared state resolves to the main repository root (`14bf07e`)
+- **adapter**: the shell runs with a tightened environment (`1d6580d`)
+- **adapter**: the guard system runs on the v2 path (`9866ccf`)
+- **cli**: the audit command, and the notice for the new skills (`23dfa28`)
+- **quality**: the ship gate and the sloplint bridge (`78797b9`)
+- **skills**: the three quality skills, and the routing that loads them (`6ce713e`)
+- **hooks**: a person records a waiver, an agent may only propose one (`138b853`)
+- **hooks**: the quality check runs on every write (`d24be7c`)
+- **evals**: the harness runs against an OpenCode 2 server (`b54c84d`)
+- **quality**: the comment lint (`bfdde20`)
+- **mcp**: the task, memory and lesson tools are registered (`fc4f64c`)
+- **evals**: a client for the OpenCode 2 API (`92f04b4`)
+- **roles**: the worker roles are visible, and the Lead keeps its dispatches attached (`0eb03ad`)
+- **quality**: the HTML and copy rules (`0219532`)
+- **quality**: the rule registry and the CSS rules (`8aab499`)
+- **2c**: the guardrails, the lessons, and the approval hatch (`40e0f08`)
+- **cli**: /oa approve, one shot at a time (`497dde5`)
+- **hooks**: lessons, the eval runner, the human-only map (`b3b6d89`)
+- **adapter**: the guardrails at the hook points (section 8.2) (`11b8318`)
+- **mcp**: a delegation needs an owner and a return condition (`cbb0ec1`)
+- **board**: the recovery loop's rules and the doctor's diff (`f1b5314`)
+- **hooks**: the guardrail core (registry, rules, checks) (`e3a0e19`)
+- **ledger**: waste signals, outcomes and scan-reverts (§6.4, §6.5) (`0b31ebf`)
+- **board,adapter,mcp**: the budget check reads the ledger (§6.7) (`60ad7c7`)
+- **offload**: the local-model router (§9) (`ccacba3`)
+- **footprint**: the prefill fit, shipped dark (§5.3) (`aa6fce2`)
+- **ledger**: the numbers-only usage ledger (§6) (`5bc469b`)
+- **tasks**: Beans-compatible store, tools and prime (§3) (`a312c46`)
+- **memory**: the minimal memory slice with a human-only decide (§4) (`77b47df`)
+- **core**: fnv1a64 etag + secret redaction helpers (§3.3, §8.4) (`39e1be1`)
+- **cli**: doctor prints the config map (§13) (`f7ab908`)
+- **footprint**: EcoLogits-method estimator with ranges (`93ee6db`)
+- **adapter**: extract defineTool (§2.3) (`cb6c52b`)
+
+### Documented
+
+- **changelog**: the release's own changelog was written wrong, and this is the file before it (`bab5468`)
+- **changelog**: the 0.2.0 entry (`b66a006`)
+- the first-party ethics, safety and governance documents (`1770bf9`)
+- **plan**: revision 3, applied (`cb029d3`)
+- **plan**: the project speaks OpenCode 2 only, and the steps that landed (`5dd93ac`)
+- the handoff for phase 2d (`bad5c9e`)
+- the enumeration and the roadmap carry the Phase 2b packages (`5e4a9e9`)
+- **plans**: the 2a errata - measured values, landed notes, superseded PLAN.md items (`3182055`)
+- the roadmap's 2a list carries memory and the landed trio (`2f7226f`)
+- the workspace enumeration carries the Phase 2a packages (`bc0eafe`)
+- the phase 2 handoff for the next agent (`f3fe848`)
+
+### Fixed
+
+- **release**: the changelog names the version being released (`77b0451`)
+- **build**: the project references match the imports (`411f7ff`)
+- **config**: the board mcp and the disabled servers, in the shape OpenCode 2 reads (`da13522`)
+- **cli**: a test does not reach the network, and a test does not commit into the repository of the hook (`e46f721`)
+- **core**: the state root keeps the spelling of the paths it is compared against (`90563b7`)
+- **cli**: a test does not need a signing agent (`337ef77`)
+- **evals**: a session cannot leave the case directory (`7971f6d`)
+- **evals**: a report that says the work is not done is not a completion claim (`bedf06e`)
+- **evals**: the two faults land on a live OpenCode 2 server (`d491264`)
+- **adapter**: the v2 path kills the builder and harvests the session (`fc4bfaa`)
+- **evals**: a removed session and an injected fault are the case's own (`b803639`)
+- **evals**: a file watcher that cannot attach is not a host fault (`7d26807`)
+- **evals**: the turn ends when the server says the session is idle (`1f78304`)
+- **hooks**: a throwaway commit in the eval runner is not signed (`46946d5`)
+- **evals**: a file watcher on a throwaway directory is not a host fault (`8103c51`)
+- **evals**: the harness reads the global config it is given (`8f3b7ee`)
+- **hooks**: a suite proof needs a run, a proof has to be about its lesson (`8e653be`)
+- **adapter**: a rule that is written again is placed again, and the scope comes from the leases (`ac1d040`)
+- **approvals**: the grant is bounded, atomic, and audited where it is spent (`c76bc0f`)
+- **hooks**: the review findings on the lessons, the runner and the proof (`b9d7840`)
+- **adapter**: the merge places its rules, and the idle path is caught (`534f5e8`)
+- **board**: a skipped regeneration check is a failure, not a clean tree (`7b3c56b`)
+- **hooks**: the fifth review round on the guardrail core (`1cb52c7`)
+- **hooks**: the fourth review round on the guardrail core (`eaed30e`)
+- **hooks**: the third review round on the guardrail core (`949ddcd`)
+- **board**: the dispatch's missing fields, one no_progress writer, the doctor's target (`316746a`)
+- **hooks**: the second review round on the guardrail core (`c7db979`)
+- **hooks**: close the review findings on the guardrail core (`ece0449`)
+- **evals**: the watch lives until the harness stops it (`d0303c6`)
+- **evals**: the fault targets the dispatched child, not the titled one (`5d4ffa4`)
+- **evals**: a dispatch label names the agent it dispatched (`b3b665a`)
+- **board**: the inbox answers to the name an agent is called by (`2fee8af`)
+- **evals**: the builder's evidence confirms a claim that names the bean (`42137d8`)
+- **evals**: the harness never addresses the repository it runs in (`b44472a`)
+- **evals**: the fault case's confirmation reads the artifact from the claim (`45bf27f`)
+- **evals**: the fault case's judge criterion says what the case actually demands (`7a7c5bd`)
+- **evals**: the kill watch catches an untitled child before the race (`4528dc8`)
+- **evals**: the kill watch keeps cutting the killed session down (`ee6f323`)
+- **mcp**: op=list shows the ledger's measured usage beside the deprecated self-report (`5d1fab2`)
+- **mcp**: the deprecation sentence reaches the usage card too (`ff84b76`)
+- **offload**: never-throws closed, repair boundary, tests pinned, develop synced (`ec13f51`)
+- **footprint**: the fit's notes carry the OLS pull and the residuals their model size (`6e5ca36`)
+- **ledger**: backfill counts reasoning once; the retry test proves retries (`9665bec`)
+- **tasks**: store roots at the discovered .beans.yml directory; review findings (`98bcae6`)
+- **footprint**: version matches develop siblings; WUE per EcoLogits 0.11.3 (`5e673d7`)
+- **adapter**: export v2Tool and serialize object results (`b55b44b`)
+
+### Tested
+
+- **tasks**: the shape of the cost is the gate a runner can check (`0ad19bf`)
+- **evals, tasks**: the budget and the directory do not depend on the machine (`8116ef3`)
+- **evals, tasks**: a budget and a directory that do not depend on the machine (`915e344`)
+
+### Kept
+
+- **release**: the publish list is the whole dependency closure (`ee7b3f6`)
+- **release**: the manifests carry 0.2.0, and the voxslopuli home (`79ec52b`)
+- the lockfile drops the OpenCode 1 SDK (`e93d3c1`)
+- **adapter**: the v2 facts, measured (`c22e3ea`)
+- **workflows**: add the trailing newlines biome ci requires (`3017321`)
+
+### Changed
+
+- **core**: the tool definitions move out of the plugin (`780dba0`)
+- the project speaks OpenCode 2 only (`79672b2`)
+- **evals**: the harness speaks OpenCode 2 only (`316f758`)
+
+### Built
+
+- **eval**: the safety suite runs by hand, not on a schedule (`dead046`)
+
+### Improved
+
+- **hooks**: the write path does not carry the TypeScript compiler (`c56efc6`)
 
 ## 0.1.1 - 2026-10-26
 
@@ -321,4 +426,3 @@ the board keeps the records, the leases, the budgets and the audit trail; the le
 ### Improved
 
 - keep the global MCP servers out of the eval cases (`571f1d0`)
-
