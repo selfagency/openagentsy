@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { applyShellEnvPolicy } from '@openagentsy/hooks/shell-env';
 import { closeLedger, openLedger } from '@openagentsy/ledger';
 import { z } from 'zod';
 import { boardRoundStatus } from './board-status.js';
@@ -48,6 +49,7 @@ import { checkWrite } from './write-guard.js';
  * | `chat.params`         | `ctx.session.hook("context", ...)`         |
  * | `event`               | `ctx.event.subscribe({ signal })`          |
  * | `tool` map            | `ctx.tool.transform(...)`                  |
+ * | `shell.env`           | `ctx.shell.hook("create.before", ...)`      |
  *
  * The V2 tool hook fires with the V1 hook names and carries the tool name,
  * the arguments, the agent and the call id, and it has the two powers the
@@ -61,14 +63,19 @@ import { checkWrite } from './write-guard.js';
  * carries neither. The rule is the same one the V1 path applies: only
  * `checkWrite` decides.
  *
- * Two V1 hooks have no V2 home, and the record says so:
+ * One V1 hook has no V2 home, and the record says so:
  *
- *   - `shell.env` has no hook: the V2 shell domain takes a hook, and none of
- *     the names fires when a command runs (measured on the same server). The
- *     shell of an agent runs with the environment of the host.
  *   - `config` has no domain: the V2 context has no way to write the
  *     permission map of the host, so the commands a person has to approve
  *     are asked for through the permission hook instead.
+ *
+ * The `shell.env` hook has a home after all. The V2 shell domain takes a
+ * `create.before` hook, and the event carries the environment the child
+ * would get; the server spawns the child with that object after the hook
+ * returns, so a key taken out of it is a key the child does not see
+ * (measured on a live OpenCode 2.2.0 server, 2026-10-27). The policy runs
+ * there, so the shell of an agent runs with the environment of the host
+ * minus the keys that belong to the board.
  *
  * This path is verified against `@opencode/cli@2.1.3`.
  */
@@ -122,6 +129,12 @@ export type V2Context = {
       callback: (event: V2PermissionEvent) => Promise<void> | void,
     ) => Promise<{ dispose: () => Promise<void> }>;
   };
+  shell: {
+    hook: (
+      name: string,
+      callback: (event: V2ShellEvent) => Promise<void> | void,
+    ) => Promise<{ dispose: () => Promise<void> }>;
+  };
   event: {
     subscribe: (options?: { signal?: AbortSignal }) => AsyncIterable<V2Event>;
   };
@@ -151,6 +164,26 @@ export type V2PermissionEvent = {
   resources: readonly string[];
   effect: 'allow' | 'ask' | 'deny';
   message?: string;
+};
+
+/**
+ * The event of a shell that is about to be spawned.
+ *
+ * It carries the environment the child would get, and the server spawns the
+ * child with that object after the hook returns. A key taken out of the
+ * environment is a key the child does not see.
+ */
+export type V2ShellEvent = {
+  /** The command the child runs. */
+  command: string;
+  /** Where the child runs. */
+  cwd: string;
+  /** How long the child may run. */
+  timeout: number;
+  /** The shell the child runs under. */
+  shell: string;
+  /** The environment the child gets. */
+  env: Record<string, string | undefined>;
 };
 
 export type V2Event = {
@@ -359,6 +392,25 @@ async function registerToolHooks(ctx: V2Context, bridge: V2Bridge): Promise<void
 }
 
 /**
+ * The environment of the shell of an agent, on the V2 path.
+ *
+ * The V1 path had a `shell.env` hook that filled an object and the shell read
+ * it. The V2 shell domain takes a hook of its own, `create.before`, and the
+ * event carries the environment the child would get; the server spawns the
+ * child with that object after the hook returns. So the policy runs there:
+ * the keys that belong to the board never reach the shell of an agent.
+ *
+ * The command is not touched. The command is the resource of the permission
+ * event, so a person is asked about the command that was written, and a
+ * compound command behaves as it was written.
+ */
+async function registerShellEnvHook(ctx: V2Context): Promise<void> {
+  await ctx.shell.hook('create.before', async (event) => {
+    applyShellEnvPolicy(event.env);
+  });
+}
+
+/**
  * A permission decision, on the V2 path.
  *
  * Two things are decided here. The lease rule decides whether a write may
@@ -478,6 +530,9 @@ export async function setupV2(ctx: V2Context): Promise<(() => void) | undefined>
   const switched = new Set<string>();
 
   await registerContextHook(root, ctx, sessionAgents, switched);
+
+  // The environment of the shell of an agent, before the first command runs.
+  await registerShellEnvHook(ctx);
 
   // The rules of the package, on the V2 hook points.
   const bridge = await createV2Bridge({

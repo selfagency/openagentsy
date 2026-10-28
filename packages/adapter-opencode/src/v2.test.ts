@@ -8,6 +8,7 @@ import {
   type V2Context,
   type V2ContextEvent,
   type V2PermissionEvent,
+  type V2ShellEvent,
   type V2ToolEvent,
 } from './v2.js';
 
@@ -86,6 +87,10 @@ function fakeContext(
     name: string;
     callback: (event: V2PermissionEvent) => Promise<void> | void;
   }[] = [];
+  const shellHooks: {
+    name: string;
+    callback: (event: V2ShellEvent) => Promise<void> | void;
+  }[] = [];
   // The sessions the janitor reads. The old harvest children are here.
   const listed: unknown[] = [
     {
@@ -157,6 +162,12 @@ function fakeContext(
         return { dispose: async () => {} };
       },
     },
+    shell: {
+      hook: async (name, callback) => {
+        shellHooks.push({ name, callback });
+        return { dispose: async () => {} };
+      },
+    },
     event: {
       subscribe: async function* () {
         try {
@@ -168,7 +179,18 @@ function fakeContext(
     },
   };
 
-  return { ctx, created, prompts, agents, removed, contextHooks, toolHooks, permissionHooks, done };
+  return {
+    ctx,
+    created,
+    prompts,
+    agents,
+    removed,
+    contextHooks,
+    toolHooks,
+    permissionHooks,
+    shellHooks,
+    done,
+  };
 }
 
 /** The tool hook of a name, once the plugin registered it. */
@@ -190,6 +212,19 @@ function permissionHook(
 ): (event: V2PermissionEvent) => Promise<void> | void {
   const found = permissionHooks.find((hook) => hook.name === 'evaluate');
   if (found === undefined) throw new Error('the plugin registered no permission hook');
+  return found.callback;
+}
+
+/** The shell hook of a name, once the plugin registered it. */
+function shellHook(
+  shellHooks: {
+    name: string;
+    callback: (event: V2ShellEvent) => Promise<void> | void;
+  }[],
+  name: string,
+): (event: V2ShellEvent) => Promise<void> | void {
+  const found = shellHooks.find((hook) => hook.name === name);
+  if (found === undefined) throw new Error(`the plugin registered no ${name} shell hook`);
   return found.callback;
 }
 
@@ -560,5 +595,71 @@ describe('the output checks on the v2 path', () => {
 
     const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
     expect(audit).toContain('oa.output.flagged');
+  });
+});
+
+describe('the shell of an agent on the v2 path', () => {
+  it('takes the keys of the board out of the environment of the shell', async () => {
+    // The V1 path had a `shell.env` hook that filled an object and the shell
+    // read it, so the policy could take a key out before the command ran.
+    // The V2 shell domain has a hook of its own: `create.before`, and the
+    // event carries the environment the child would get. A key taken out of
+    // it is a key the child does not see, because the server spawns the
+    // child with that object after the hook returns (measured on a live
+    // OpenCode 2.2.0 server, 2026-10-27).
+    const { ctx, shellHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const before = shellHook(shellHooks, 'create.before');
+    const event: V2ShellEvent = {
+      command: 'echo hello',
+      cwd: root,
+      timeout: 0,
+      shell: '/bin/zsh',
+      env: {
+        PATH: '/usr/bin',
+        HUSKY: '0',
+        HUSKY_SKIP_HOOKS: '1',
+        SKIP_SIMPLE_GIT_HOOKS: '1',
+        TOGETHER_API_KEY: 'a-key',
+        TYPESAFE_API_KEY: 'a-key',
+      },
+    };
+    await before(event);
+
+    // The credentials of the board never reach the shell: a credential in a
+    // shell is a credential in every log the shell writes.
+    expect(event.env.TOGETHER_API_KEY).toBeUndefined();
+    expect(event.env.TYPESAFE_API_KEY).toBeUndefined();
+    // The switches that skip the git hooks are gone as well.
+    expect(event.env.HUSKY).toBeUndefined();
+    expect(event.env.HUSKY_SKIP_HOOKS).toBeUndefined();
+    expect(event.env.SKIP_SIMPLE_GIT_HOOKS).toBeUndefined();
+    // The shell is marked as an agent's, and the telemetry is off.
+    expect(event.env.OPENAGENTSY_AGENT).toBe('1');
+    expect(event.env.TURBO_TELEMETRY_DISABLED).toBe('1');
+    // The rest of the environment is untouched.
+    expect(event.env.PATH).toBe('/usr/bin');
+  });
+
+  it('leaves the command of the shell alone', async () => {
+    // The command is the resource of the permission event, so a person is
+    // asked about the command that was written. The hook tightens the
+    // environment and does not touch the command, so a compound command
+    // behaves as it was written.
+    const { ctx, shellHooks } = fakeContext([]);
+    await setupV2(ctx);
+
+    const before = shellHook(shellHooks, 'create.before');
+    const event: V2ShellEvent = {
+      command: 'echo a | grep b && echo c > out.txt',
+      cwd: root,
+      timeout: 0,
+      shell: '/bin/zsh',
+      env: {},
+    };
+    await before(event);
+
+    expect(event.command).toBe('echo a | grep b && echo c > out.txt');
   });
 });

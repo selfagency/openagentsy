@@ -1,4 +1,4 @@
-import type { OutputFinding } from '@openagentsy/hooks';
+import type { OutputFinding } from '@openagentsy/hooks/output-checks';
 import { type BridgeHooks, createBridge } from './bridge.js';
 import { activeBean, roleKeyForAgent, statedPathsOf } from './guard.js';
 import { readQualityMode } from './project-config.js';

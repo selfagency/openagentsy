@@ -1,4 +1,4 @@
-import { type FileRef, isReaderTool } from '@openagentsy/hooks';
+import { type FileRef, isReaderTool } from '@openagentsy/hooks/event';
 import { patchFiles } from './patch-paths.js';
 
 /**

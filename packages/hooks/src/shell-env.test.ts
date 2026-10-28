@@ -32,4 +32,17 @@ describe('applyShellEnvPolicy', () => {
     applyShellEnvPolicy(env);
     expect(Object.keys(env).sort()).toEqual(['OPENAGENTSY_AGENT', 'TURBO_TELEMETRY_DISABLED']);
   });
+
+  it('takes a key out of an environment that holds an absent value', () => {
+    // The V2 event types the environment of a shell that way: a value may be
+    // absent. The policy is the same either way.
+    const env: Record<string, string | undefined> = {
+      TYPESAFE_API_KEY: 'a-key',
+      PATH: undefined,
+    };
+    applyShellEnvPolicy(env);
+    expect(env.TYPESAFE_API_KEY).toBeUndefined();
+    expect(env.PATH).toBeUndefined();
+    expect(env.OPENAGENTSY_AGENT).toBe('1');
+  });
 });

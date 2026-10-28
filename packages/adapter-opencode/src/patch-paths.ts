@@ -1,4 +1,4 @@
-import type { FileRef } from '@openagentsy/hooks';
+import type { FileRef } from '@openagentsy/hooks/event';
 
 /**
  * The paths an apply_patch call touches.

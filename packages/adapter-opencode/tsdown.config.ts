@@ -5,6 +5,11 @@ import { defineConfig } from 'tsdown';
  * imports do not resolve. The bundle has to stand on its own, so zod, the
  * core package and the ledger are inlined and the output has no external
  * dependency.
+ *
+ * The hooks package is named with a pattern as well, because the adapter
+ * reaches its modules by their own path. A name without the pattern is left
+ * external, and a plugin that imports a package the machine does not have
+ * fails to load at the worst possible moment.
  */
 export default defineConfig({
   entry: ['src/index.ts'],
@@ -17,6 +22,7 @@ export default defineConfig({
     'zod',
     '@openagentsy/core',
     '@openagentsy/hooks',
+    /^@openagentsy\/hooks\/.+$/,
     '@openagentsy/ledger',
     '@openagentsy/memory',
     '@openagentsy/tasks',

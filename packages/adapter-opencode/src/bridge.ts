@@ -1,16 +1,10 @@
-import {
-  applyShellEnvPolicy,
-  baseToolName,
-  createOaRegistry,
-  defaultRules,
-  type FileRef,
-  type HookRegistry,
-  type OutputFinding,
-  outputCheckRules,
-  type QualityMode,
-  type Rule,
-  toolVocabulary,
-} from '@openagentsy/hooks';
+import { baseToolName, toolVocabulary } from '@openagentsy/hooks/base-tool';
+import type { FileRef } from '@openagentsy/hooks/event';
+import { type OutputFinding, outputCheckRules } from '@openagentsy/hooks/output-checks';
+import type { QualityMode } from '@openagentsy/hooks/quality/rule';
+import { createOaRegistry, type HookRegistry, type Rule } from '@openagentsy/hooks/registry';
+import { defaultRules } from '@openagentsy/hooks/rules';
+import { applyShellEnvPolicy } from '@openagentsy/hooks/shell-env';
 import { changedFiles } from './changed-files.js';
 import {
   mergePermissions,
