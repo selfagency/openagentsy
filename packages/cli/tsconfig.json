@@ -11,7 +11,19 @@
       "path": "../core"
     },
     {
+      "path": "../footprint"
+    },
+    {
+      "path": "../hooks"
+    },
+    {
       "path": "../models"
+    },
+    {
+      "path": "../ledger"
+    },
+    {
+      "path": "../quality"
     }
   ]
 }

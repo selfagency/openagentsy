@@ -39,10 +39,10 @@ const HARVEST_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
  * off, and anything else leaves it on. A pipeline that stops on a typo
  * loses memories silently, so only the word `off` stops it.
  */
-export async function harvestEnabled(root: string): Promise<boolean> {
+export async function harvestEnabled(stateRoot: string): Promise<boolean> {
   let text: string;
   try {
-    text = await readFile(join(root, '.openagentsy', 'harvest'), 'utf8');
+    text = await readFile(join(stateRoot, '.openagentsy', 'harvest'), 'utf8');
   } catch {
     return true;
   }
@@ -75,15 +75,23 @@ export type HarvestSession = {
   /**
    * Whether a session still exists, asked of the server.
    *
-   * It is required, not optional: a runtime that cannot answer must say so
-   * rather than leave the harvest to guess. A message list cannot answer
-   * this: a session that exists and has not been spoken in yet and a session
-   * that was deleted both answer with no messages, so an empty list proves
-   * neither. The archivist is created as a child of the session that is
-   * ending; when that session is deleted the child goes with it, and the
-   * server's own lookup is the only answer that can tell the two apart.
+   * It is optional. A runtime that cannot look a session up leaves it out,
+   * and the harvest then prompts the archivist without the check. The check
+   * exists because the archivist used to be created as a child of the
+   * session that is ending: when that session was deleted the child went
+   * with it, and the message insert failed the foreign key instead of
+   * reaching the archivist. The archivist now stands on its own, so the
+   * check is a guard and not a requirement, and a runtime with no lookup to
+   * ask does not have to fake one.
+   *
+   * A message list cannot answer this: a session that exists and has not
+   * been spoken in yet and a session that was deleted both answer with no
+   * messages, so an empty list proves neither. A runtime that has a lookup
+   * must use it, and a runtime that cannot answer must say so rather than
+   * leave the harvest to guess: a lookup that throws is a failure on the
+   * record, not a prompt.
    */
-  exists: (sessionID: string) => Promise<boolean>;
+  exists?: (sessionID: string) => Promise<boolean>;
   /**
    * Delete the harvest children the janitor owns.
    *
@@ -97,7 +105,8 @@ export type HarvestSession = {
 
 export type HarvestInput = {
   session: HarvestSession;
-  root: string;
+  /** The state root: the audit log the decisions are read from lives there. */
+  stateRoot: string;
   sessionID: string;
   /** The role that ran the session. */
   role: string;
@@ -115,14 +124,14 @@ export type HarvestInput = {
 export async function harvest(
   input: HarvestInput,
 ): Promise<{ harvested: boolean; reason: string }> {
-  const { session, root, sessionID, role, agent } = input;
+  const { session, stateRoot, sessionID, role, agent } = input;
   if (NOT_HARVESTED.has(role)) {
     return { harvested: false, reason: `${role} sessions are not harvested` };
   }
 
   const messages = await session.messages(sessionID);
   const transcript = transcriptOf(messages);
-  const decisions = await decisionsOf(root, sessionID);
+  const decisions = await decisionsOf(stateRoot, sessionID);
 
   // Nothing new means nothing to keep: no writes, no refusals, no words.
   if (transcript.length === 0 && decisions.length === 0) {
@@ -147,7 +156,7 @@ export async function harvest(
       error instanceof Error
         ? error
         : new Error('the server refused to create the archivist session');
-    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    await recordHarvestFailure(stateRoot, { agent, sessionID, error: failure });
     return { harvested: false, reason: failure.message };
   }
   if (archivistSession === undefined) {
@@ -162,21 +171,14 @@ export async function harvest(
   //
   // A runtime that cannot answer is never guessed at: prompting a session
   // that may be gone is the failure this check exists to prevent. A lookup
-  // that throws is a failure on the record, not a prompt.
-  let present: boolean;
-  try {
-    present = await session.exists(archivistSession);
-  } catch (error) {
-    const failure =
-      error instanceof Error
-        ? error
-        : new Error('the runtime cannot confirm that a session still exists');
-    await recordHarvestFailure(root, { agent, sessionID, error: failure });
-    return { harvested: false, reason: failure.message };
-  }
-  if (!present) {
-    const error = new Error(`the archivist session ${archivistSession} no longer exists`);
-    await recordHarvestFailure(root, { agent, sessionID, error });
+  // that throws is a failure on the record, not a prompt. A runtime with no
+  // lookup at all is a runtime that says so, and the harvest goes on: the
+  // archivist stands on its own and the cascade it guarded against does not
+  // happen.
+  const promptable = await mayPrompt(session, archivistSession);
+  if (!promptable.ok) {
+    const error = new Error(promptable.reason);
+    await recordHarvestFailure(stateRoot, { agent, sessionID, error });
     return { harvested: false, reason: error.message };
   }
 
@@ -185,7 +187,7 @@ export async function harvest(
   } catch (error) {
     const failure =
       error instanceof Error ? error : new Error('the archivist could not be prompted');
-    await recordHarvestFailure(root, { agent, sessionID, error: failure });
+    await recordHarvestFailure(stateRoot, { agent, sessionID, error: failure });
     return { harvested: false, reason: failure.message };
   }
 
@@ -203,6 +205,36 @@ export async function harvest(
 }
 
 /**
+ * The answer of the lookup: the harvest may go on, or it may not.
+ */
+type PromptCheck = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Whether the harvest may prompt the archivist.
+ *
+ * A runtime with no lookup to ask says so by leaving the lookup out, and
+ * the harvest goes on: the archivist stands on its own, so the cascade the
+ * lookup guarded against does not happen. A lookup that says the session is
+ * gone is the same end state: the prompt would fail instead of reaching the
+ * archivist. A lookup that throws is a failure on the record, not a prompt.
+ */
+async function mayPrompt(session: HarvestSession, sessionID: string): Promise<PromptCheck> {
+  if (session.exists === undefined) return { ok: true };
+  try {
+    if (await session.exists(sessionID)) return { ok: true };
+    return { ok: false, reason: `the archivist session ${sessionID} no longer exists` };
+  } catch (error) {
+    return {
+      ok: false,
+      reason:
+        error instanceof Error
+          ? error.message
+          : 'the runtime cannot confirm that a session still exists',
+    };
+  }
+}
+
+/**
  * A harvest that failed, on the record.
  *
  * The failure is put on the record rather than thrown, because a harvest
@@ -210,10 +242,10 @@ export async function harvest(
  * this the same way.
  */
 export async function recordHarvestFailure(
-  root: string,
+  stateRoot: string,
   input: { agent: string; sessionID: string; error: unknown },
 ): Promise<void> {
-  await appendAudit(root, {
+  await appendAudit(stateRoot, {
     policyId: POLICIES.harvestFailed.id,
     policyVersion: POLICIES.harvestFailed.version,
     actor: input.agent,
@@ -263,14 +295,14 @@ export type PruneSession = {
  */
 export async function pruneHarvestChildren(
   session: PruneSession,
-  root: string,
+  stateRoot: string,
   now: number = Date.now(),
 ): Promise<void> {
   let rows: PruneSessionRow[];
   try {
     rows = await session.list();
   } catch (error) {
-    await recordHarvestPruneFailure(root, '(session list)', error);
+    await recordHarvestPruneFailure(stateRoot, '(session list)', error);
     return;
   }
 
@@ -283,7 +315,7 @@ export async function pruneHarvestChildren(
     } catch (error) {
       // One refused delete must not stop the sweep, and it must not reach
       // the harvest. It goes on the record like any other harvest failure.
-      await recordHarvestPruneFailure(root, sessionID, error);
+      await recordHarvestPruneFailure(stateRoot, sessionID, error);
     }
   }
 }
@@ -308,13 +340,13 @@ function isStaleHarvestChild(row: PruneSessionRow, now: number): boolean {
  * harvest it runs beside, so it is dropped.
  */
 async function recordHarvestPruneFailure(
-  root: string,
+  stateRoot: string,
   sessionID: string,
   error: unknown,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   try {
-    await recordHarvestFailure(root, {
+    await recordHarvestFailure(stateRoot, {
       agent: ARCHIVIST,
       sessionID,
       error: new Error(`harvest prune failed: ${message}`),
@@ -340,8 +372,8 @@ function transcriptOf(messages: { parts?: { type: string; text?: string }[] }[])
 }
 
 /** The decisions the guard took in the session: the writes and the refusals. */
-async function decisionsOf(root: string, sessionID: string): Promise<string[]> {
-  const path = join(root, '.openagentsy', 'audit.jsonl');
+async function decisionsOf(stateRoot: string, sessionID: string): Promise<string[]> {
+  const path = join(stateRoot, '.openagentsy', 'audit.jsonl');
   const lines: string[] = [];
   // The audit log grows for as long as the board lives, and it is read at
   // every session end, so it is read a line at a time.

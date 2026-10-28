@@ -11,9 +11,13 @@ import {
   roleKeyForAgent,
   roleNameOf,
   rungTarget,
+  statedPathsOf,
 } from './guard.js';
+import type { Roots } from './roots.js';
 
 let root: string;
+/** The two roots of a project that is its own state root. */
+let roots: Roots;
 
 const ROLES = `
 version: 1
@@ -103,6 +107,7 @@ beforeEach(async () => {
   const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
   migrate(db);
   closeDatabase(db);
+  roots = { workspace: root, stateRoot: root };
 });
 
 async function publishLease(agent: string, glob: string): Promise<void> {
@@ -110,6 +115,37 @@ async function publishLease(agent: string, glob: string): Promise<void> {
   grantLeases(db, { bean: 'proj-1', agent, globs: [glob] });
   closeDatabase(db);
 }
+
+describe('statedPathsOf', () => {
+  it('names the directory a lease covers', async () => {
+    // The lease is an absolute glob and a reply names a relative path, so
+    // the glob is cut at its wildcard and the directory in front of it is
+    // what a reply can be compared against.
+    await publishLease('oa-builder', join(root, 'src/**'));
+    expect(await statedPathsOf(roots, 'oa-builder')).toEqual(['src']);
+  });
+
+  it('names the file a lease covers', async () => {
+    await publishLease('oa-builder', join(root, 'src/app.ts'));
+    expect(await statedPathsOf(roots, 'oa-builder')).toEqual(['src/app.ts']);
+  });
+
+  it('states nothing when the lease holds the whole workspace', async () => {
+    // The whole workspace is in scope, and then nothing is out of scope of
+    // it, so there is no path to state.
+    await publishLease('oa-builder', join(root, '**'));
+    expect(await statedPathsOf(roots, 'oa-builder')).toEqual([]);
+  });
+
+  it('states nothing when the lease is elsewhere', async () => {
+    await publishLease('oa-builder', '/somewhere/else/**');
+    expect(await statedPathsOf(roots, 'oa-builder')).toEqual([]);
+  });
+
+  it('states nothing when the agent holds no lease', async () => {
+    expect(await statedPathsOf(roots, 'oa-builder')).toEqual([]);
+  });
+});
 
 describe('roleNameOf', () => {
   it('strips the agent prefix', () => {
@@ -131,7 +167,12 @@ describe('an unreadable state file', () => {
     await writeFile(join(broken, 'openagentsy.models.lock.json'), '{ not json', 'utf8');
     await mkdir(join(broken, '.openagentsy'), { recursive: true });
 
-    await planClimb(broken, 'builder', 'ses_1', 'the test failed twice');
+    await planClimb(
+      { workspace: broken, stateRoot: broken },
+      'builder',
+      'ses_1',
+      'the test failed twice',
+    );
 
     const audit = await readFile(join(broken, '.openagentsy', 'audit.jsonl'), 'utf8');
     const entry = JSON.parse(audit.trim().split('\n')[0] ?? '{}') as { policyId?: string };
@@ -168,7 +209,7 @@ describe('roleKeyForAgent', () => {
 
   it('lets the Lead climb, which the agent id alone could not', async () => {
     const role = await roleKeyForAgent(root, 'agentsy');
-    const plan = await planClimb(root, role, 'ses_1', 'planning');
+    const plan = await planClimb(roots, role, 'ses_1', 'planning');
     expect(plan.ok).toBe(true);
   });
 });
@@ -176,47 +217,47 @@ describe('roleKeyForAgent', () => {
 describe('decideWrite', () => {
   it('denies a write to a file no lease covers', async () => {
     await publishLease('oa-builder', 'src/**');
-    const decision = await decideWrite(root, join(root, 'docs/app.ts'), 'oa-builder');
+    const decision = await decideWrite(roots, join(root, 'docs/app.ts'), 'oa-builder');
     expect(decision.effect).toBe('deny');
     expect(decision.reason).toContain('no lease covers');
   });
 
   it('allows a write to a file the agent holds', async () => {
     await publishLease('oa-builder', 'src/**');
-    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'oa-builder');
+    const decision = await decideWrite(roots, join(root, 'src/app.ts'), 'oa-builder');
     expect(decision.effect).toBe('allow');
     expect(decision.owner).toBe('oa-builder');
   });
 
   it('denies a write to a file another agent holds', async () => {
     await publishLease('oa-builder-2', 'src/**');
-    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'oa-builder');
+    const decision = await decideWrite(roots, join(root, 'src/app.ts'), 'oa-builder');
     expect(decision.effect).toBe('deny');
     expect(decision.owner).toBe('oa-builder-2');
     expect(decision.reason).toContain('leased to oa-builder-2');
   });
 
   it('denies a write when the board published no leases', async () => {
-    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'oa-builder');
+    const decision = await decideWrite(roots, join(root, 'src/app.ts'), 'oa-builder');
     expect(decision.effect).toBe('deny');
     expect(decision.reason).toContain('no leases');
   });
 
   it('covers a lease taken under the role when the session carries the agent name', async () => {
     await publishLease('oa-lead', 'src/**');
-    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'agentsy');
+    const decision = await decideWrite(roots, join(root, 'src/app.ts'), 'agentsy');
     expect(decision.effect).toBe('allow');
   });
 
   it('covers a lease taken under the agent name when the session carries the role', async () => {
     await publishLease('agentsy', 'src/**');
-    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'oa-lead');
+    const decision = await decideWrite(roots, join(root, 'src/app.ts'), 'oa-lead');
     expect(decision.effect).toBe('allow');
   });
 
   it('still separates two different roles', async () => {
     await publishLease('oa-builder', 'src/**');
-    const decision = await decideWrite(root, join(root, 'src/app.ts'), 'agentsy');
+    const decision = await decideWrite(roots, join(root, 'src/app.ts'), 'agentsy');
     expect(decision.effect).toBe('deny');
     expect(decision.owner).toBe('oa-builder');
   });
@@ -224,25 +265,25 @@ describe('decideWrite', () => {
 
 describe('planClimb', () => {
   it('refuses a role that is not in the lock file', async () => {
-    const plan = await planClimb(root, 'scout', 'ses_1', 'test failed twice');
+    const plan = await planClimb(roots, 'scout', 'ses_1', 'test failed twice');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('no model lock');
   });
 
   it('refuses a role that runs on one rung', async () => {
-    const plan = await planClimb(root, 'reviewer', 'ses_1', 'test failed twice');
+    const plan = await planClimb(roots, 'reviewer', 'ses_1', 'test failed twice');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('one rung');
   });
 
   it('refuses a reason that names no trigger', async () => {
-    const plan = await planClimb(root, 'builder', 'ses_1', 'this feels hard');
+    const plan = await planClimb(roots, 'builder', 'ses_1', 'this feels hard');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('must name a trigger');
   });
 
   it('accepts a reason that names a trigger in words', async () => {
-    const plan = await planClimb(root, 'builder', 'ses_1', 'the test failed twice already');
+    const plan = await planClimb(roots, 'builder', 'ses_1', 'the test failed twice already');
     expect(plan.ok).toBe(true);
     if (!plan.ok) throw new Error('the plan should be ok');
     expect(plan.rungIndex).toBe(1);
@@ -251,7 +292,7 @@ describe('planClimb', () => {
 
   it('refuses a second climb in a row', async () => {
     await recordClimb(root, 'ses_1', 'builder', 1, 'the test failed twice');
-    const plan = await planClimb(root, 'builder', 'ses_1', 'the test failed twice');
+    const plan = await planClimb(roots, 'builder', 'ses_1', 'the test failed twice');
     expect(plan.ok).toBe(false);
     expect(plan.message).toContain('ceiling');
   });

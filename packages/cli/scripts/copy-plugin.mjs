@@ -27,7 +27,13 @@ await copyFile(source, target);
  * once, so the build says so instead of shipping it.
  */
 const bundle = await readFile(target, 'utf8');
-const relative = bundle.match(/(?:from|import\()\s*['"]\.[^'"]+['"]/g);
+// The statements that pull in a relative path, and nothing else. The
+// bundle carries the text of the packages it inlines, and a doc comment
+// in one of them shows an import of its own; a statement that does not
+// start a line is prose, not an import.
+const relative = bundle.match(
+  /^(?!\s*\*)\s*(?:(?:import|export)[^\n;]*?from|import\s*\()\s*['"]\.[^'"]+['"]/gm,
+);
 if (relative !== null) {
   throw new Error(
     `the plugin bundle is not self contained: it imports ${relative.length} relative path(s) ` +

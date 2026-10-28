@@ -1,0 +1,20 @@
+{
+  "location": {
+    "directory": "/tmp/oa-v2mcp"
+  },
+  "data": [
+    {
+      "name": "probe",
+      "status": {
+        "status": "failed",
+        "error": "Connection closed: MCP server process exited with code 0"
+      }
+    },
+    {
+      "name": "1password",
+      "status": {
+        "status": "connected"
+      }
+    }
+  ]
+}

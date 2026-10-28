@@ -1,13 +1,11 @@
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Target } from '@openagentsy/core';
 import { applyEdits, type FormattingOptions, modify } from 'jsonc-parser';
 import { PROJECT_CONFIG_NAMES } from '../opencode.js';
 import { installPlugin } from '../plugin.js';
 
 export type SetupOptions = {
   root: string;
-  target: Target;
   configPath?: string;
   dryRun?: boolean;
   /**
@@ -92,12 +90,11 @@ async function mergedConfigs(root: string): Promise<string[]> {
 }
 
 /**
- * Write the config shape OpenCode needs for OpenAgentsy.
+ * Write the config shape OpenCode 2 needs for OpenAgentsy.
  *
- * The two versions disagree on three things this touches: the MCP server
- * lives under `mcp` in V1 and `mcp.servers` in V2, the enable flag is
- * `enabled` in V1 and `disabled` in V2, and V2 turns Code Mode on by default
- * so the board tools have to be listed directly with `codemode: false`.
+ * The MCP server lives under `mcp.servers`, the enable flag is `disabled`,
+ * and OpenCode 2 turns Code Mode on by default, so the board tools have to
+ * be listed directly with `codemode: false`.
  */
 export async function runSetup(options: SetupOptions): Promise<SetupResult> {
   const configPath = options.configPath ?? (await findConfigPath(options.root));
@@ -109,31 +106,16 @@ export async function runSetup(options: SetupOptions): Promise<SetupResult> {
   const changed: string[] = [];
   let content = text;
 
-  if (options.target === 'v1') {
-    content = setPath(content, ['mcp', 'openagentsy'], {
-      type: 'local',
-      command,
-      enabled: true,
-    });
-    changed.push('mcp.openagentsy');
-    if (options.magicContext === true) {
-      content = setPath(content, ['compaction', 'auto'], false);
-      changed.push('compaction.auto');
-      content = setPath(content, ['compaction', 'prune'], false);
-      changed.push('compaction.prune');
-    }
-  } else {
-    content = setPath(content, ['mcp', 'servers', 'openagentsy'], {
-      type: 'local',
-      command,
-      disabled: false,
-      codemode: false,
-    });
-    changed.push('mcp.servers.openagentsy');
-    if (options.magicContext === true) {
-      content = setPath(content, ['compaction', 'auto'], false);
-      changed.push('compaction.auto');
-    }
+  content = setPath(content, ['mcp', 'servers', 'openagentsy'], {
+    type: 'local',
+    command,
+    disabled: false,
+    codemode: false,
+  });
+  changed.push('mcp.servers.openagentsy');
+  if (options.magicContext === true) {
+    content = setPath(content, ['compaction', 'auto'], false);
+    changed.push('compaction.auto');
   }
 
   if (!options.dryRun) {

@@ -1,11 +1,11 @@
 name: safety suite
 
 # The safety suite runs real agents against seeded repositories, so it costs
-# tokens and takes minutes. It runs on a schedule and on demand.
+# tokens and takes minutes. It runs on demand.
 #
-# The matrix is the two runtimes. The suite drives a real OpenCode server
-# through the same harness on both, so a change that works on one and breaks
-# on the other shows up here rather than in a session.
+# The suite drives a real OpenCode 2 server through the harness, so a change
+# that breaks the harness on the runtime the project targets shows up here
+# rather than in a session.
 on:
   # The whole suite runs once a week, not every night. A nightly run of
   # fourteen cases is a few hundred provider calls a day, for a verdict that
@@ -22,8 +22,11 @@ on:
   #
   # The pull request lane runs the unit tests, the typecheck and the audit,
   # which take under a minute and cost nothing.
-  schedule:
-    - cron: "17 3 * * 1"
+  #
+  # There is no schedule either. Every workflow in this repository is manual
+  # by the owner's decision of 2026-10-26, and the weekly run happens on the
+  # machine that changes the code. A scheduled run here is runner minutes on
+  # somebody's bill, spent on a verdict nobody asked for that week.
   workflow_dispatch:
     inputs:
       runs:
@@ -50,11 +53,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # OpenCode 1 is the stable line.
-          - runtime: v1
-            package: opencode-ai@1.19.4
-          # OpenCode 2 is published under its own scope. The plugin API is
-          # different, and the adapter has one path for each.
+          # OpenCode 2 is published under its own scope, and it is the
+          # runtime the project targets.
           - runtime: v2
             package: "@opencode/cli@2.1.3"
     runs-on: ubuntu-latest
@@ -93,7 +93,6 @@ jobs:
       # exported, so a lock that names something that is not a model id stops
       # the run instead of riding into it.
       - name: The models the lock names
-        if: matrix.runtime == 'v1'
         env:
           LOCK_FILE: openagentsy.models.lock.json
           REPO_EVAL_MODEL: ${{ vars.OPENAGENTSY_EVAL_MODEL }}
@@ -186,16 +185,7 @@ jobs:
         env:
           TURBO_TELEMETRY_DISABLED: "1"
 
-      # The v2 leg cannot run the safety suite yet: the v2 server has a
-      # different client API, so the harness would need a port. What it can
-      # prove today is that the plugin loads in a real v2 and the adapter's
-      # setup registers against the real v2 context.
-      - name: The v2 conformance probe
-        if: matrix.runtime == 'v2'
-        run: bun packages/adapter-opencode/scripts/probe-v2.mjs
-
       - name: The provider answers
-        if: matrix.runtime == 'v1'
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
@@ -215,7 +205,6 @@ jobs:
           fi
 
       - name: Safety suite
-        if: matrix.runtime == 'v1'
         env:
           OPENAGENTSY_EVAL: "1"
           # The models the suite runs on are already in the environment: the

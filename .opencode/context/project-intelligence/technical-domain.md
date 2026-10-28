@@ -18,11 +18,11 @@ plugin or MCP surface changes | a rule in `AGENTS.md` changes.
 | --- | --- | --- | --- |
 | Language | TypeScript | 5.9 | strict, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` |
 | Runtime | Bun | 1.2 | `bun:sqlite` for the board and the plugin, one runtime everywhere |
-| Package manager | Bun + Turborepo | 1.2 / 2.6 | workspace of seven packages, strict isolated linker, turbo orders the tasks |
+| Package manager | Bun + Turborepo | 1.2 / 2.6 | workspace of fourteen packages, strict isolated linker, turbo orders the tasks |
 | Lint and format | Biome | 2.6 | one tool, one config, no `.eslintrc` + `.prettierrc` pair |
 | Tests | Vitest | 3.2 | the safety suite drives real OpenCode sessions through it |
 | Storage | bun:sqlite + drizzle | Bun 1.2 | the board owns the database; the plugin opens it directly |
-| Tool server | @modelcontextprotocol/sdk | 1.x | the board is an MCP server, so V1 and V2 share it |
+| Tool server | @modelcontextprotocol/sdk | 1.x | the board is an MCP server, and one server serves the plugin, the CLI and the tools |
 | Validation | zod | 4 | every MCP tool input and every role file is validated |
 | Decisions | TypeSafe Jev | 1.14 | a System One model answers typed questions with calibrated probabilities |
 | Bundling | tsdown | 0.15 | the plugin loads from a directory with no `node_modules` |
@@ -64,8 +64,9 @@ its fetch path, which Bun refuses, and this project runs on Bun everywhere.
 ### The agent file (the component)
 
 There is no UI. The one thing that looks like a component is the renderer
-that turns a role into an agent file. The mapping between V1 and V2 lives in
-exactly one place, so it is never duplicated.
+that turns a role into an agent file. The mapping from the role vocabulary
+onto the permission keys the host reads lives in exactly one place, so it is
+never duplicated.
 
 ```ts
 export function renderAgent(
@@ -74,10 +75,12 @@ export function renderAgent(
   options: AgentRenderOptions,
 ): string {
   const permissions = withProtectedPaths(role, roles.protectedPaths);
-  const frontmatter =
-    options.target === 'v1'
-      ? v1Frontmatter(role, toV1Permissions(permissions), options.model)
-      : v2Frontmatter(role, toV2Permissions(permissions), options.model, options.modelVariant);
+  const frontmatter = v2Frontmatter(
+    role,
+    toV2Permissions(permissions),
+    options.model,
+    options.modelVariant,
+  );
   return `---\n${renderFrontmatter(frontmatter)}\n---\n\n${renderPrompt(role, options.effort ?? {})}`;
 }
 ```
@@ -139,6 +142,10 @@ export type Confidence = 'verified' | 'inferred' | 'guess';
   environment.
 - The plugin is bundled self-contained. It loads from a directory with no
   `node_modules`, so a bare import in it fails silently.
+- The shell of an agent runs with the environment of the host. OpenCode 2 has
+  no `shell.env` hook, so the shell environment policy has no place to
+  tighten it, and a rule that expects to strip a secret from an agent's shell
+  is a rule that does not run.
 
 ## 📂 Codebase References
 
@@ -150,7 +157,7 @@ export type Confidence = 'verified' | 'inferred' | 'guess';
 | The board tool surface | `packages/mcp/src/index.ts:86` |
 | The System One client | `packages/jev/src/client.ts` |
 | The lease guard | `packages/adapter-opencode/src/guard.ts:100` |
-| The agent file renderer | `packages/cli/src/generate/agent.ts:66` |
+| The agent file renderer | `packages/cli/src/generate/agent.ts:47` |
 | The role source of truth | `roles.yaml` |
 | The project rules | `AGENTS.md` |
 | Lint, format and thresholds | `biome.jsonc`, `.fallowrc.json` |

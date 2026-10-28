@@ -1,0 +1,8 @@
+/* Fails: the page root clips its overflow and takes the viewport width. */
+body {
+  overflow-x: hidden;
+}
+
+html {
+  width: 100vw;
+}

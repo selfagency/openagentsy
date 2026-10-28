@@ -33,6 +33,23 @@ export function agentId(roleName: string): string {
 }
 
 /**
+ * The names an agent answers to.
+ *
+ * The Lead has two: the role key `lead` and the agent id `agentsy` (the
+ * agent file a person picks in the selector). Every other role's two names
+ * differ only by the `oa-` prefix. A record addressed to one of these names
+ * reaches a session that reads under the other: the archivist addresses the
+ * Lead as `Lead` and the Lead session reads as `lead`, and the finding
+ * stayed on the board (measured 2026-10-27, the fault case's own board).
+ */
+export function agentAliases(name: string): string[] {
+  const lower = name.toLowerCase();
+  if (lower === 'lead' || lower === 'agentsy') return ['lead', 'agentsy'];
+  if (lower.startsWith(AGENT_PREFIX)) return [lower, lower.slice(AGENT_PREFIX.length)];
+  return [lower, `${AGENT_PREFIX}${lower}`];
+}
+
+/**
  * The id an agent is known by. A role may name its own agent, which the Lead
  * does so a person picks the project's name in the selector.
  */
@@ -223,6 +240,30 @@ function skillRules(skills: string[]): ActionPermissions {
   ];
 }
 
+/**
+ * The skills a role may load, and the routing that says when.
+ *
+ * The field is a list of skill names, or a mapping with the list under
+ * `allow` and the routing under `routing`. A role with no list loads
+ * every skill, so the list stays the single source of truth for the
+ * `skill` permission, and the routing is the text that says which
+ * skill a change loads.
+ */
+function parseSkills(
+  value: unknown,
+  where: string,
+): { allow: string[]; routing?: string | undefined } {
+  if (value === undefined) return { allow: [] };
+  if (Array.isArray(value)) return { allow: asStringArray(value, where) };
+  if (!isRecord(value)) {
+    throw new RolesError(`${where}: expected a list of skill names or a mapping`);
+  }
+  const allow = value.allow === undefined ? [] : asStringArray(value.allow, `${where}.allow`);
+  const routing =
+    value.routing === undefined ? undefined : asString(value.routing, `${where}.routing`);
+  return { allow, routing };
+}
+
 function parseRole(
   name: string,
   raw: unknown,
@@ -248,8 +289,8 @@ function parseRole(
     merged[action] = rules;
   }
 
-  const skills = asStringArray(raw.skills ?? [], `${where}.skills`);
-  merged.skill = skillRules(skills);
+  const skills = parseSkills(raw.skills, `${where}.skills`);
+  merged.skill = skillRules(skills.allow);
 
   const agentName =
     raw.agentName === undefined ? undefined : asString(raw.agentName, `${where}.agentName`);
@@ -269,7 +310,8 @@ function parseRole(
     scope: asString(raw.scope, `${where}.scope`),
     guidance: asString(raw.guidance, `${where}.guidance`),
     permissions: merged,
-    skills,
+    skills: skills.allow,
+    ...(skills.routing !== undefined ? { skillRouting: skills.routing } : {}),
     modelProfile: parseModelProfile(raw.modelProfile, `${where}.modelProfile`),
     effort: parseEffort(raw.effort, `${where}.effort`),
   };

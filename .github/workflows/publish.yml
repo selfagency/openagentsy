@@ -1,12 +1,15 @@
 name: publish
 
-# The four packages go to npm by hand: the person cutting the release picks
+# The eleven packages go to npm by hand: the person cutting the release picks
 # the tag this workflow already released on GitHub and runs it. Publishing
 # needs no npm token: the job presents GitHub's OIDC token, and npm accepts
 # it because the packages list this workflow as a trusted publisher. That
 # config lives on each package's npmjs.com page and names the repository,
 # the workflow filename (publish.yml) and no environment, so the three
-# have to keep matching. npm CLI 11.5.1 or newer is required, which is why
+# have to keep matching. The repository moved from selfagency to voxslopuli
+# on 2026-10-28, so the organization in every trusted publisher config has
+# to be voxslopuli now, and the seven packages that were never published
+# need a config at all. npm CLI 11.5.1 or newer is required, which is why
 # the job installs Node 22 and upgrades npm even though the repository is
 # Bun.
 on:
@@ -55,7 +58,7 @@ jobs:
           TAG: ${{ github.event.inputs.tag }}
         run: |
           version="${TAG#v}"
-          for package in packages/core packages/models packages/mcp packages/cli; do
+          for package in packages/core packages/models packages/footprint packages/quality packages/tasks packages/memory packages/ledger packages/hooks packages/jev packages/mcp packages/cli; do
             manifest="$(bun -e "console.log(require('./$package/package.json').version)")"
             if [ "$manifest" != "$version" ]; then
               echo "::error::$package is at $manifest but the tag says $version"
@@ -66,37 +69,17 @@ jobs:
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm@latest
 
-      # npm refuses to run anywhere inside this tree: the root devEngines
-      # names bun and this step is npm, by necessity - trusted publishing
-      # speaks through the npm CLI. The packages therefore get copied to the
-      # neutral directory and npm runs from there, outside the repository.
-      - name: Copy the packages out of the repository tree
-        run: |
-          for package in packages/core packages/models packages/mcp packages/cli; do
-            base="$(basename "$package")"
-            cp -R "$package" "$RUNNER_TEMP/$base"
-            rm -rf "$RUNNER_TEMP/$base/node_modules"
-          done
-
+      # The publish order is the dependency order: a package is published
+      # after everything it depends on, so an install never sees a version
+      # that points at a version that is not on the registry yet.
       - name: Publish
-        env:
-          TAG: ${{ github.event.inputs.tag }}
         run: |
           # Public scope, public access, provenance comes with the OIDC
           # publish by itself: the flag is not needed and no token is set -
           # a leftover NPM_TOKEN or NODE_AUTH_TOKEN would win over OIDC.
-          # A version the registry already has is not an error: the seed
-          # publish made 0.1.0 by hand, and a rerun of this workflow on a
-          # tag whose version exists says so and moves on.
-          version="${TAG#v}"
-          for base in core models mcp cli
-          do
-            name="$(bun -e "console.log(require('$RUNNER_TEMP/$base/package.json').name)")"
+          for package in packages/core packages/models packages/footprint packages/quality packages/tasks packages/memory packages/ledger packages/hooks packages/jev packages/mcp packages/cli; do
+            name="$(bun -e "console.log(require('./$package/package.json').name)")"
             echo "::group::publishing $name"
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "$name@$version is already on the registry"
-            else
-              (cd "$RUNNER_TEMP/$base" && npm publish --access public)
-            fi
+            (cd "$package" && npm publish --access public)
             echo "::endgroup::"
           done

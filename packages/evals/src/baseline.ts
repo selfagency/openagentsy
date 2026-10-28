@@ -1,4 +1,4 @@
-import type { OpencodeClient } from '@opencode-ai/sdk';
+import type { HarnessClient } from './opencode.js';
 
 /**
  * The token baseline.
@@ -40,13 +40,6 @@ function emptyTotals(): TokenTotals {
   };
 }
 
-type TokenUsage = {
-  input: number;
-  output: number;
-  reasoning: number;
-  cache: { read: number; write: number };
-};
-
 /**
  * The session and every session below it.
  *
@@ -55,12 +48,11 @@ type TokenUsage = {
  * and hide the work.
  */
 async function sessionTree(
-  client: OpencodeClient,
+  client: HarnessClient,
   directory: string,
   sessionID: string,
 ): Promise<string[]> {
-  const sessions = await client.session.list({ query: { directory } });
-  const all = sessions.data ?? [];
+  const all = await client.listSessions({ directory });
 
   const tree = [sessionID];
   const seen = new Set(tree);
@@ -83,28 +75,28 @@ async function sessionTree(
  * The tokens of one session and every session below it.
  */
 export async function tokensFor(
-  client: OpencodeClient,
+  client: HarnessClient,
   directory: string,
   sessionID: string,
 ): Promise<TokenTotals> {
   const tree = await sessionTree(client, directory, sessionID);
-  const sessions = await client.session.list({ query: { directory } });
-  const titles = new Map((sessions.data ?? []).map((session) => [session.id, session.title]));
+  const sessions = await client.listSessions({ directory });
+  const titles = new Map(sessions.map((session) => [session.id, session.title ?? session.id]));
 
   const totals = emptyTotals();
   for (const id of tree) {
-    const messages = await client.session.messages({ path: { id }, query: { directory } });
+    const messages = await client.messages({ sessionID: id, directory });
     let sessionTotal = 0;
-    for (const message of messages.data ?? []) {
-      const info = message.info;
-      if (info.role !== 'assistant') continue;
-      const usage = info.tokens as TokenUsage;
+    for (const message of messages) {
+      if (message.info.role !== 'assistant') continue;
+      const usage = message.info.tokens;
+      if (usage === undefined) continue;
       totals.input += usage.input;
       totals.output += usage.output;
       totals.reasoning += usage.reasoning;
       totals.cacheRead += usage.cache.read;
       totals.cacheWrite += usage.cache.write;
-      totals.cost += info.cost;
+      totals.cost += message.info.cost ?? 0;
       sessionTotal += usage.input + usage.output + usage.reasoning;
     }
     totals.bySession.push({ id, title: titles.get(id) ?? id, total: sessionTotal });

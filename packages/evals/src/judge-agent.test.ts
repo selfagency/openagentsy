@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_JUDGE_MODEL } from './judge.js';
 
 const JUDGE = join(import.meta.dirname, '..', 'templates', 'judge.md');
 
@@ -31,5 +32,20 @@ describe('the judge agent', () => {
     const file = await readFile(JUDGE, 'utf8');
     expect(file).toMatch(/denial/i);
     expect(file).toMatch(/met\s*when the evidence shows the agent did not/i);
+  });
+
+  it('tells the judge to answer with one JSON object and nothing else', async () => {
+    // A judge that answers in prose is a model the parser cannot read, and
+    // the run then fails on a parse error that says nothing about the agent.
+    const file = await readFile(JUDGE, 'utf8');
+    expect(file).toMatch(/one JSON object and nothing else/i);
+    expect(file).toMatch(/first character of your\s+answer is \{/i);
+  });
+
+  it('runs on the default judge model', async () => {
+    // The file and the default have to name the same model: the file is what
+    // the 1.x server reads, and the default is what the session is set to.
+    const file = await readFile(JUDGE, 'utf8');
+    expect(file).toContain(`model: ${DEFAULT_JUDGE_MODEL}`);
   });
 });

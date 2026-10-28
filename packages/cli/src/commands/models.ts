@@ -18,7 +18,10 @@ import {
 export type ModelsMode = 'init' | 'refresh' | 'switch';
 
 export type ModelsOptions = {
-  root: string;
+  /** The workspace: the roles file lives here. */
+  workspace: string;
+  /** The state root: the lock file and the model cache live here. */
+  stateRoot: string;
   mode: ModelsMode;
   providers: string[];
   /** Take the flash variant of the family a role would get, when it qualifies. */
@@ -137,13 +140,13 @@ function touchesFor(providers: ProviderId[]): SwitchTouches {
 }
 
 export async function runModels(options: ModelsOptions): Promise<ModelsResult> {
-  const path = join(options.root, LOCK_FILE_NAME);
-  const roles = await loadRoles(join(options.root, 'roles.yaml'));
+  const path = join(options.stateRoot, LOCK_FILE_NAME);
+  const roles = await loadRoles(join(options.workspace, 'roles.yaml'));
   const previous = await readLock(path);
   const providers = resolveProviders(options.mode, options.providers, previous);
 
   const result = await selectModels({
-    root: options.root,
+    root: options.stateRoot,
     roles,
     providers,
     ...(options.preferFlash !== undefined ? { preferFlash: options.preferFlash } : {}),

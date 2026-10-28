@@ -1,0 +1,5 @@
+/* Passes: the image tracks can shrink below their content. */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}

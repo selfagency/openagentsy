@@ -1,22 +1,32 @@
 {
   "name": "@openagentsy/adapter-opencode",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
+  "types": "./types/index.d.ts",
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsdown",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -b tsconfig.json",
+    "probe:v2-facts": "bun scripts/probe-v2-facts.mjs",
+    "probe:v2-surface": "bun scripts/probe-v2-surface.mjs",
+    "probe:v2-hooks": "bun scripts/probe-v2-hooks.mjs",
+    "probe:v2-e2e": "bun scripts/probe-v2-e2e.mjs",
+    "probe:v2-shell-env": "bun scripts/probe-v2-shell-env.mjs"
   },
   "dependencies": {
     "@openagentsy/core": "workspace:^",
+    "@openagentsy/hooks": "workspace:^",
+    "@openagentsy/ledger": "workspace:^",
     "zod": "^4.1.8"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "^1.19.3",
     "@types/node": "^24.3.0",
     "tsdown": "^0.15.0",
     "typescript": "^5.9.2"

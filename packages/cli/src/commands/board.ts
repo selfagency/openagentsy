@@ -15,6 +15,9 @@ import {
  * the records the agents left, the leases they hold, and the budgets they
  * spend. It is a command and not a web page, because the thing it has to
  * do is show what happened, and a page is a server to keep alive.
+ *
+ * The board is the state root's, so a command run in a worktree shows the
+ * board of the project and not a board of its own.
  */
 
 export type BoardView = {
@@ -23,8 +26,8 @@ export type BoardView = {
   budgets: { bean: string; tokenLimit: number; stopAt: number }[];
 };
 
-export async function runBoard(root: string): Promise<BoardView> {
-  const databasePath = join(root, '.openagentsy', 'board.sqlite');
+export async function runBoard(stateRoot: string): Promise<BoardView> {
+  const databasePath = join(stateRoot, '.openagentsy', 'board.sqlite');
   // A project that has no board yet has nothing to show, and reading it
   // should not create one.
   const exists = await access(databasePath).then(

@@ -10,9 +10,11 @@ This repository incorporates or adapts code from these projects, under
 the terms noted:
 
 - hmans/beans (Apache-2.0): the fractional-order algorithm in
-  packages/tasks/src/fractional.ts is a port of pkg/bean/fractional.go.
-  Apache-2.0 code may be included in GPL-3 works; this NOTICE records the
-  origin and the license.
+  packages/tasks/src/fractional.ts is a port of pkg/bean/fractional.go, and
+  the task files in packages/tasks/fixtures/beans-corpus/ are copies of
+  files from its .beans/ directory, used as test data. Apache-2.0 code may
+  be included in GPL-3 works; this NOTICE records the origin and the
+  license.
 - zhaono1/agent-playbook (MIT): the lesson lifecycle states, the start
   packet and the eval-artifact contract in packages/hooks/src/lessons/,
   and the host-conformance states in packages/adapters/src/conformance.ts,
@@ -20,17 +22,34 @@ the terms noted:
   long-task-coordinator designs.
 - miqdadbadjuber/anti-slop (MIT): the quality rules in packages/quality/
   are adapted from its rules, keeping the R-XX identifiers in rule
-  metadata.
+  metadata. The skills in templates/.opencode/skills/ adapt the same
+  upstream rules: oa-ui carries the purpose test, oa-copy the
+  anti-slop-copywriting rules, and oa-comments the anti-slop-code tells
+  and their preserve list.
 - Nutlope/hallmark (MIT): the floor rules and the tier system in
   packages/quality/ are adapted from its rules, keeping the Floor numbers.
-  Its sloplint.mjs is called as an external check when installed, not
-  vendored.
+  The material inventory in templates/.opencode/skills/oa-ui/ is adapted
+  from its rules as well. Its sloplint.mjs is called as an external check
+  when installed, not vendored: the bridge in packages/quality/src/sloplint.ts
+  looks for it, runs it over the pages and the stylesheets of the change,
+  and keeps the static findings when it is not there. The linter is
+  optional, and none of it is bundled. The license of the scripts is not
+  stated here, because it has not been read: it is unknown, and it needs a
+  check against an installed copy of the linter.
 - junhoyeo/tokscale (MIT) and xiufengsun/TokenTracker (MIT): ideas only —
   OpenCode database discovery, the pricing fallback chain, the outcomes
   sidecar and the privacy rule. No code copied.
 - EcoLogits (CC BY-SA 4.0, docs): the footprint formulas in
   packages/footprint/ are re-implemented from the published methodology,
-  with credit in the UI and this NOTICE. Its models.json data is fetched
-  at runtime and cached, not bundled, until its data license is confirmed.
+  https://github.com/mlco2/ecologits, with credit in the UI and this NOTICE.
+  The footprint block in packages/sidebar/ shows the same credit in its
+  method panel. Its models.json data is fetched at runtime and cached, not bundled, until
+  its data license is confirmed.
+- The OpenTUI packages (MIT): @opentui/core and @opentui/solid are the
+  renderer and the Solid binding the sidebar draws in, and solid-js (MIT) is
+  the reactive runtime they share. @opencode/plugin, @opencode/client and
+  @opencode/theme (MIT) are the host's own SDK, the host's types and the
+  host's theme. The sidebar keeps all of them outside its bundle, so the host
+  resolves them and one copy of the Solid runtime is in play.
 - models.dev (MIT): model and cost data, bundled at build time through
   the @opencode-ai/models package.

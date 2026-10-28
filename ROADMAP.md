@@ -6,15 +6,17 @@ open.
 
 ## 0.1.0 — the current release
 
-OpenCode V1, the board, the guard, the safety suite.
+OpenCode 2, the board, the guard, the safety suite. The 0.1.0 release shipped
+the OpenCode 1 path; the tree carries the OpenCode 2 path only now, and 0.2.0
+says what that changed.
 
 | Piece | State |
 | --- | --- |
-| Seven roles, generated for V1 and V2 from `roles.yaml` | done |
+| Seven roles, generated for OpenCode 2 from `roles.yaml` | done |
 | The board: records, leases, budgets, audit, classification | done |
 | The plugin: the lease guard, the effort ladder, the session harvest | done |
 | The model selector and the lock file | done |
-| The safety suite: ten cases against real sessions | built, the numbers below |
+| The safety suite: fourteen cases against real sessions | built, the numbers below |
 | The CLI: `build`, `setup`, `doctor`, `models` | done |
 | The System One client, and the classifier it serves | done, optional on a key |
 | Publishable packages, the changelog, the release workflow | done |
@@ -44,28 +46,44 @@ OpenCode V1, the board, the guard, the safety suite.
 - The footprint estimator, the ledger and the offload router. These are the
   first of the 2a packages, and they need the new agent to be worth
   building.
-- The V2 harness port. See 0.2.0.
+- The OpenCode 2 harness port. See 0.2.0.
 - The AFT registration. The scout's guidance is conditional: it prefers the
   AFT tools when they are registered and reads narrowly with the built-in
   tools when they are not.
 
-## 0.2.0 — OpenCode V2
+## 0.2.0 — OpenCode 2, and only OpenCode 2
 
-The plan's exit test for the baseline was "the same suite runs on V1 and
-V2". It does not yet, and that is deliberate.
+The project speaks one runtime. The adapter, the generator and the CLI dropped
+the OpenCode 1 path: the plugin registers through `setup`, the generator writes
+one permission shape, and the CLI has no `--target` flag.
 
-OpenCode 2 has its own plugin API: the guard belongs in the permission hook,
-because that is where the agent identity and the target paths arrive. The
-adapter already has that path, and a conformance probe proves the plugin
-registers and the setup runs against the real V2 binary. What is missing is
-the harness: the V2 SDK and client have a different shape, so the suite
-needs its own runner.
+What the port measured, and what it costs:
+
+- The permission key is `shell` and the spawn tool is `subagent`. The `bash`
+  key and the `task` tool are gone.
+- The write guard runs on the permission hook, because that is where the agent
+  identity and the target paths arrive.
+- A command a person has to approve is an `ask` effect on that hook: OpenCode 2
+  gives a plugin no way to write the host's permission map.
+- The shell of an agent runs with a **tightened environment**. OpenCode 2 has no
+  `shell.env` hook, but its shell domain has a `create.before` hook whose event
+  carries the environment the server is about to spawn with — so the policy
+  lives there. Measured on a live server: the child's own environment has
+  neither `TYPESAFE_API_KEY` nor `TOGETHER_API_KEY` nor the git-hook switches,
+  and carries `OPENAGENTSY_AGENT=1`. The approval path is untouched, because
+  the hook never touches the command.
+- The whole guard system runs on the v2 path: the lease write guard, the
+  quality check on every write, the seven blocking rules, the scope-drift and
+  output checks, the round-status checks, the harvest, and the approval as an
+  `ask` effect on the permission hook.
+
+**State: shipped (2026-10-28).** The port, the guard system on the v2 path and
+the tightened shell environment are on `develop`, and the packages below are
+built on top of them.
 
 Also in 0.2.0:
 
-- The V1 permission key stays `bash`; V2 uses `shell` and `subagent`. The
-  mapping is already in the generator.
-- The board's tools are grouped, so a V2 session carries fewer of them.
+- The board's tools are grouped, so a session carries fewer of them.
 
 ## 2a and later — the agent as the product
 
@@ -73,19 +91,42 @@ These are the packages that turn the system from a coordination harness into
 an agent that does the work. They are built after 0.1.0 is proven, and they
 are dogfooded with the new agent rather than against a synthetic one.
 
-- **`tasks`**: the task store, and the Beans compatible board.
+- **`tasks`**: the task store, and the Beans compatible board. Built, with
+  the `oa_task_*` tools and the prime block (2026-10-26).
+- **`memory`**: the memory slice — the archivist's candidates become
+  approved, searchable project memory, and only a person approves them.
+  Built (2026-10-26).
 - **`footprint`**: what a decision actually costs, so the Lead can spend
-  tokens where they matter.
-- **`ledger`**: the token and time ledger, per bean and per role.
+  tokens where they matter. Built, with the golden test against EcoLogits
+  0.11.3 (2026-10-26).
+- **`ledger`**: the token and time ledger, per bean and per role. Built,
+  with the board's budget check reading the measured usage and the
+  adapter's bridge feeding it (2026-10-26).
 - **`offload`**: the local backends, for the jobs that do not need a frontier
-  model.
+  model. Built, with the circuit breaker and the fail-closed replica modes
+  (2026-10-26).
 - **`hooks`**: the package manager rule, the default rules, the pre-commit
   guard. A red team agent is told to `npm install` something and is stopped.
+  Built, with the seven rules at the hook points the pinned OpenCode really
+  fires, the lessons and their eval runner, and `/oa approve` as the one-shot
+  escape hatch (2026-10-27).
 - **`quality`**: the score a change earns, so the reviewer has something
-  sharper than a binary approve.
-- **`sidebar`**: the thing that shows a human what the agents are doing.
-- **`oa conformance`**: the report that says whether an agent is behaving.
-- **`oa report --ethical`**: what the run cost, and what it was worth.
+  sharper than a binary approve. Built (2026-10-28): the rule registry, nine
+  CSS rules and eight HTML and copy rules with a passing and a failing
+  fixture each, the comment lint, the hooks and the findings store, the
+  waivers, three on-demand skills, the reviewer gate, and the sloplint
+  bridge (which degrades cleanly when Hallmark is absent).
+- **`sidebar`**: the thing that shows a human what the agents are doing. Built
+  (2026-10-28): the OpenCode 2 TUI blocks (board, tasks, budget, footprint,
+  memory, accountability, method), their readers, the framing checks and the
+  inbox keys. The plan's V1 fallback is void, so it is one package.
+- **`oa conformance`**: the report that says whether an agent is behaving. Built
+  (2026-10-28): every capability is reported as `proven_static`, `observed` or
+  `unverified`, per host version.
+- **`oa report --ethical`**: what the run cost, and what it was worth. Built
+  (2026-10-28): the one-screen account, rendered from the ledger and the
+  footprint tables, with a `--check` gate that exits nonzero on an open floor
+  finding.
 
 ## The baseline that was never measured
 

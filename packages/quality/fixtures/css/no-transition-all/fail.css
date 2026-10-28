@@ -1,0 +1,4 @@
+/* Fails: the transition moves every property, layout ones included. */
+.button {
+  transition: all 0.2s ease;
+}

@@ -1,0 +1,12 @@
+/* Passes: the colour and the font family come from the token block. */
+:root {
+  --color-bg: #ffffff;
+  --color-text: #1a1a1a;
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+.button {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}

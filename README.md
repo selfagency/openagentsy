@@ -37,13 +37,23 @@ bun run test
 | `@openagentsy/models` | the provider inventory and the model lock file |
 | `@openagentsy/mcp` | the board server, over stdio |
 | `@openagentsy/adapter-opencode` | the OpenCode plugin: the guard, the effort ladder, the harvest |
+| `@openagentsy/tasks` | the Beans-compatible task store, with the `oa_task_*` tools and the prime block |
+| `@openagentsy/memory` | the memory slice: the archivist's candidates, a person decides, the store and the search |
+| `@openagentsy/footprint` | the EcoLogits-method energy, water and carbon estimator, ranges only |
+| `@openagentsy/ledger` | the numbers-only usage ledger: tokens, cost, waste and outcomes per message |
+| `@openagentsy/offload` | the local-model router for the housekeeping jobs |
+| `@openagentsy/hooks` | the guardrail core: the rule registry, the default rules, the output checks, the lessons and their eval runner |
+| `@openagentsy/quality` | the anti-slop rules: the tiers, the findings, the waivers and the static checks |
+| `@openagentsy/sidebar` | the OpenCode 2 TUI sidebar: the board, tasks, budget, footprint, memory, accountability and method blocks |
+| `@openagentsy/jev` | the System One client |
+| `@openagentsy/evals` | the safety suite: fourteen cases against real sessions |
 
 `roles.yaml` is the source of truth for the seven roles. Everything else is
-generated from it, and the generator maps one permission vocabulary onto both
-OpenCode versions.
+generated from it, and the generator maps one permission vocabulary onto the
+permission keys OpenCode reads.
 
 ```bash
-openagentsy build --target v1   # or v2
+openagentsy build
 openagentsy models init --providers opencode-go
 ```
 
@@ -83,8 +93,8 @@ undecided gets a number rather than a shrug.
 
 ## The plugin
 
-One file serves both OpenCode versions: V1 reads `{ id, server }`, V2 reads
-`{ id, setup }`, and each ignores the other key. It is bundled into a single
+One file, one runtime: the plugin default-exports `{ id, setup }`, and OpenCode
+2 calls `setup` with the plugin context. It is bundled into a single
 self contained file, because a plugin is loaded from the config directory where
 bare imports do not resolve.
 
@@ -93,8 +103,19 @@ and puts the decision on the record. It applies the effort level of the rung a
 session climbed to, and `oa_effort` is the only way to climb. At the end of a
 session it collects what happened and asks the archivist to distil it into
 candidate memories, which the archivist posts on the board for the Lead to
-read. The archivist runs in a child session of the session it harvests, so it
-stays out of your session history.
+read. The archivist runs in a session of its own, titled after the role it
+distils, so it stays out of your session history.
+
+Two things the OpenCode 2 host decides, and the plugin cannot:
+
+- **A command a person has to approve is an `ask` effect on the permission
+  hook.** OpenCode 2 gives a plugin no way to write the host's permission map,
+  so the approval list is asked for where the decision is made.
+- **The shell of an agent runs with a tightened environment.** OpenCode 2 has no
+  `shell.env` hook, but its shell domain has a `create.before` hook whose event
+  carries the environment the server is about to spawn with — so the policy runs
+  there, and the child never sees the board's keys or the git-hook switches.
+  The command is not touched: it is the resource of the permission event.
 
 ## Models
 
@@ -209,12 +230,14 @@ that agent under the other.
 The plan was written against the documentation. Seven things changed when the
 code met the real binary.
 
-1. **V1 uses `bash`, not `shell`.** The live V1 docs describe `shell`, but
-   OpenCode 1.19.3 silently drops a `shell` key in agent frontmatter and only
-   honours `bash`. Verified with `opencode agent list`. V2 uses `shell`.
+1. **The runtime is OpenCode 2, and only OpenCode 2.** The permission key is
+   `shell` and the spawn tool is `subagent`. The OpenCode 1 path, the `bash`
+   key and the `--target` flag are gone: the generator writes one shape and
+   the doctor judges one target.
 
-2. **One adapter file, not two packages.** OpenCode reads `{ id, server }` on
-   V1 and `{ id, setup }` on V2 from the same file and ignores the other key.
+2. **One adapter file, not two packages.** The plugin is a single bundled file
+   that OpenCode 2 loads, and the rules of the package live in it once, not in
+   a copy per runtime.
 
 3. **The privacy filter cannot use models.dev.** models.dev exposes limits,
    cost, tool support and modalities. It exposes no retention or training

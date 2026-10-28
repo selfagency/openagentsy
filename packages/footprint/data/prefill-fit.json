@@ -1,0 +1,223 @@
+{
+  "k_in": {
+    "value": 7.187297432523553e-7,
+    "unit": "watt-hour per input token per billion active parameters",
+    "source": "arXiv:2505.06371 (The ML.ENERGY Benchmark: Toward Automated Inference Energy Measurement and Optimization), Table 4, Appendix B.3 (prefill-decode disaggregation): energy of one generation in joules, and the share of that energy the decode phase consumed",
+    "fittedOn": "2026-10-26",
+    "range": [5.583326551649255e-7, 7.597098214285713e-7]
+  },
+  "k_cache": {
+    "value": 7.187297432523553e-8,
+    "unit": "watt-hour per cache-read token per billion active parameters",
+    "source": "0.1 of k_in, as a modelling assumption: a cache read skips the model's forward pass. No ML.ENERGY run measures a cache read.",
+    "fittedOn": "2026-10-26",
+    "range": [5.583326551649255e-8, 7.597098214285714e-8]
+  },
+  "method": [
+    "The prefill energy of a request is the energy of the generation minus the share the decode phase consumed (the table gives that share), so every cell of the source table is one measurement of prefill energy against a known input length and a known model size.",
+    "The model is proportional: E_prefill = k_in · P_active · T_in. The least-squares fit of a proportional model goes through the origin, so k_in = Σ(x·y) / Σ(x²), with x = P_active (in billions) × T_in (tokens) and y the prefill energy of one request in joules.",
+    "The joules are divided by 3600, because the package counts in watt-hours.",
+    "The fit with a free intercept puts the intercept at -4.94 J, small next to the energy of a request, so the origin is where the fit belongs.",
+    "The residual RMS is 21.2 percent, and the worst point is 28.7 percent off.",
+    "The range is the span of the per-point ratios (prefill energy divided by P_active × T_in), which spans the two model sizes measured: the coefficient is larger for the bigger model, because the fit is a single number for models that differ."
+  ],
+  "data_source": {
+    "id": "arXiv:2505.06371",
+    "title": "The ML.ENERGY Benchmark: Toward Automated Inference Energy Measurement and Optimization",
+    "table": "Table 4, Appendix B.3 (prefill-decode disaggregation)",
+    "url": "https://arxiv.org/abs/2505.06371",
+    "snapshot": "packages/footprint/data/prefill-measurements.json",
+    "derivation": "packages/footprint/scripts/fit-prefill.mjs",
+    "measurements": 12,
+    "fitted_models": ["Llama 3.1 8B", "Llama 3.1 8B", "Llama 3.1 8B", "Llama 3.1 70B"],
+    "note": "The Hugging Face dataset of the benchmark (ml-energy/benchmark-v3) is gated and was not readable, and the leaderboard of version 3 carries no prefill column, so the measurements come from the paper."
+  },
+  "diagnostics": {
+    "measurements": 12,
+    "residual_rms": 0.2123223276502,
+    "worst_relative_residual": 0.28727871566109675,
+    "ratio_mean_joules": 0.0022328910842168885,
+    "fit_through_origin_joules": 0.0025874270757084788,
+    "fit_with_intercept": {
+      "slope_joules": 0.0026144176318359624,
+      "intercept_joules": -4.940674820834356
+    },
+    "model_pulls": [
+      {
+        "model": "Llama 3.1 8B",
+        "active_params_billions": 8,
+        "mean_ratio_joules": 0.0020818910047743036,
+        "pull": 0.24282542639112847
+      },
+      {
+        "model": "Llama 3.1 70B",
+        "active_params_billions": 70,
+        "mean_ratio_joules": 0.0026858913225446426,
+        "pull": -0.03665980302690641
+      }
+    ],
+    "largest_ratio_point": {
+      "model": "Llama 3.1 70B",
+      "input_mean_tokens": 512,
+      "ratio_joules": 0.002734955357142857
+    },
+    "heaviest_point": {
+      "model": "Llama 3.1 70B",
+      "input_mean_tokens": 4096,
+      "x": 286720
+    },
+    "residuals": [
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 1P3D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 37.71,
+        "decode_energy_share": 0.772,
+        "prefill_energy_per_request_j": 8.59788,
+        "predicted_prefill_j": 10.598101302101929,
+        "relative_residual": -0.2326412211035661
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 1P3D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 4096,
+        "energy_per_generation_j": 665.77,
+        "decode_energy_share": 0.987,
+        "prefill_energy_per_request_j": 8.655010000000008,
+        "predicted_prefill_j": 10.598101302101929,
+        "relative_residual": -0.22450480150825006
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 1P3D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 4096,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 208.34,
+        "decode_energy_share": 0.672,
+        "prefill_energy_per_request_j": 68.33551999999999,
+        "predicted_prefill_j": 84.78481041681543,
+        "relative_residual": -0.2407136203370582
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 2P2D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 36.22,
+        "decode_energy_share": 0.767,
+        "prefill_energy_per_request_j": 8.439259999999999,
+        "predicted_prefill_j": 10.598101302101929,
+        "relative_residual": -0.2558093129139202
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 2P2D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 4096,
+        "energy_per_generation_j": 706.27,
+        "decode_energy_share": 0.988,
+        "prefill_energy_per_request_j": 8.475240000000007,
+        "predicted_prefill_j": 10.598101302101929,
+        "relative_residual": -0.2504780162097971
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 2P2D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 4096,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 151.75,
+        "decode_energy_share": 0.552,
+        "prefill_energy_per_request_j": 67.984,
+        "predicted_prefill_j": 84.78481041681543,
+        "relative_residual": -0.2471288893977324
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 3P1D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 37.26,
+        "decode_energy_share": 0.77,
+        "prefill_energy_per_request_j": 8.569799999999999,
+        "predicted_prefill_j": 10.598101302101929,
+        "relative_residual": -0.2366801211349075
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 3P1D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 4096,
+        "energy_per_generation_j": 748.45,
+        "decode_energy_share": 0.9890000000000001,
+        "prefill_energy_per_request_j": 8.232949999999924,
+        "predicted_prefill_j": 10.598101302101929,
+        "relative_residual": -0.28727871566109675
+      },
+      {
+        "model": "Llama 3.1 8B",
+        "deployment": "TP=1, 3P1D",
+        "active_params_billions": 8,
+        "input_mean_tokens": 4096,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 158.85,
+        "decode_energy_share": 0.56,
+        "prefill_energy_per_request_j": 69.89399999999999,
+        "predicted_prefill_j": 84.78481041681543,
+        "relative_residual": -0.21304847936611787
+      },
+      {
+        "model": "Llama 3.1 70B",
+        "deployment": "TP=4, 1P1D",
+        "active_params_billions": 70,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 276.93,
+        "decode_energy_share": 0.648,
+        "prefill_energy_per_request_j": 97.47936,
+        "predicted_prefill_j": 92.73338639339188,
+        "relative_residual": 0.04868695903017949
+      },
+      {
+        "model": "Llama 3.1 70B",
+        "deployment": "TP=4, 1P1D",
+        "active_params_billions": 70,
+        "input_mean_tokens": 512,
+        "output_mean_tokens": 4096,
+        "energy_per_generation_j": 907.6,
+        "decode_energy_share": 0.892,
+        "prefill_energy_per_request_j": 98.0208,
+        "predicted_prefill_j": 92.73338639339188,
+        "relative_residual": 0.053941751205949275
+      },
+      {
+        "model": "Llama 3.1 70B",
+        "deployment": "TP=4, 1P1D",
+        "active_params_billions": 70,
+        "input_mean_tokens": 4096,
+        "output_mean_tokens": 512,
+        "energy_per_generation_j": 1492.59,
+        "decode_energy_share": 0.5,
+        "prefill_energy_per_request_j": 746.295,
+        "predicted_prefill_j": 741.867091147135,
+        "relative_residual": 0.005933188421287698
+      }
+    ]
+  },
+  "notes": [
+    "This fit does not ship enabled. footprint.prefill stays false, and the package never reads this file: a caller who wants the term passes the coefficients in.",
+    "The unit is watt-hours per token per billion active parameters, the same unit as the EcoLogits per-token coefficient in src/constants.ts.",
+    "The measured models are dense, so the active parameters are the total parameters.",
+    "The measurements are per generation of a served request. The prefill of a batched request is compute-bound, so the batching does not amortize it the way it amortizes the decode phase; the deployments differ in how many prefill and decode instances they ran, which is part of what the range covers.",
+    "The fit is one number for models that differ, and it does not sit in the middle of them: the point value is 24 percent high for the Llama 3.1 8B model and the point value is 4 percent low for the Llama 3.1 70B model. The least squares carry the weight of the bigger model and its longer input (the Llama 3.1 70B with 4096 input tokens is the heaviest point of the twelve), and the measurement with the largest ratio (the Llama 3.1 70B with 512 input tokens) sets the pace. The residual RMS is 21.2 percent and the worst point is 28.7 percent off, and the range is what carries that model-size effect."
+  ]
+}

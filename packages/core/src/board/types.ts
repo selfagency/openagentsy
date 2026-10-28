@@ -6,6 +6,32 @@ export const CONFIDENCE_LEVELS = ['verified', 'inferred', 'guess'] as const;
 
 export type Confidence = (typeof CONFIDENCE_LEVELS)[number];
 
+/**
+ * The statuses a board round can carry (§8.7).
+ *
+ * A round is one pass of the Lead's recovery loop, and its status says where
+ * the round is. A delegated item is in the same five states, so one list
+ * serves both and a dispatch and the round that made it never disagree by
+ * accident.
+ *
+ * `awaiting_result` is a valid status and never a failure: a round that is
+ * waiting for a delegated item to come back is working, not stuck.
+ */
+export const DISPATCH_STATUSES = [
+  'running',
+  'awaiting_result',
+  'paused',
+  'blocked',
+  'complete',
+] as const;
+
+export type RoundStatus = (typeof DISPATCH_STATUSES)[number];
+
+/** Whether a value is one of the round statuses. */
+export function isRoundStatus(value: unknown): value is RoundStatus {
+  return typeof value === 'string' && (DISPATCH_STATUSES as readonly string[]).includes(value);
+}
+
 export type BoardRecord = {
   id: number;
   bean: string;
@@ -58,6 +84,12 @@ export type Budget = {
   tokenLimit: number;
   stopAt: number;
   tokensUsed: number;
+  /** The cap of a single turn, when the bean has one. */
+  turnLimit?: number | undefined;
+  /** The cap of a single session, when the bean has one. */
+  sessionLimit?: number | undefined;
+  /** The scope that was warned about, when the bean is in the yellow window. */
+  warned?: string | undefined;
   updatedAt: string;
 };
 
@@ -68,4 +100,18 @@ export type BudgetDecision = {
   tokensUsed: number;
   stop: boolean;
   configured: boolean;
+  /** The cap of a single turn, when the bean has one. */
+  turnLimit?: number | undefined;
+  /** The tokens of the most expensive turn that was measured. */
+  turnTokens?: number | undefined;
+  /** Whether the most expensive turn went over its cap. */
+  turnStop: boolean;
+  /** The cap of a single session, when the bean has one. */
+  sessionLimit?: number | undefined;
+  /** The tokens of the most expensive session that was measured. */
+  sessionTokens?: number | undefined;
+  /** Whether the most expensive session went over its cap. */
+  sessionStop: boolean;
+  /** The yellow window: the warning this check owes, when it owes one. */
+  warning?: string | undefined;
 };

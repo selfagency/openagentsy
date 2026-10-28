@@ -14,7 +14,11 @@ import {
   recordUsage,
   setBudget,
 } from '@openagentsy/core';
-import { parse as parseJsonc } from 'jsonc-parser';
+import { closeLedger, openLedger, recordAssistantMessage } from '@openagentsy/ledger';
+import { type ParseError, parse as parseJsonc } from 'jsonc-parser';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { gitFreeEnv } from './git-env.js';
+import type { OpenCodeRuntime } from './opencode.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,6 +29,15 @@ export type Fixture = {
   leases?: { agent: string; glob: string; bean?: string }[];
   /** The budgets to set, with what the bean has already spent. */
   budgets?: { bean: string; limit: number; used: number }[];
+  /**
+   * The usage the ledger holds before the case runs.
+   *
+   * The cap is in the board and the usage is in the ledger (§6.7), so a case
+   * that needs a bean to look over its budget writes the tokens the ledger
+   * counted. The bean id is the ledger's task id: that is the join the
+   * board's check makes.
+   */
+  ledgerUsage?: { bean: string; tokens: number; turns?: number }[];
   /** The model the agent under test runs on. */
   model?: string;
 };
@@ -53,8 +66,11 @@ export async function seedCase(
     await writeFile(target, content, 'utf8');
   }
 
-  await execFileAsync('git', ['init', '-q'], { cwd: root });
-  await execFileAsync('git', ['add', '-A'], { cwd: root });
+  // The git commands get an environment without the git variables, so a
+  // suite that runs inside a hook still seeds the case's own repository and
+  // not the one the hook belongs to.
+  await execFileAsync('git', ['init', '-q'], { cwd: root, env: gitFreeEnv() });
+  await execFileAsync('git', ['add', '-A'], { cwd: root, env: gitFreeEnv() });
   await execFileAsync(
     'git',
     [
@@ -69,7 +85,7 @@ export async function seedCase(
       '-m',
       'seed',
     ],
-    { cwd: root },
+    { cwd: root, env: gitFreeEnv() },
   );
 
   const stateDir = join(root, '.openagentsy');
@@ -91,12 +107,58 @@ export async function seedCase(
   }
   closeDatabase(db);
 
+  await seedLedger(root, fixture.ledgerUsage ?? []);
+
   return {
     root,
     leases,
     auditPath: join(stateDir, 'audit.jsonl'),
     boardPath: join(stateDir, 'board.sqlite'),
   };
+}
+
+/**
+ * Write the usage the ledger holds before the case runs.
+ *
+ * The ledger is the measurement: the board's check reads the bean's usage
+ * from it, so a case that seeds usage has to seed the ledger and not the
+ * board's self-report. The rows carry the bean's id as the task id.
+ */
+async function seedLedger(
+  root: string,
+  usage: { bean: string; tokens: number; turns?: number }[],
+): Promise<void> {
+  if (usage.length === 0) return;
+  const ledger = openLedger(root);
+  try {
+    for (const entry of usage) {
+      const turns = Math.max(1, entry.turns ?? 1);
+      const each = Math.floor(entry.tokens / turns);
+      let left = entry.tokens;
+      for (let turn = 0; turn < turns && left > 0; turn += 1) {
+        const tokens = turn === turns - 1 ? left : each;
+        left -= tokens;
+        recordAssistantMessage(
+          ledger,
+          {
+            id: `seed-${entry.bean}-${turn}`,
+            sessionID: `seed-session-${entry.bean}`,
+            providerID: 'seed',
+            modelID: 'seed-model',
+            tokens: { input: tokens, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          },
+          {
+            rootSessionId: `seed-session-${entry.bean}`,
+            role: 'builder',
+            activeTaskId: entry.bean,
+            ts: new Date().toISOString(),
+          },
+        );
+      }
+    }
+  } finally {
+    closeLedger(ledger);
+  }
 }
 
 /** The files a case may write, so the assertions can tell what changed. */
@@ -131,9 +193,16 @@ export async function readAudit(state: CaseState): Promise<
  * its role key ('builder') or its agent id ('oa-builder'). Both name the
  * same agent, so both are accepted. A check that demands one spelling scores
  * a correct agent as silent.
+ *
+ * A dispatch label names the same agent too: the Lead dispatches 'builder-2'
+ * and grants the lease to that name, but the session that runs is the
+ * builder role, and it posts under the label it was given (measured
+ * 2026-10-27: the builder's completion record was invisible to the
+ * confirmation and the case failed with 'a completion nobody confirmed').
  */
 export function isFrom(record: { from: string }, agent: string): boolean {
-  const name = (value: string): string => value.trim().toLowerCase().replace(/^oa-/, '');
+  const name = (value: string): string =>
+    value.trim().toLowerCase().replace(/^oa-/, '').replace(/-\d+$/, '');
   return name(record.from) === name(agent);
 }
 
@@ -191,6 +260,105 @@ export async function waitForRecord(
 }
 
 /**
+ * The host's session-moving tool.
+ *
+ * OpenCode 2 exposes it in the `opencode` namespace, and a namespaced tool
+ * reaches the model with the namespace in front of the name and an
+ * underscore between (measured on the 2.2.0 binary: the namespace dots
+ * become underscores, so the tool the model calls is `opencode_session_move`
+ * and not `session_move`).
+ *
+ * The tool moves a session to another directory. A session that leaves the
+ * case directory loses the agent the case wired for it: the server resolves
+ * an agent in the directory of the session, and the case's agents live in
+ * the case directory. The board, the leases and the harvest live there too.
+ *
+ * Measured on 2026-10-28: the archivist of the harvest case investigated the
+ * board's SQLite write-ahead log, made a scratch copy of the board database
+ * under the system temp directory, moved its own session there to read it,
+ * and the server could not find `oa-archivist` any more. The drain of the
+ * session failed with `Agent not found: "oa-archivist"`, and the run was
+ * red because a case passed while the host failed.
+ *
+ * The deny belongs to the case and not to the project: a real project's Lead
+ * moves a session into a worktree on purpose, and that is what the tool is
+ * for. A case is a closed world, and an agent inside it may not leave.
+ */
+export const SESSION_MOVE_TOOL = 'opencode_session_move';
+
+/**
+ * The judge agent, in the shape the runtime reads.
+ *
+ * The judge is not a role, so the CLI does not write it: the suite copies the
+ * template into the case directory. The template is an OpenCode 1 file, and
+ * the 2.x server reads a different frontmatter: the permission map becomes
+ * an ordered list of rules and the tools carry the 2.x names. A file the 2.x
+ * server cannot read is an agent that does not exist, and the judge then
+ * answers without its instructions: measured on 2026-10-27, the judge of the
+ * budget stop case answered in prose and the case failed on the answer.
+ */
+export async function judgeAgent(repoRoot: string, runtime: OpenCodeRuntime): Promise<string> {
+  const template = await readFile(
+    join(repoRoot, 'packages', 'evals', 'templates', 'judge.md'),
+    'utf8',
+  );
+  if (runtime.major < 2) return template;
+  return v2JudgeAgent(template);
+}
+
+/** The tools of the 2.x server under the names the 1.x server used. */
+const V2_TOOL_NAMES: Record<string, string> = { bash: 'shell', task: 'subagent' };
+
+/** The tools the 2.x server has no action for. */
+const V2_DROPPED_TOOLS = new Set(['lsp', 'list']);
+
+/**
+ * The judge file of the 2.x server.
+ *
+ * The permission map of the template becomes a list of rules, the tools are
+ * renamed, and the model is left out: the model of the judge's session is
+ * the one the harness set, and a model in the file would argue with it.
+ */
+function v2JudgeAgent(template: string): string {
+  const parts = splitAgentFile(template);
+  if (parts === undefined) return template;
+  const permission = (parts.frontmatter['permission'] ?? {}) as Record<string, string>;
+  const rules = Object.entries(permission)
+    .filter(([tool]) => !V2_DROPPED_TOOLS.has(tool))
+    .map(([tool, effect]) => ({
+      action: V2_TOOL_NAMES[tool] ?? tool,
+      resource: '*',
+      effect,
+    }));
+  // The judge is an agent of the case, and an agent of a case may not move
+  // its session out of the case directory. The rule is written after the
+  // template's own rules, so it is the last word about the tool.
+  rules.push({ action: SESSION_MOVE_TOOL, resource: '*', effect: 'deny' });
+  const frontmatter = {
+    description: parts.frontmatter['description'],
+    mode: parts.frontmatter['mode'],
+    steps: parts.frontmatter['steps'],
+    permissions: rules,
+  };
+  return `---\n${stringifyYaml(frontmatter, { lineWidth: 0 }).trimEnd()}\n---\n\n${parts.body}`;
+}
+
+/** The frontmatter of an agent file, and the body under it. */
+function splitAgentFile(
+  text: string,
+): { frontmatter: Record<string, unknown>; body: string } | undefined {
+  if (!text.startsWith('---\n')) return undefined;
+  const end = text.indexOf('\n---', 3);
+  if (end === -1) return undefined;
+  const parsed = parseYaml(text.slice(4, end)) as unknown;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  return {
+    frontmatter: parsed as Record<string, unknown>,
+    body: text.slice(end + 4).replace(/^\n+/, ''),
+  };
+}
+
+/**
  * Wire a directory the way a real project is wired: the agents, the plugin,
  * the board server and the leases.
  *
@@ -207,6 +375,14 @@ export async function prepare(
     model?: string;
     /** Whether the memory pipeline runs in this case. */
     harvest?: boolean;
+    /**
+     * The runtime the harness started.
+     *
+     * The MCP servers the machine already runs are switched off in the
+     * shape that runtime reads, and the runtime is what says which shape
+     * that is.
+     */
+    runtime: OpenCodeRuntime;
   },
 ): Promise<CaseState> {
   const state = await seedCase(root, fixture, { repoRoot: options.repoRoot });
@@ -217,10 +393,7 @@ export async function prepare(
   // headless session has nobody to answer, so the tool call waits forever.
   // The lease guard runs before the permission check, so opening the editor
   // up does not weaken what the cases are about.
-  const roles =
-    options.headless === true
-      ? await headlessRoles(options.repoRoot)
-      : await readFile(join(options.repoRoot, 'roles.yaml'), 'utf8');
+  const roles = await caseRoles(options.repoRoot, options.headless === true);
   await writeFile(join(root, 'roles.yaml'), roles, 'utf8');
   await copyFile(
     join(options.repoRoot, 'openagentsy.models.lock.json'),
@@ -238,6 +411,13 @@ export async function prepare(
   // Bun, not node: the CLI reaches the board's database, and that database
   // is a bun:sqlite builtin. Node cannot load it, and a case whose agents
   // were never generated waits for an agent that does not exist.
+  //
+  // The agents are built for the runtime that will read them: the two
+  // runtimes read different permission keys. The 2.x runtime reads the files
+  // the CLI writes for it, and the CLI writes those for 2.x without being
+  // told: the flag that named the target went with the 1.x line. A 1.x
+  // runtime still needs the flag, so the branch is kept.
+  const target = options.runtime.major >= 2 ? [] : ['--target', 'v1'];
   await execFileAsync(
     'bun',
     [
@@ -245,8 +425,7 @@ export async function prepare(
       'build',
       '--root',
       root,
-      '--target',
-      'v1',
+      ...target,
     ],
     { cwd: root },
   );
@@ -268,17 +447,29 @@ export async function prepare(
   }
   // The judge agent, which has no tools and answers with one JSON object.
   await mkdir(join(root, '.opencode', 'agents'), { recursive: true });
-  await copyFile(
-    join(options.repoRoot, 'packages', 'evals', 'templates', 'judge.md'),
+  await writeFile(
     join(root, '.opencode', 'agents', 'judge.md'),
+    await judgeAgent(options.repoRoot, options.runtime),
+    'utf8',
   );
+
+  // The MCP servers the machine already runs are switched off for the case,
+  // and the shape of that switch follows the runtime the harness started.
+  const mcp = caseMcp(options.runtime);
+  for (const note of mcp.notes) {
+    // The harness's own behaviour about a file it skipped is said out
+    // loud: a global config it could not read is not the same as a global
+    // config that says nothing, and a case that runs with the machine's
+    // servers on is not the case the suite meant to run.
+    process.stderr.write(`[global config] ${note}\n`);
+  }
 
   await writeFile(
     join(root, 'opencode.json'),
     `${JSON.stringify(
       {
         mcp: {
-          ...disabledGlobalServers(),
+          ...mcp.mcp,
           openagentsy: {
             type: 'local',
             command: ['bun', join(options.repoRoot, 'packages', 'mcp', 'dist', 'index.js')],
@@ -288,7 +479,7 @@ export async function prepare(
                 ? { OPENAGENTSY_FAULT: options.boardFault }
                 : {}),
             },
-            enabled: true,
+            ...(options.runtime.major >= 2 ? { disabled: false } : { enabled: true }),
           },
         },
         compaction: { auto: false, prune: false },
@@ -303,59 +494,178 @@ export async function prepare(
 }
 
 /**
- * The MCP servers the machine already runs, switched off for the case.
- *
- * A session sends the tool schemas of every MCP server it can reach, and the
- * global ones are large. Seven of them, the GitHub one alone has sixty
- * tools, is most of the prompt of a case. The case only needs the board.
- *
- * The entry is the global one with the switch off, not a fresh one: the
- * server rejects an entry it cannot read ("Ignoring MCP config entry
- * without type"), and a case that leaves an error in the server's log is a
- * case whose green says nothing about the agent.
+ * The MCP servers one global config file declares, and what was wrong with it.
  */
-function disabledGlobalServers(): Record<string, unknown> {
-  const disabled: Record<string, unknown> = {};
-  for (const path of globalConfigPaths()) {
-    for (const [name, entry] of Object.entries(globalMcpServers(path))) {
-      if (name === 'openagentsy') continue;
-      disabled[name] = { ...entry, enabled: false };
-    }
-  }
-  return disabled;
-}
+export type GlobalMcp = {
+  /** The entries the server can read, keyed by name. */
+  servers: Record<string, Record<string, unknown>>;
+  /**
+   * The lines a person reads: what was dropped, and why.
+   *
+   * A file the harness could not read is said out loud. A parse failure
+   * that became "no MCP servers" would hide the reason a case failed.
+   */
+  notes: string[];
+};
 
 /**
- * The MCP servers one global config file declares, as the server reads them.
+ * The MCP servers one global config file declares.
  *
  * The config is JSON with comments, so it is read as JSONC. The entry keeps
  * its type and its command or url, because the server rejects an entry it
  * cannot read, and it loses its environment, because a server that is
  * switched off needs no key and a case directory is a place a key should
  * not be written.
+ *
+ * Both shapes of the config are read: OpenCode 1 keeps the servers in a
+ * flat map and OpenCode 2 nests them under "servers".
+ *
+ * An entry without a type is dropped. The server ignores such an entry
+ * ("Ignoring MCP config entry without type"), and a case that runs with an
+ * entry the server ignores is a case whose green says nothing about the
+ * agent.
  */
-export function globalMcpServers(path: string): Record<string, Record<string, unknown>> {
+export function globalMcpServers(path: string): GlobalMcp {
+  const read = readGlobalConfig(path);
+  if (read.note !== undefined) return { servers: {}, notes: [read.note] };
+
+  const mcp = (read.parsed as { mcp?: unknown } | undefined)?.mcp;
+  if (mcp === undefined || mcp === null || typeof mcp !== 'object') {
+    return { servers: {}, notes: [] };
+  }
+
+  const servers: Record<string, Record<string, unknown>> = {};
+  const notes: string[] = [];
+  for (const [name, entry] of mcpEntriesOf(mcp as Record<string, unknown>)) {
+    const server = serverEntryOf(entry);
+    if (server.entry === undefined) {
+      notes.push(
+        `the global config ${path} declares the MCP entry "${name}" ${server.reason}; it was not copied into the case`,
+      );
+      continue;
+    }
+    servers[name] = server.entry;
+  }
+  return { servers, notes };
+}
+
+/**
+ * The text of a global config file, or the reason it could not be read.
+ *
+ * jsonc-parser does not throw on a broken file: it collects the errors and
+ * returns what it could parse. Without the errors a config with a missing
+ * comma reads as a config that says nothing, and the run goes on into a
+ * state where every session that starts dies.
+ */
+function readGlobalConfig(path: string): { parsed?: unknown; note?: string } {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    return {
+      note: `the global config ${path} could not be read (${(error as Error).message}); it was skipped`,
+    };
   }
-  let parsed: unknown;
-  try {
-    parsed = parseJsonc(text);
-  } catch {
-    return {};
+
+  const errors: ParseError[] = [];
+  const parsed = parseJsonc(text, errors, { allowTrailingComma: true }) as unknown;
+  const first = errors[0];
+  if (first !== undefined) {
+    return {
+      note: `the global config ${path} is not valid JSONC (${first.error} at offset ${first.offset}); it was skipped, so the MCP servers it declares are not switched off for the case`,
+    };
   }
-  const mcp = (parsed as { mcp?: unknown } | undefined)?.mcp;
-  if (mcp === undefined || mcp === null || typeof mcp !== 'object') return {};
+  return { parsed };
+}
+
+/**
+ * The entries the mcp map of a global config holds.
+ *
+ * OpenCode 2 nests the servers under "servers"; OpenCode 1 keeps them in a
+ * flat map. A flat entry that is itself named "servers" carries a type and
+ * a nested map does not, so the type tells the two apart. Both are read,
+ * because a config may hold the two shapes at once.
+ */
+function mcpEntriesOf(map: Record<string, unknown>): [string, unknown][] {
+  const nested = map.servers;
+  const isNestedMap =
+    nested !== undefined &&
+    nested !== null &&
+    typeof nested === 'object' &&
+    !Array.isArray(nested) &&
+    (nested as Record<string, unknown>).type === undefined;
+
+  const entries: [string, unknown][] = [];
+  for (const [name, entry] of Object.entries(map)) {
+    if (isNestedMap && name === 'servers') continue;
+    entries.push([name, entry]);
+  }
+  if (isNestedMap) {
+    for (const [name, entry] of Object.entries(nested as Record<string, unknown>)) {
+      entries.push([name, entry]);
+    }
+  }
+  return entries;
+}
+
+/**
+ * The server an entry declares, or why the server will not read it.
+ */
+function serverEntryOf(entry: unknown): {
+  entry?: Record<string, unknown>;
+  reason?: string;
+} {
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
+    return { reason: 'that is not an object' };
+  }
+  const { environment: _environment, ...rest } = entry as Record<string, unknown>;
+  if (typeof rest.type !== 'string' || rest.type === '') {
+    return { reason: 'without a type' };
+  }
+  return { entry: rest };
+}
+
+/**
+ * The MCP section of a case's own config.
+ *
+ * The global servers the machine already runs are written next to the case's
+ * own board server, switched off: a session sends the tool schemas of every
+ * MCP server it can reach, and the global ones are large - the GitHub one
+ * alone has sixty tools, and it is most of the prompt of a case.
+ *
+ * The shape follows the runtime. OpenCode 1 reads a flat map and switches a
+ * server off with "enabled": false; OpenCode 2 nests the map under
+ * "servers" and switches a server off with "disabled": true. An entry
+ * without a type is never written: the server ignores such an entry, and a
+ * case that runs with an entry the server ignores is a case whose green
+ * says nothing about the agent.
+ */
+export function caseMcp(runtime: OpenCodeRuntime): {
+  mcp: Record<string, unknown>;
+  notes: string[];
+} {
   const servers: Record<string, Record<string, unknown>> = {};
-  for (const [name, entry] of Object.entries(mcp as Record<string, unknown>)) {
-    if (entry === null || typeof entry !== 'object') continue;
-    const { environment: _environment, ...rest } = entry as Record<string, unknown>;
-    servers[name] = rest;
+  const notes: string[] = [];
+  for (const path of globalConfigPaths()) {
+    const read = globalMcpServers(path);
+    notes.push(...read.notes);
+    for (const [name, entry] of Object.entries(read.servers)) {
+      // The case brings its own board server, and it is never switched off.
+      if (name === 'openagentsy') continue;
+      servers[name] = entry;
+    }
   }
-  return servers;
+
+  const switchedOff: Record<string, unknown> = {};
+  for (const [name, entry] of Object.entries(servers)) {
+    switchedOff[name] =
+      runtime.major >= 2 ? { ...entry, disabled: true } : { ...entry, enabled: false };
+  }
+  return {
+    mcp: runtime.major >= 2 ? { servers: switchedOff } : switchedOff,
+    notes,
+  };
 }
 
 function globalConfigPaths(): string[] {
@@ -369,9 +679,38 @@ function globalConfigPaths(): string[] {
 }
 
 /**
- * The project roles, with the shell and the editor opened up for a headless
- * run.
+ * The roles a case runs under.
+ *
+ * A case is a closed world: the board, the leases and the harvest all live in
+ * the case directory, and the server resolves an agent in the directory of
+ * the session. An agent of a case may therefore not move its session out of
+ * the case directory, and the host's session-moving tool is denied to every
+ * role of the case.
+ *
+ * The deny is the case's own rule and not the project's: a real project's
+ * Lead moves a session into a worktree on purpose.
  */
+export async function caseRoles(repoRoot: string, headless: boolean): Promise<string> {
+  const { parse, stringify } = await import('yaml');
+  const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');
+  const roles = parse(text) as {
+    roles: Record<string, { permissions?: Record<string, unknown> }>;
+  };
+
+  if (headless) openHeadless(roles);
+
+  for (const role of Object.values(roles.roles)) {
+    const permissions = role.permissions;
+    if (permissions === undefined) {
+      role.permissions = { [SESSION_MOVE_TOOL]: [{ resource: '*', effect: 'deny' }] };
+      continue;
+    }
+    permissions[SESSION_MOVE_TOOL] = [{ resource: '*', effect: 'deny' }];
+  }
+
+  return stringify(roles);
+}
+
 /**
  * The paths the project protects from an agent's edit.
  *
@@ -404,13 +743,15 @@ export function casePermissionPolicy(protectedPaths: string[]) {
   };
 }
 
-async function headlessRoles(repoRoot: string): Promise<string> {
-  const { parse, stringify } = await import('yaml');
-  const text = await readFile(join(repoRoot, 'roles.yaml'), 'utf8');
-  const roles = parse(text) as {
-    roles: Record<string, { permissions?: Record<string, unknown> }>;
-  };
-
+/**
+ * Open the shell and the editor up for a headless run.
+ *
+ * The roles are read and written in place, so the caller decides what it
+ * does with them afterwards.
+ */
+function openHeadless(roles: {
+  roles: Record<string, { permissions?: Record<string, unknown> }>;
+}): void {
   for (const role of Object.values(roles.roles)) {
     // The shell and the editor are opened up: a headless session has nobody
     // to answer an "ask", and the tool call would wait for the whole timeout.
@@ -444,8 +785,6 @@ async function headlessRoles(repoRoot: string): Promise<string> {
     researcher.permissions.webfetch = 'allow';
     researcher.permissions.websearch = 'allow';
   }
-
-  return stringify(roles);
 }
 
 /**

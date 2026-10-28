@@ -19,8 +19,25 @@ const bundlePath = fileURLToPath(new URL('../plugin/openagentsy.js', import.meta
 describe('the plugin bundle', () => {
   it('imports nothing from a path next to it', async () => {
     const bundle = await readFile(bundlePath, 'utf8');
-    const relative = bundle.match(/(?:from|import\()\s*['"]\.[^'"]+['"]/g);
+    // The statements that pull in a relative path, and nothing else. The
+    // bundle carries the text of the packages it inlines, and a doc comment
+    // in one of them shows an import of its own; a statement that does not
+    // start a line is prose, not an import.
+    const relative = bundle.match(
+      /^(?!\s*\*)\s*(?:(?:import|export)[^\n;]*?from|import\s*\()\s*['"]\.[^'"]+['"]/gm,
+    );
     expect(relative ?? []).toEqual([]);
+  });
+
+  it('does not carry the TypeScript compiler', async () => {
+    const bundle = await readFile(bundlePath, 'utf8');
+    // The comment rules need a TypeScript parse to find the comments of a
+    // file. The plugin runs a check on every write, so the compiler is not
+    // in the bundle: the comment lint runs in the quality tool and in the
+    // audit command, where a parse is paid for on demand. These are names
+    // of the compiler's own API, and nothing else in the bundle has them.
+    expect(bundle).not.toContain('getPreEmitDiagnostics');
+    expect(bundle).not.toContain('createTypeChecker');
   });
 
   it('is the file the setup command copies out', async () => {

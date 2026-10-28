@@ -23,6 +23,33 @@ function input(overrides: Partial<PostRecordInput> = {}): PostRecordInput {
   };
 }
 
+describe('listRecords', () => {
+  it('delivers a record addressed to the Lead under either of its names', () => {
+    // The archivist addresses the Lead as `Lead`; the Lead session reads as
+    // `lead`. The finding reached nobody (measured 2026-10-27, the fault
+    // case's own board).
+    createRecord(db, input({ to: 'Lead', kind: 'finding' }));
+    const read = listRecords(db, { agent: 'lead' });
+    expect(read.records.map((record) => record.to)).toEqual(['Lead']);
+  });
+
+  it('does not deliver the same record twice under the other name', () => {
+    createRecord(db, input({ to: 'Lead' }));
+    expect(listRecords(db, { agent: 'lead' }).records).toHaveLength(1);
+    expect(listRecords(db, { agent: 'agentsy' }).records).toHaveLength(0);
+  });
+
+  it('folds the oa- prefix, so a record reaches the role and the agent', () => {
+    createRecord(db, input({ to: 'oa-builder' }));
+    expect(listRecords(db, { agent: 'builder' }).records).toHaveLength(1);
+  });
+
+  it('keeps a record for another agent', () => {
+    createRecord(db, input({ to: 'oa-reviewer' }));
+    expect(listRecords(db, { agent: 'builder' }).records).toHaveLength(0);
+  });
+});
+
 describe('createRecord', () => {
   it('stores every field of the record', () => {
     const record = createRecord(

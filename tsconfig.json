@@ -6,7 +6,15 @@
     { "path": "packages/cli" },
     { "path": "packages/mcp" },
     { "path": "packages/models" },
+    { "path": "packages/footprint" },
+    { "path": "packages/sidebar" },
+    { "path": "packages/ledger" },
+    { "path": "packages/memory" },
     { "path": "packages/adapter-opencode" },
-    { "path": "packages/evals" }
+    { "path": "packages/evals" },
+    { "path": "packages/tasks" },
+    { "path": "packages/offload" },
+    { "path": "packages/hooks" },
+    { "path": "packages/quality" }
   ]
 }

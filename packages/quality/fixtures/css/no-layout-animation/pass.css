@@ -1,0 +1,13 @@
+/* Passes: the motion moves the card with transform and opacity. */
+.card {
+  transition: transform 0.2s ease;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

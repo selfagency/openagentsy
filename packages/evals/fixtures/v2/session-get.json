@@ -1,0 +1,13 @@
+{
+  "data": {
+    "id": "ses_e81a0ebf6ffeuFpzQZmRvlcDLv",
+    "projectID": "5ac72e3cf881410bae5223efbaee540df63d6c40",
+    "cost": 0,
+    "tokens": { "input": 0, "output": 0, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
+    "outcome": "failed",
+    "time": { "created": 1793121522698, "updated": 1793121529667, "idle": 1793121529670 },
+    "title": "probe session 2",
+    "subpath": "../../../tmp/oa-v2probe",
+    "location": { "directory": "/tmp/oa-v2probe" }
+  }
+}

@@ -1,14 +1,16 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
-import { agentIdFor, agentIdOf, loadRoles, type RolesFile, type Target } from '@openagentsy/core';
+import { dirname, join } from 'node:path';
+import { agentIdFor, agentIdOf, loadRoles, type RolesFile } from '@openagentsy/core';
 import { agentFileName, renderAgent } from '../generate/agent.js';
 import { COMMANDS, renderCommand } from '../generate/commands.js';
 import { lockEntryFor, lockVariants, type ModelLock, readModelLock } from '../generate/lock.js';
 
 export type BuildOptions = {
-  root: string;
-  target: Target;
+  /** The workspace: the roles, the templates and the output live here. */
+  workspace: string;
+  /** The state root: the model lock lives here. */
+  stateRoot: string;
   rolesPath?: string;
   lockPath?: string;
   outDir?: string;
@@ -21,9 +23,9 @@ export type BuildResult = {
   warnings: string[];
 };
 
-async function writeFileAt(path: string, content: string): Promise<void> {
+async function writeFileAt(path: string, content: string | Uint8Array): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, content, 'utf8');
+  await writeFile(path, content);
 }
 
 /**
@@ -58,6 +60,28 @@ async function removeStaleAgents(
   }
 }
 
+/**
+ * Copy a directory, with everything in it.
+ *
+ * A skill may link to reference files beside its SKILL.md, and a copy
+ * that took only the SKILL.md would leave those links pointing at
+ * nothing. The whole tree is copied, so a file the skill names is
+ * there when the skill is read.
+ */
+async function copyTree(from: string, to: string): Promise<void> {
+  const entries = await readdir(from, { withFileTypes: true });
+  for (const entry of entries) {
+    const source = join(from, entry.name);
+    const target = join(to, entry.name);
+    if (entry.isDirectory()) {
+      await mkdir(target, { recursive: true });
+      await copyTree(source, target);
+      continue;
+    }
+    await writeFileAt(target, await readFile(source));
+  }
+}
+
 async function copySkills(
   sourceDir: string,
   targetDir: string,
@@ -74,14 +98,20 @@ async function copySkills(
 
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const skillFile = join(sourceDir, entry.name, 'SKILL.md');
+    const skillDir = join(sourceDir, entry.name);
     try {
-      const content = await readFile(skillFile, 'utf8');
-      await writeFileAt(join(targetDir, entry.name, 'SKILL.md'), content);
-      copied.push(entry.name);
+      await readFile(join(skillDir, 'SKILL.md'), 'utf8');
     } catch {
       warnings.push(`skill "${entry.name}" has no SKILL.md, skipped`);
+      continue;
     }
+    try {
+      await copyTree(skillDir, join(targetDir, entry.name));
+    } catch (error) {
+      warnings.push(`skill "${entry.name}" could not be copied: ${(error as Error).message}`);
+      continue;
+    }
+    copied.push(entry.name);
   }
 
   return { copied, warnings };
@@ -89,11 +119,14 @@ async function copySkills(
 
 /**
  * Render every role's agent file, and return the ids that were written.
+ *
+ * The roles and the templates are the workspace's, and the model lock is
+ * the state root's: the lock is the choice of models the project made, and
+ * a worktree of the project has the same lock as the project.
  */
 async function renderAgents(
   roles: RolesFile,
   lock: ModelLock | undefined,
-  target: Target,
   agentsDir: string,
 ): Promise<string[]> {
   const ids: string[] = [];
@@ -101,10 +134,9 @@ async function renderAgents(
     const entry = lockEntryFor(lock, role.name);
     const variants = lockVariants(entry);
     const content = renderAgent(role, roles, {
-      target,
       ...(entry?.model ? { model: entry.model } : {}),
-      // V1 agent frontmatter has no variant field, so only V2 can pin one.
-      ...(target === 'v2' && variants.start !== undefined ? { modelVariant: variants.start } : {}),
+      // The agent frontmatter pins the variant of the model it starts on.
+      ...(variants.start !== undefined ? { modelVariant: variants.start } : {}),
       effort: variants,
     });
     await writeFileAt(join(agentsDir, agentFileName(role)), content);
@@ -114,10 +146,10 @@ async function renderAgents(
 }
 
 export async function runBuild(options: BuildOptions): Promise<BuildResult> {
-  const root = options.root;
-  const rolesPath = options.rolesPath ?? join(root, 'roles.yaml');
-  const lockPath = options.lockPath ?? join(root, 'openagentsy.models.lock.json');
-  const outDir = options.outDir ?? join(root, '.opencode');
+  const { workspace, stateRoot } = options;
+  const rolesPath = options.rolesPath ?? join(workspace, 'roles.yaml');
+  const lockPath = options.lockPath ?? join(stateRoot, 'openagentsy.models.lock.json');
+  const outDir = options.outDir ?? join(workspace, '.opencode');
 
   const roles = await loadRoles(rolesPath);
   const lock = await readModelLock(lockPath);
@@ -125,11 +157,11 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
 
   if (!lock) {
     warnings.push(
-      `no model lock at ${relative(root, lockPath)}, generated agents inherit the OpenCode default model`,
+      `no model lock at ${lockPath}, generated agents inherit the OpenCode default model`,
     );
   }
 
-  const agents = await renderAgents(roles, lock, options.target, join(outDir, 'agents'));
+  const agents = await renderAgents(roles, lock, join(outDir, 'agents'));
   const knownNames = new Set(
     Object.values(roles.roles)
       .map((role) => role.agentName)
@@ -140,15 +172,12 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   const commands: string[] = [];
   for (const command of COMMANDS) {
     const path = join(outDir, 'commands', `${command.name}.md`);
-    await writeFileAt(
-      path,
-      renderCommand(command, options.target, agentIdFor(roles, command.role)),
-    );
+    await writeFileAt(path, renderCommand(command, agentIdFor(roles, command.role)));
     commands.push(command.name);
   }
 
   const skills = await copySkills(
-    join(root, 'templates', '.opencode', 'skills'),
+    join(workspace, 'templates', '.opencode', 'skills'),
     join(outDir, 'skills'),
   );
   warnings.push(...skills.warnings);

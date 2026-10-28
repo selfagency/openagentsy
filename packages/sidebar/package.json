@@ -1,0 +1,65 @@
+{
+  "name": "@openagentsy/sidebar",
+  "version": "0.2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./dist/tui.js"
+    }
+  },
+  "types": "./types/index.d.ts",
+  "main": "./dist/tui.js",
+  "scripts": {
+    "build": "bun run scripts/build.mjs && tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json"
+  },
+  "dependencies": {
+    "@openagentsy/core": "workspace:^",
+    "@openagentsy/footprint": "workspace:^",
+    "@openagentsy/hooks": "workspace:^",
+    "@openagentsy/ledger": "workspace:^",
+    "@openagentsy/memory": "workspace:^",
+    "@openagentsy/tasks": "workspace:^"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "2.2.0",
+    "@opencode/theme": "2.2.0",
+    "@opentui/core": "0.7.0",
+    "@opentui/solid": "0.7.0",
+    "solid-js": "1.9.12"
+  },
+  "devDependencies": {
+    "@opencode/client": "2.2.0",
+    "@types/node": "^24.3.0",
+    "bun-types": "^1.4.4",
+    "typescript": "^5.9.2"
+  },
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/voxslopuli/openagentsy.git"
+  },
+  "homepage": "https://github.com/voxslopuli/openagentsy#readme",
+  "bugs": {
+    "url": "https://github.com/voxslopuli/openagentsy/issues"
+  },
+  "engines": {
+    "opencode": ">=2.0 <3"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "description": "The OpenAgentsy sidebar: the OpenCode 2 TUI blocks.",
+  "keywords": [
+    "agents",
+    "opencode",
+    "tui",
+    "sidebar",
+    "footprint"
+  ],
+  "files": [
+    "dist",
+    "types"
+  ]
+}

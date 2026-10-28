@@ -1,6 +1,6 @@
 {
   "name": "@openagentsy/core",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "exports": {
     ".": "./dist/index.js"
@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.4",
-    "yaml": "^2.8.0"
+    "yaml": "^2.8.0",
+    "zod": "^4.1.8"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
@@ -24,11 +25,11 @@
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/selfagency/openagentsy.git"
+    "url": "git+https://github.com/voxslopuli/openagentsy.git"
   },
-  "homepage": "https://github.com/selfagency/openagentsy#readme",
+  "homepage": "https://github.com/voxslopuli/openagentsy#readme",
   "bugs": {
-    "url": "https://github.com/selfagency/openagentsy/issues"
+    "url": "https://github.com/voxslopuli/openagentsy/issues"
   },
   "engines": {
     "node": ">=22.5.0"
@@ -46,6 +47,5 @@
   "files": [
     "dist",
     "drizzle"
-  ],
-  "author": "daniel sieradski <github@self.agency>"
+  ]
 }

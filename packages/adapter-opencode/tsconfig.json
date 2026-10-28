@@ -4,8 +4,9 @@
     "composite": true,
     "rootDir": "src",
     "outDir": "dist",
-    "emitDeclarationOnly": true
+    "emitDeclarationOnly": true,
+    "declarationDir": "types"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }]
+  "references": [{ "path": "../core" }, { "path": "../hooks" }, { "path": "../ledger" }]
 }

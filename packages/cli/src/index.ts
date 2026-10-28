@@ -1,31 +1,72 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import type { Target } from '@openagentsy/core';
+import { type ProjectRoots, resolveProjectRoots } from '@openagentsy/core';
+import type { FetchLike } from '@openagentsy/models';
+import { formatApproveResult, runApprove } from './commands/approve.js';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
+import { formatConformanceReport, runConformance } from './commands/conformance.js';
 import { formatDoctorReport, runDoctor } from './commands/doctor.js';
+import {
+  formatLedgerReport,
+  formatOutcomesReport,
+  formatScanRevertsReport,
+  formatWasteReport,
+  runLedger,
+  runLedgerOutcomes,
+  runLedgerScanReverts,
+  runLedgerWaste,
+} from './commands/ledger.js';
+import {
+  formatLessonDecision,
+  formatLessonsReport,
+  runLessonDecision,
+  runLessons,
+} from './commands/lessons.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
+import { ethicalReportAsJson, formatEthicalReport, runEthicalReport } from './commands/report.js';
 import { runSetup } from './commands/setup.js';
-import { detectOpenCode, targetForVersion } from './opencode.js';
 
 const USAGE = `openagentsy <command> [options]
 
+Two roots: the directory the command runs in, and the state root of the
+project. The state root is the main repository root, so a command run in a
+linked worktree reads the board, the ledger and the lock of the project.
+
 Commands:
+  audit              Report the quality findings of the change, and say which path ran
   board              Show the records, leases and budgets, for a human to read
-  build              Generate the agent, command and skill files for a target OpenCode version
+  build              Generate the agent, command and skill files
+  conformance        Report what is proven, observed or unverified
   doctor             Report what is installed, where it came from, and what is missing
+  ledger             Show the tokens, the cost and the waste of the work
+  ledger export      Write the counters of the ledger as JSON
+  ledger waste       Find the waste that can be found, and say what the waste is
+  ledger scan-reverts  Find the code that was written and then taken back
+  ledger outcomes    Find the commits that name a task, and the Refs trailers they carry
+  lessons            Show the lessons that are waiting for a decision
+  lesson <id> <act>  Decide a lesson: validate, apply, reject or observe
+  waive <ruleId> <path> <reason>
+                        Record a quality waiver, as a person
+  approve <callID>   Grant one call the permission it asked for
   setup              Write the OpenCode config for OpenAgentsy
   models init        Pick a model for every role and write the model lock file
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
-  models switch      Switch the provider, re-pick the models, and write the lock file
-
+  models switch        Switch the provider, re-pick the models, and write the lock file
+  report --ethical     Report what the run cost, and what it was worth
 Options:
-  --root <dir>        Project root (default: current directory)
-  --target v1|v2      OpenCode version to generate for (default: detected)
+  --root <dir>        Project directory (default: current directory)
+  --all               Audit the whole project instead of the changed files
+  --base <ref>        The ref the changed files are measured against (default: HEAD)
+  --since <when>      How far back to look (default: 30 days ago)
+  --session <id>      Report one session, and the subagents that rolled up into it
+  --bean <id>         Report one bean: the rows whose task is that bean
+  --check             Exit nonzero when a floor finding is open
+  --ethical           Report the run in the form of §12
   --out <dir>         Output directory for build (default: <root>/.opencode)
   --roles <file>      Roles file (default: <root>/roles.yaml)
-  --lock <file>       Model lock file (default: <root>/openagentsy.models.lock.json)
+  --lock <file>       Model lock file (default: <state root>/openagentsy.models.lock.json)
   --config <file>     Config file for setup (default: <root>/opencode.json)
   --providers <list>  Providers for models init, comma separated
   --prefer-flash      Take the flash variant of the family a role would get
@@ -33,6 +74,8 @@ Options:
   --allow-retention   Allow models that are not zero data retention
   --key <key>         BenchLM key, for the keyed REST API
   --yes               Write the lock file without asking
+  --json              Write the output as JSON (ledger, conformance)
+  --ttl <ms>          How long a grant lives (default: 15 minutes, max: 1 day)
   --dry-run           Print what setup would write without writing it
   --magic-context     Turn OpenCode's compaction off, for a project with a
                       memory integration that shrinks the context itself
@@ -42,38 +85,39 @@ Options:
 /** The parsed options. The names are the ones the usage card names. */
 export type Values = {
   root?: string | undefined;
-  target?: string | undefined;
+  since?: string | undefined;
   out?: string | undefined;
   roles?: string | undefined;
   lock?: string | undefined;
   config?: string | undefined;
   providers?: string | undefined;
   key?: string | undefined;
+  all?: boolean | undefined;
+  base?: string | undefined;
   'dry-run'?: boolean | undefined;
   'magic-context'?: boolean | undefined;
   'prefer-flash'?: boolean | undefined;
   'allow-training'?: boolean | undefined;
   'allow-retention'?: boolean | undefined;
   yes?: boolean | undefined;
+  json?: boolean | undefined;
+  ttl?: string | undefined;
+  session?: string | undefined;
+  bean?: string | undefined;
+  ethical?: boolean | undefined;
+  check?: boolean | undefined;
   help?: boolean | undefined;
 };
 
-async function resolveTarget(explicit: string | undefined): Promise<Target> {
-  if (explicit === 'v1' || explicit === 'v2') return explicit;
-  const version = await detectOpenCode();
-  return version ? targetForVersion(version) : 'v1';
-}
-
-async function buildCommand(root: string, values: Values): Promise<number> {
-  const target = await resolveTarget(values.target);
+async function buildCommand(roots: ProjectRoots, values: Values): Promise<number> {
   const result = await runBuild({
-    root,
-    target,
+    workspace: roots.workspace,
+    stateRoot: roots.stateRoot,
     ...(values.out ? { outDir: values.out } : {}),
     ...(values.roles ? { rolesPath: values.roles } : {}),
     ...(values.lock ? { lockPath: values.lock } : {}),
   });
-  process.stdout.write(`built for ${target}\n`);
+  process.stdout.write('built\n');
   process.stdout.write(`  agents   ${result.agents.length}\n`);
   process.stdout.write(`  commands ${result.commands.join(', ')}\n`);
   process.stdout.write(`  skills   ${result.skills.join(', ') || 'none'}\n`);
@@ -83,30 +127,118 @@ async function buildCommand(root: string, values: Values): Promise<number> {
   return 0;
 }
 
-async function boardCommand(root: string): Promise<number> {
-  const view = await runBoard(root);
+/**
+ * The audit of the change.
+ *
+ * The command is loaded on demand. The audit runs the whole rule set, and
+ * the whole rule set carries the TypeScript compiler; the other commands
+ * must not pay for it.
+ */
+async function auditCommand(roots: ProjectRoots, values: Values): Promise<number> {
+  const { formatAuditReport, runAudit } = await import('./commands/audit.js');
+  const report = await runAudit(roots, {
+    scope: values.all === true ? 'all' : 'changed',
+    ...(values.base === undefined ? {} : { base: values.base }),
+  });
+  process.stdout.write(formatAuditReport(report));
+  return report.exitCode;
+}
+
+async function boardCommand(roots: ProjectRoots): Promise<number> {
+  const view = await runBoard(roots.stateRoot);
   process.stdout.write(`${formatBoard(view)}\n`);
   return 0;
 }
 
-async function doctorCommand(root: string): Promise<number> {
-  const report = await runDoctor(root);
+async function doctorCommand(roots: ProjectRoots): Promise<number> {
+  const report = await runDoctor(roots);
   process.stdout.write(formatDoctorReport(report));
   return 0;
 }
 
-async function setupCommand(root: string, values: Values): Promise<number> {
-  const target = await resolveTarget(values.target);
+/**
+ * The conformance report.
+ *
+ * The report says what is proven, observed or unverified, one capability at
+ * a time, and it shows the evidence of an observed capability.
+ */
+async function conformanceCommand(roots: ProjectRoots, values: Values): Promise<number> {
+  const report = await runConformance(roots);
+  if (values.json === true) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(formatConformanceReport(report));
+  return 0;
+}
+
+async function ledgerCommand(
+  roots: ProjectRoots,
+  values: Values,
+  positionals: string[],
+): Promise<number> {
+  const sub = positionals[1];
+  const since = values.since;
+
+  if (sub === 'scan-reverts') {
+    const report = await runLedgerScanReverts(roots, since === undefined ? {} : { since });
+    process.stdout.write(formatScanRevertsReport(report));
+    return 0;
+  }
+  if (sub === 'outcomes') {
+    const report = await runLedgerOutcomes(roots, since === undefined ? {} : { since });
+    process.stdout.write(formatOutcomesReport(report));
+    return 0;
+  }
+  if (sub === 'waste') {
+    const report = await runLedgerWaste(roots.stateRoot, since === undefined ? {} : { since });
+    process.stdout.write(formatWasteReport(report));
+    return 0;
+  }
+  if (sub !== undefined && sub !== 'export') {
+    process.stderr.write(`unknown ledger subcommand: ${sub}\n`);
+    return 1;
+  }
+
+  const report = await runLedger(roots.stateRoot);
+  if (sub === 'export' || values.json === true) {
+    process.stdout.write(`${JSON.stringify(report.counters, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(formatLedgerReport(report));
+  return 0;
+}
+
+/**
+ * The ethical report (§12).
+ *
+ * The report is local: it reads the ledger, the board and the stores of the
+ * state root, it writes nothing, and it reaches no network. The `--check`
+ * flag makes it a gate, and the exit code is the gate's answer.
+ */
+async function reportCommand(roots: ProjectRoots, values: Values): Promise<number> {
+  const report = await runEthicalReport(roots, {
+    ...(values.session === undefined ? {} : { session: values.session }),
+    ...(values.bean === undefined ? {} : { bean: values.bean }),
+    ...(values.since === undefined ? {} : { since: values.since }),
+    ...(values.check === true ? { check: true } : {}),
+  });
+  if (values.json === true) {
+    process.stdout.write(ethicalReportAsJson(report));
+    return report.exitCode;
+  }
+  process.stdout.write(formatEthicalReport(report));
+  return report.exitCode;
+}
+
+async function setupCommand(roots: ProjectRoots, values: Values): Promise<number> {
   const result = await runSetup({
-    root,
-    target,
+    root: roots.workspace,
     ...(values.config ? { configPath: values.config } : {}),
     ...(values['dry-run'] ? { dryRun: true } : {}),
     ...(values['magic-context'] ? { magicContext: true } : {}),
   });
-  process.stdout.write(
-    `${result.dryRun ? 'would write' : 'wrote'} ${result.configPath} for ${target}\n`,
-  );
+  process.stdout.write(`${result.dryRun ? 'would write' : 'wrote'} ${result.configPath}\n`);
   for (const key of result.changed) {
     process.stdout.write(`  ${key}\n`);
   }
@@ -173,7 +305,12 @@ function reportTouches(touches: SwitchTouches): void {
   );
 }
 
-async function modelsCommand(root: string, values: Values, positionals: string[]): Promise<number> {
+async function modelsCommand(
+  roots: ProjectRoots,
+  values: Values,
+  positionals: string[],
+  options: CommandOptions,
+): Promise<number> {
   const sub = positionals[1] ?? 'init';
   if (sub !== 'init' && sub !== 'refresh' && sub !== 'switch') {
     process.stderr.write(`unknown models subcommand: ${sub}\n`);
@@ -186,7 +323,8 @@ async function modelsCommand(root: string, values: Values, positionals: string[]
   const requested = [...positionals.slice(2), ...(values.providers?.split(',') ?? [])];
 
   const result = await runModels({
-    root,
+    workspace: roots.workspace,
+    stateRoot: roots.stateRoot,
     mode: sub,
     providers: requested,
     ...(values['prefer-flash'] ? { preferFlash: true } : {}),
@@ -194,6 +332,7 @@ async function modelsCommand(root: string, values: Values, positionals: string[]
     ...(values['allow-retention'] ? { allowRetention: true } : {}),
     ...(values.key ? { key: values.key } : {}),
     ...(values.yes ? { yes: true } : {}),
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
   reportModels(result.changes, result.rejected, result.failures);
   if (result.touches) {
@@ -207,16 +346,116 @@ async function modelsCommand(root: string, values: Values, positionals: string[]
   return 0;
 }
 
+/**
+ * The lessons that are waiting for a decision.
+ */
+async function lessonsCommand(roots: ProjectRoots): Promise<number> {
+  const report = await runLessons(roots.stateRoot);
+  process.stdout.write(formatLessonsReport(report));
+  return 0;
+}
+
+/**
+ * A decision about one lesson.
+ *
+ * The person running the command is the decider: a lesson changes state
+ * only when a person says so.
+ */
+async function lessonCommand(
+  roots: ProjectRoots,
+  _values: Values,
+  positionals: string[],
+): Promise<number> {
+  const id = positionals[1];
+  const action = positionals[2];
+  if (id === undefined || action === undefined) {
+    process.stderr.write('usage: openagentsy lesson <id> <validate|apply|reject|observe>\n');
+    return 1;
+  }
+  const report = await runLessonDecision(roots.stateRoot, id, action);
+  process.stdout.write(formatLessonDecision(report));
+  return report.ok ? 0 : 1;
+}
+
+/**
+ * Record a quality waiver.
+ *
+ * The person running the command is the decider, and the command is the
+ * way a waiver is recorded: the tool the board server registers is denied
+ * to every agent role by the permission map, so an agent may propose a
+ * waiver in chat and never record one.
+ *
+ * The command is loaded on demand. The waiver check asks the whole rule
+ * set whether a rule may be waived, and the whole rule set carries the
+ * TypeScript compiler; the other commands must not pay for it.
+ */
+async function waiveCommand(
+  roots: ProjectRoots,
+  _values: Values,
+  positionals: string[],
+): Promise<number> {
+  const ruleId = positionals[1];
+  const path = positionals[2];
+  const reason = positionals.slice(3).join(' ');
+  if (ruleId === undefined || path === undefined || reason === '') {
+    process.stderr.write('usage: openagentsy waive <ruleId> <path> "<reason>"\n');
+    return 1;
+  }
+  const { formatWaiver, runWaiver } = await import('./commands/waivers.js');
+  const report = await runWaiver(roots.stateRoot, ruleId, path, reason);
+  process.stdout.write(formatWaiver(report));
+  return report.ok ? 0 : 1;
+}
+
+/**
+ * Grant one call the permission it asked for.
+ */
+async function approveCommand(
+  roots: ProjectRoots,
+  values: Values,
+  positionals: string[],
+): Promise<number> {
+  const result = await runApprove({
+    stateRoot: roots.stateRoot,
+    ...(positionals[1] === undefined ? {} : { callID: positionals[1] }),
+    ...(values.ttl === undefined ? {} : { ttl: values.ttl }),
+  });
+  process.stdout.write(formatApproveResult(result));
+  return result.ok ? 0 : 1;
+}
+
+/**
+ * What the caller can inject into a run.
+ *
+ * The models command reaches the network for the provider catalogue, so the
+ * test that exercises it needs a fetch of its own. A test that reaches
+ * models.dev is a test whose time depends on a machine's connection.
+ */
+export type CommandOptions = { fetchImpl?: FetchLike };
+
 /** The command table. One entry per command, so the dispatch is a lookup. */
 const COMMANDS: Record<
   string,
-  (root: string, values: Values, positionals: string[]) => Promise<number>
+  (
+    roots: ProjectRoots,
+    values: Values,
+    positionals: string[],
+    options: CommandOptions,
+  ) => Promise<number>
 > = {
   build: buildCommand,
+  audit: auditCommand,
   board: boardCommand,
+  conformance: conformanceCommand,
   doctor: doctorCommand,
+  ledger: ledgerCommand,
+  lessons: lessonsCommand,
+  lesson: lessonCommand,
+  waive: waiveCommand,
+  approve: approveCommand,
   setup: setupCommand,
   models: modelsCommand,
+  report: reportCommand,
 };
 
 /**
@@ -225,7 +464,7 @@ const COMMANDS: Record<
  * The commands are a table and the options are parsed in one place, so this
  * function stays small enough to read.
  */
-export async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[], options: CommandOptions = {}): Promise<number> {
   // The board's driver is bun:sqlite, so the whole tool needs Bun. A Node
   // install fails at the first query, and the message here says which
   // runtime to use instead of showing a module resolution error.
@@ -241,7 +480,7 @@ export async function main(argv: string[]): Promise<number> {
     allowPositionals: true,
     options: {
       root: { type: 'string' },
-      target: { type: 'string' },
+      since: { type: 'string' },
       out: { type: 'string' },
       roles: { type: 'string' },
       lock: { type: 'string' },
@@ -249,17 +488,24 @@ export async function main(argv: string[]): Promise<number> {
       'dry-run': { type: 'boolean' },
       'magic-context': { type: 'boolean' },
       providers: { type: 'string' },
+      all: { type: 'boolean' },
+      base: { type: 'string' },
       'prefer-flash': { type: 'boolean' },
       'allow-training': { type: 'boolean' },
       'allow-retention': { type: 'boolean' },
       key: { type: 'string' },
       yes: { type: 'boolean' },
+      json: { type: 'boolean' },
+      ttl: { type: 'string' },
+      session: { type: 'string' },
+      bean: { type: 'string' },
+      ethical: { type: 'boolean' },
+      check: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
   });
 
   const command = positionals[0];
-  const root = values.root ?? process.cwd();
 
   if (values.help === true || command === undefined) {
     process.stdout.write(USAGE);
@@ -273,7 +519,12 @@ export async function main(argv: string[]): Promise<number> {
     return 1;
   }
 
-  return handler(root, values, positionals);
+  // The two roots of the command: the directory it runs in, and the
+  // directory that owns the shared state of the project. In a linked
+  // worktree the second is the main repository root.
+  const roots = resolveProjectRoots(values.root ?? process.cwd());
+
+  return handler(roots, values, positionals, options);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

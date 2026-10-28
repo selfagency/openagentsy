@@ -1,0 +1,5 @@
+/* Passes: the token pair clears the WCAG AA ratio. */
+:root {
+  --color-bg: #ffffff;
+  --color-text: #1a1a1a;
+}

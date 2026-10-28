@@ -1,0 +1,10 @@
+{
+  "data": {
+    "id": "msg_17e5f292400134OBtAN6ha7cBo",
+    "sessionID": "ses_e81a0ebf6ffeuFpzQZmRvlcDLv",
+    "time": { "created": 1793121528523 },
+    "type": "user",
+    "payload": { "text": "hello probe" },
+    "delivery": "steer"
+  }
+}

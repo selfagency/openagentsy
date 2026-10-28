@@ -6,10 +6,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   appendAudit,
   BoardError,
+  type BudgetDecision,
+  type boardToolNames,
   CONFIDENCE_LEVELS,
   checkBudget,
   checkLease,
   createRecord,
+  type Dispatch,
   dispatchProfileCriteria,
   grantLeases,
   type Lease,
@@ -23,15 +26,37 @@ import {
   RECORD_KINDS,
   recordUsage,
   releaseLease,
+  resolveStateRoot,
   revokeLease,
   rotateAudit,
   setBudget,
+  validateDispatch,
 } from '@openagentsy/core';
 import { choice, createJevClient, isJevAvailable } from '@openagentsy/jev';
 import { z } from 'zod';
+import { CONFORMANCE_TOOL_NAME, createConformanceTools } from './conformance.js';
+import { ledgerReaders } from './ledger-usage.js';
+import { createLessonTools } from './lessons.js';
+import { failure, type McpToolResult, text } from './mcp-tool.js';
+import { createWaiverTools, WAIVER_TOOL_NAME } from './waivers.js';
+import { workspaceTools } from './workspace-tools.js';
 
-const root = process.env.OPENAGENTSY_ROOT ?? process.cwd();
-const stateDir = join(root, '.openagentsy');
+/**
+ * The two roots of the server (§3.9).
+ *
+ * The workspace is the session's own directory: the worktree, when the
+ * server runs in one. It holds the project files the session reads and the
+ * task files of .beans/, which travel with the branch.
+ *
+ * The state root is the directory that owns the shared OpenAgentsy state:
+ * the board database, the leases, the records, the audit log, the ledger,
+ * the lessons and the waivers. In a linked worktree it is the MAIN
+ * repository root, so a builder in a worktree posts to the board the Lead
+ * reads instead of to a board of its own.
+ */
+const workspace = process.env.OPENAGENTSY_ROOT ?? process.cwd();
+const stateRoot = resolveStateRoot(workspace);
+const stateDir = join(stateRoot, '.openagentsy');
 
 /**
  * The writer cap.
@@ -42,6 +67,15 @@ const stateDir = join(root, '.openagentsy');
 const WRITER_CAP = 3;
 const databasePath = join(stateDir, 'board.sqlite');
 const auditPath = join(stateDir, 'audit.jsonl');
+
+/**
+ * The usage the ledger measured.
+ *
+ * The cap stays in the board and the usage comes from the ledger (§6.7), so
+ * the check asks the ledger what a bean spent. A project without a ledger
+ * falls back to the self-report the board already holds.
+ */
+const usageReaders = ledgerReaders(stateRoot);
 
 const AGENTS = await knownAgents();
 /**
@@ -58,7 +92,7 @@ const AGENTS = await knownAgents();
  */
 async function knownAgents(): Promise<Set<string> | undefined> {
   try {
-    const roles = await loadRoles(join(root, 'roles.yaml'));
+    const roles = await loadRoles(join(workspace, 'roles.yaml'));
     const names = new Set<string>();
     for (const [key, role] of Object.entries(roles.roles)) {
       names.add(key.toLowerCase());
@@ -140,9 +174,12 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - board_lease: the leases, which agent may write which file. op=check asks whether you may write a path. op=release gives a lease back, and only the holder may release it. op=list lists the leases.
 - board_lease_grant: take a lease on files. The Lead only; every other role has this tool denied by name.
 - board_lease_revoke: take a lease back from an agent that is not using it, for example a session that died holding it. The Lead only.
-- board_budget: the token budgets. op=check reports whether a bean is over its budget; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.
+- board_budget: the token budgets. op=check reports whether a bean is over its budget, measured from the ledger; at 85 percent the builder stops and posts a blocker. op=list lists the budgets, each carrying 'measured' = the usage the ledger counted for the bean and 'tokensUsed' = the deprecated self-report the check ignores. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.
 - board_budget_set: set a token budget for a bean. The Lead only.
 - board_classify: classify a request into the dispatch profiles, with the probability of each. The Lead calls it before it spawns anything.
+- oa_task_*: the todo list of the project. list, show, create, update, next, archive.
+- oa_memory_*: the memories a person decided to keep. search, list. The decide tool is a person's, not an agent's.
+- oa_conformance_report: what is proven, observed or unverified about the OpenCode host, one capability at a time, with the evidence of an observed one. It never writes the evidence.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
 
 /**
@@ -166,25 +203,40 @@ const server = new McpServer(
   { capabilities: { tools: {} }, instructions: USAGE_CARD },
 );
 
-function text(value: unknown): { content: { type: 'text'; text: string }[] } {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] };
-}
-
-function failure(error: unknown): { content: { type: 'text'; text: string }[]; isError: true } {
-  if (error instanceof BoardError) {
-    return {
-      content: [{ type: 'text', text: `${error.message}\n\nNext: ${error.hint}` }],
-      isError: true,
-    };
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return { content: [{ type: 'text', text: message }], isError: true };
+/**
+ * The failure of a board call, as the board answers it.
+ *
+ * A board error carries the next step, and the next step is what the
+ * caller needs, so it goes with the reason.
+ */
+function failureOf(error: unknown): McpToolResult {
+  if (error instanceof BoardError) return failure(error.message, error.hint);
+  return failure(error instanceof Error ? error.message : String(error));
 }
 
 // --- records ----------------------------------------------------------------
 
+/**
+ * The board tool names, in one place.
+ *
+ * The list lives in core, so the vocabulary that resolves a tool name back
+ * to its base name and the tools this server offers cannot drift apart.
+ * The type says a name has to be one core knows, and that every name core
+ * knows has to be here: a rename in core, or a name added to core, stops
+ * the build here instead of serving a tool nobody can name.
+ */
+const BOARD_TOOL = {
+  board_record: 'board_record',
+  board_lease_grant: 'board_lease_grant',
+  board_lease: 'board_lease',
+  board_budget_set: 'board_budget_set',
+  board_budget: 'board_budget',
+  board_lease_revoke: 'board_lease_revoke',
+  board_classify: 'board_classify',
+} as const satisfies { [K in (typeof boardToolNames)[number]]: K };
+
 server.registerTool(
-  'board_record',
+  BOARD_TOOL.board_record,
   {
     description:
       'The records on the board: the hand-off between agents. op=post leaves a typed record for another agent (kind is status, contract, question, blocker or finding; every record carries a confidence: verified, inferred or guess). op=inbox reads the records addressed to you and marks them read, a cursor at a time.',
@@ -242,10 +294,29 @@ server.registerTool(
             }),
           );
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
+
+/**
+ * Whether a contract payload is a delegation.
+ *
+ * A delegation names the agent that does the work and what has to come back.
+ * The payload is one when it carries EITHER half - a dispatch that is missing
+ * its owner still has a return condition, and one that is missing its return
+ * condition still has an owner, and the board has to be able to refuse both.
+ * An interface - the shape another agent will call - carries neither, so the
+ * board does not ask an interface for an owner.
+ */
+function isDelegation(contract: unknown): contract is Dispatch {
+  return (
+    typeof contract === 'object' &&
+    contract !== null &&
+    !Array.isArray(contract) &&
+    ('owner' in contract || 'returnCondition' in contract)
+  );
+}
 
 /**
  * Post a record.
@@ -283,6 +354,14 @@ async function postRecord(input: {
     );
   }
 
+  // A delegated item has an owner and a return condition (plan 8.7). A
+  // contract record that names an owner IS a delegation, so the board refuses
+  // it when either half is missing; a contract that names neither is an
+  // interface, and an interface needs no owner.
+  if (input.kind === 'contract' && isDelegation(input.contract)) {
+    validateDispatch(input.contract as Dispatch);
+  }
+
   const record = createRecord(db, {
     bean: required(input.bean, 'bean'),
     from,
@@ -307,10 +386,84 @@ async function postRecord(input: {
   return text({ id: record.id, createdAt: record.createdAt });
 }
 
+// --- lessons ----------------------------------------------------------------
+
+// The lesson tools: an agent may PROPOSE a lesson, and only a person may
+// DECIDE one. The permission map keeps every agent role away from the
+// decision tool (roles.yaml), and the hook rule is the second layer.
+const LESSON_TOOLS = createLessonTools(stateRoot);
+
+server.registerTool(
+  'oa_lesson_propose',
+  {
+    description: LESSON_TOOLS.oa_lesson_propose.description,
+    inputSchema: LESSON_TOOLS.oa_lesson_propose.inputSchema,
+  },
+  async (input) => LESSON_TOOLS.oa_lesson_propose.handler(input),
+);
+
+server.registerTool(
+  'oa_lesson_decide',
+  {
+    description: LESSON_TOOLS.oa_lesson_decide.description,
+    inputSchema: LESSON_TOOLS.oa_lesson_decide.inputSchema,
+  },
+  async (input) => LESSON_TOOLS.oa_lesson_decide.handler(input),
+);
+
+// --- waivers ----------------------------------------------------------------
+
+// A quality waiver is a decision a person makes. The permission map takes
+// the tool away from every agent role (roles.yaml), and the hook rule is
+// the second layer: the hook cannot see an MCP call on the pinned binary,
+// so the map is the enforcement and the rule is the backstop.
+const WAIVER_TOOLS = createWaiverTools(stateRoot);
+
+server.registerTool(
+  WAIVER_TOOL_NAME,
+  {
+    description: WAIVER_TOOLS.oa_quality_waive.description,
+    inputSchema: WAIVER_TOOLS.oa_quality_waive.inputSchema,
+  },
+  async (input) => WAIVER_TOOLS.oa_quality_waive.handler(input),
+);
+
+// --- the workspace tools ---------------------------------------------------
+
+// The task tools and the memory tools: the packages that hold the state
+// offer tools of their own, and the board server is where a session finds
+// them. The names, the descriptions and the schemas come from the
+// packages; the server opens the stores they read and writes.
+const WORKSPACE_TOOLS = await workspaceTools({ workspace, stateRoot, db });
+
+for (const tool of WORKSPACE_TOOLS) {
+  server.registerTool(
+    tool.name,
+    { description: tool.description, inputSchema: tool.inputSchema },
+    async (input) => tool.handler(input),
+  );
+}
+
+// --- conformance ------------------------------------------------------------
+
+// The conformance tool reports what is proven, observed or unverified. It
+// reads the project's own files and the evidence of the state root, and it
+// writes neither.
+const CONFORMANCE_TOOLS = createConformanceTools({ workspace, stateRoot });
+
+server.registerTool(
+  CONFORMANCE_TOOL_NAME,
+  {
+    description: CONFORMANCE_TOOLS.oa_conformance_report.description,
+    inputSchema: CONFORMANCE_TOOLS.oa_conformance_report.inputSchema,
+  },
+  async (input) => CONFORMANCE_TOOLS.oa_conformance_report.handler(input),
+);
+
 // --- leases -----------------------------------------------------------------
 
 server.registerTool(
-  'board_lease_grant',
+  BOARD_TOOL.board_lease_grant,
   {
     description:
       'Record the files one agent owns. Each file has exactly one writer at a time. A glob already leased to another agent is refused. The Lead only; every other role has this tool denied by name.',
@@ -372,13 +525,13 @@ server.registerTool(
       }
       return text(result);
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
 
 server.registerTool(
-  'board_lease',
+  BOARD_TOOL.board_lease,
   {
     description:
       'The leases on the board: which agent may write which file. op=check asks whether one path may be written and reports the holder, or a conflict when another agent holds the file. op=release gives a lease back, and only the holder may release it. op=list lists the leases.',
@@ -410,7 +563,7 @@ server.registerTool(
       if (input.op === 'release') return await releaseLeases(input);
       return text({ leases: listLeases(db, input.bean) });
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -426,7 +579,7 @@ async function checkOneLease(input: {
 }): Promise<{ content: { type: 'text'; text: string }[] }> {
   const decision = checkLease(db, {
     path: required(input.path, 'path'),
-    root,
+    root: stateRoot,
     ...(input.agent !== undefined ? { agent: input.agent } : {}),
   });
   if (decision.status === 'conflict') {
@@ -481,7 +634,7 @@ async function releaseLeases(input: {
 // --- budgets ----------------------------------------------------------------
 
 server.registerTool(
-  'board_budget_set',
+  BOARD_TOOL.board_budget_set,
   {
     description:
       'Set the token budget for a bean. The builder stops at 85 percent of it unless stopAt says otherwise. The Lead only.',
@@ -494,6 +647,18 @@ server.registerTool(
         .positive()
         .optional()
         .describe('Token count at which the bean stops'),
+      turnLimit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Tokens a single turn of the bean may cost'),
+      sessionLimit: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe('Tokens a single session of the bean may cost'),
     },
   },
   async (input) => {
@@ -502,6 +667,8 @@ server.registerTool(
         bean: input.bean,
         tokenLimit: input.tokenLimit,
         ...(input.stopAt !== undefined ? { stopAt: input.stopAt } : {}),
+        ...(input.turnLimit !== undefined ? { turnLimit: input.turnLimit } : {}),
+        ...(input.sessionLimit !== undefined ? { sessionLimit: input.sessionLimit } : {}),
       });
       await appendAudit(auditPath, {
         policyId: POLICIES.budgetSet.id,
@@ -516,16 +683,82 @@ server.registerTool(
       });
       return text(budget);
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
 
+/**
+ * Check one bean's budget, and put the decision on the record.
+ *
+ * The verdict is the ledger's: the cap is in the board and the usage is
+ * measured there (§6.7). The self-report is still recorded, because the old
+ * clients still send it, but the check above did not need it.
+ */
+async function checkOneBudget(bean: string, tokensUsed: number): Promise<BudgetDecision> {
+  const decision = checkBudget(db, bean, tokensUsed, usageReaders);
+
+  if (decision.configured) {
+    recordUsage(db, bean, tokensUsed);
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetUsage.id,
+      policyVersion: POLICIES.budgetUsage.version,
+      actor: 'builder',
+      action: 'budget_usage',
+      resource: bean,
+      effect: 'allow',
+      detail: `self-reported ${tokensUsed} tokens; deprecated, the ledger measures the usage`,
+    });
+  }
+
+  if (decision.warning !== undefined) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetWarn.id,
+      policyVersion: POLICIES.budgetWarn.version,
+      actor: 'builder',
+      action: 'budget_check',
+      resource: bean,
+      effect: 'ask',
+      detail: decision.warning,
+    });
+  }
+
+  if (decision.stop) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetStop.id,
+      policyVersion: POLICIES.budgetStop.version,
+      // The caller is not known to the board, so the bean is the subject of
+      // the record and the actor is the role the tool serves.
+      actor: 'builder',
+      action: 'budget_check',
+      resource: bean,
+      effect: 'deny',
+      detail: `${decision.tokensUsed} tokens used, stop at ${decision.stopAt}`,
+    });
+  }
+
+  if (decision.turnStop || decision.sessionStop) {
+    await appendAudit(auditPath, {
+      policyId: POLICIES.budgetStop.id,
+      policyVersion: POLICIES.budgetStop.version,
+      actor: 'builder',
+      action: 'budget_check',
+      resource: bean,
+      effect: 'deny',
+      detail: decision.turnStop
+        ? `a turn cost ${decision.turnTokens ?? 0} tokens, over its cap of ${decision.turnLimit ?? 0}`
+        : `a session cost ${decision.sessionTokens ?? 0} tokens, over its cap of ${decision.sessionLimit ?? 0}`,
+    });
+  }
+
+  return decision;
+}
+
 server.registerTool(
-  'board_budget',
+  BOARD_TOOL.board_budget,
   {
     description:
-      'The token budgets on the board. op=check reports whether a bean is over its budget and records the usage; at 85 percent the builder stops and posts a blocker. op=list lists the budgets.',
+      'The token budgets on the board. op=check reports whether a bean is over its budget and records the usage; at 85 percent the builder stops and posts a blocker. op=list lists the budgets. The self-reported usage is deprecated: the ledger measures the usage and the check reads it there, so a self-report is ignored by the check.',
     inputSchema: {
       op: z.enum(['check', 'list']).describe('What this call does'),
       bean: z.string().optional().describe('check: the bean to check'),
@@ -534,37 +767,27 @@ server.registerTool(
         .int()
         .nonnegative()
         .optional()
-        .describe('check: the tokens spent so far'),
+        .describe(
+          'check: the tokens spent so far. Deprecated: the ledger measures the usage and the check reads it there, so this self-report is ignored by the check.',
+        ),
     },
   },
   async (input) => {
     try {
       if (input.op === 'check') {
         const bean = required(input.bean, 'bean');
-        const tokensUsed = required(input.tokensUsed, 'tokensUsed');
-        const decision = checkBudget(db, bean, tokensUsed);
-        if (decision.configured) {
-          recordUsage(db, bean, tokensUsed);
-        }
-        if (decision.stop) {
-          await appendAudit(auditPath, {
-            policyId: POLICIES.budgetStop.id,
-            policyVersion: POLICIES.budgetStop.version,
-            // The caller is not known to the board, so the bean is the subject
-            // of the record and the actor is the role the tool serves.
-            actor: 'builder',
-            action: 'budget_check',
-            resource: bean,
-            effect: 'deny',
-            detail: `${tokensUsed} tokens used, stop at ${decision.stopAt}`,
-          });
-        }
-        return text(decision);
+        return text(await checkOneBudget(bean, input.tokensUsed ?? 0));
       }
 
-      return text({ budgets: listBudgets(db) });
+      const budgets = listBudgets(db).map((budget) => ({
+        ...budget,
+        // The split the check reads: the measured number is the ledger's,
+        // the self-report is the deprecated one the check ignores.
+        measured: usageReaders.total?.(budget.bean),
+      }));
+      return text({ budgets });
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
@@ -583,7 +806,7 @@ server.registerTool(
  * and the Lead classifies the request itself.
  */
 server.registerTool(
-  'board_lease_revoke',
+  BOARD_TOOL.board_lease_revoke,
   {
     description:
       'Take a lease away from an agent that is not using it any more, for example a session that died holding it. The Lead only; every other role has this tool denied by name. A lease is otherwise only ever released by the agent that holds it, so a dead session holds its files until the Lead revokes them.',
@@ -607,13 +830,13 @@ server.registerTool(
       }
       return text(result);
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );
 
 server.registerTool(
-  'board_classify',
+  BOARD_TOOL.board_classify,
   {
     description:
       'Classify a request into the dispatch profiles, with the probability of each and the confidence. The Lead calls this before it spawns anything, and takes the cheaper plan when the confidence is low. Without a System One key it says so, and the Lead classifies the request itself.',
@@ -668,7 +891,7 @@ server.registerTool(
         usage: outcome.response.usage,
       });
     } catch (error) {
-      return failure(error);
+      return failureOf(error);
     }
   },
 );

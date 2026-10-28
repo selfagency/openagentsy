@@ -3,8 +3,15 @@
   "compilerOptions": {
     "composite": true,
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    "types": ["bun-types"]
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../hooks" },
+    { "path": "../ledger" },
+    { "path": "../memory" },
+    { "path": "../tasks" }
+  ]
 }

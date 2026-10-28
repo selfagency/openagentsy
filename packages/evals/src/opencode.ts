@@ -1,9 +1,524 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { closeSync, fstatSync, openSync } from 'node:fs';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
-import { createOpencodeClient, type OpencodeClient } from '@opencode-ai/sdk';
+import { basename, join, sep } from 'node:path';
+import { promisify } from 'node:util';
+import { gitFreeEnv } from './git-env.js';
+import {
+  isSessionNotFound,
+  mcpServer,
+  V2Client,
+  type V2EventStream,
+  type V2Message,
+  type V2MessagePart,
+  type V2Transport,
+} from './v2client.js';
+
+/**
+ * A model, as the server names it.
+ */
+export type HarnessModel = {
+  /** The provider the model belongs to. */
+  providerID: string;
+  /** The id of the model. */
+  modelID: string;
+};
+
+/**
+ * A part of a message.
+ *
+ * A text part carries its text, a tool part carries the name of the tool and
+ * the arguments of the call, and a part the server made by itself is marked.
+ */
+export type HarnessPart = {
+  /** What the part is: `text`, `tool` and so on. */
+  type: string;
+  /** The text of a text part. */
+  text?: string;
+  /** The name of the tool of a tool part. */
+  tool?: string;
+  /** The state of a tool part, with the arguments of the call. */
+  state?: { input?: unknown };
+  /** Whether the server made the part by itself. */
+  synthetic?: boolean;
+  /** Whether the server ignored the part. */
+  ignored?: boolean;
+};
+
+/**
+ * The times of a message, in the shape the harness reads.
+ */
+export type HarnessTime = { created?: number; completed?: number };
+
+/**
+ * A message of a session, in the shape the harness reads.
+ *
+ * The harness reads one shape: an `info` with the role, the times and the
+ * error, and a list of parts. OpenCode 2 sends a union of tagged messages
+ * instead, so the client reads the union and answers with this shape, and
+ * the readers of the harness are written once.
+ */
+export type HarnessMessage = {
+  info: {
+    /** The role of the message: `user`, `assistant` and so on. */
+    role: string;
+    /** The times of the message. */
+    time?: HarnessTime;
+    /** The error of a failed turn. */
+    error?: { message?: string; data?: { statusCode?: number } };
+    /** The tokens the turn used, when the server counted them. */
+    tokens?: {
+      input: number;
+      output: number;
+      reasoning: number;
+      cache: { read: number; write: number };
+    };
+    /** What the turn cost, in dollars. */
+    cost?: number;
+  };
+  /** The parts of the message. */
+  parts: HarnessPart[];
+};
+
+/**
+ * One event of the server's stream.
+ *
+ * OpenCode 2 sends the envelope `{id, created, type, data}`, and the pump
+ * reads that one shape. The permission reader also accepts the `properties`
+ * spelling the 1.x server used, so a request of that shape is answered too.
+ */
+export type HarnessEvent = {
+  /** What happened. */
+  type: string;
+  /** The payload of an event in the OpenCode 1 spelling. */
+  properties?: unknown;
+  /** The payload of an OpenCode 2 event. */
+  data?: unknown;
+};
+
+/**
+ * How a permission request is answered.
+ */
+export type PermissionDecision = 'once' | 'always' | 'reject';
+
+/**
+ * The state of an MCP server, as the harness reads it.
+ */
+export type HarnessMcpStatus = {
+  /** The state of the server: `connected`, `failed`, `pending` and so on. */
+  status: string;
+  /** What the server said when it failed. */
+  error?: string;
+};
+
+/**
+ * A session of a directory, as the harness reads it.
+ */
+export type HarnessSession = {
+  /** The id of the session. */
+  id: string;
+  /** The title the session carries. */
+  title?: string;
+  /** The session that dispatched this one. */
+  parentID?: string;
+  /**
+   * The directory the session lives in.
+   *
+   * The server answers with the directory of every session, and the harness
+   * reads it: a session of another case is never this case's, and a watch
+   * that looks for a session to kill must not find one.
+   */
+  directory?: string;
+};
+
+/**
+ * The question the harness puts to a session.
+ */
+export type HarnessPrompt = {
+  /** The session the question is put to. */
+  sessionID: string;
+  /** The directory the session lives in. */
+  directory: string;
+  /** The agent the question is put to. */
+  agent: string;
+  /** The model the turn runs on. */
+  model?: HarnessModel;
+  /** The text of the question. */
+  text: string;
+};
+
+/**
+ * The calls the harness makes on the OpenCode server.
+ *
+ * The harness asks the server for the same things whatever the runtime, and
+ * the server answers in its own words: it serves `/api/session` and the
+ * shapes it answers with are its own. This interface is the boundary. The
+ * harness's logic sits on this side of it, and the implementation sits on
+ * the other side, where a call is made and a shape is read.
+ */
+export type HarnessClient = {
+  /** Create a session in a directory. */
+  createSession(input: { title: string; directory: string }): Promise<string>;
+  /** Put a question to a session. The turn runs in the background. */
+  prompt(input: HarnessPrompt): Promise<void>;
+  /** The messages of a session, oldest first. */
+  messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]>;
+  /** The sessions the server is working on. */
+  busySessions(input: { directory: string }): Promise<ReadonlySet<string>>;
+  /** The events of the server, for a directory. */
+  events(input: { directory: string }): Promise<AsyncIterable<HarnessEvent>>;
+  /** Answer a permission request. */
+  replyPermission(input: {
+    sessionID: string;
+    permissionID: string;
+    directory: string;
+    decision: PermissionDecision;
+  }): Promise<void>;
+  /** The state of the board server, when the directory has one. */
+  boardStatus(input: { directory: string }): Promise<HarnessMcpStatus | undefined>;
+  /** Interrupt the turn a session is running. */
+  interrupt(input: { sessionID: string; directory: string }): Promise<void>;
+  /** Delete a session. */
+  deleteSession(input: { sessionID: string; directory: string }): Promise<void>;
+  /** The sessions of a directory. */
+  listSessions(input: { directory: string }): Promise<HarnessSession[]>;
+};
+
+/**
+ * The session a call names is not there.
+ *
+ * A case can remove a session on purpose, and the server then answers 404 for
+ * every call that names it. That is the case's own doing: the turn produced
+ * nothing, and the case's own expectations are what judge that. The harness
+ * must not report a removed session as a fault of the host.
+ *
+ * The 2.x server answers a missing session with 404, and the harness client
+ * turns that answer into this error.
+ */
+export class SessionGoneError extends Error {
+  /** The session that is not there. */
+  readonly sessionID: string;
+
+  constructor(sessionID: string) {
+    super(`the session ${sessionID} is gone`);
+    this.name = 'SessionGoneError';
+    this.sessionID = sessionID;
+  }
+}
+
+/** Is this the error of a session that is not there? */
+export function isSessionGone(error: unknown): boolean {
+  return error instanceof SessionGoneError;
+}
+
+const execFileAsync = promisify(execFile);
+
+/**
+ * The harness on OpenCode 2.
+ *
+ * The 2.x server moved every route under `/api`, renamed the shapes it
+ * answers with, and a client of it is scoped to one directory. The
+ * implementation keeps one client per directory the suite asks about, and
+ * reads the 2.x shapes into the shape the harness reads.
+ */
+export class V2HarnessClient implements HarnessClient {
+  private readonly clients = new Map<string, V2Client>();
+
+  constructor(
+    private readonly options: { baseUrl: string; password?: string; transport?: V2Transport },
+  ) {}
+
+  /** The client of a directory, made when the directory is asked about first. */
+  private client(directory: string): V2Client {
+    const known = this.clients.get(directory);
+    if (known !== undefined) return known;
+    const options = {
+      baseUrl: this.options.baseUrl,
+      directory,
+      ...(this.options.password !== undefined ? { password: this.options.password } : {}),
+    };
+    const client =
+      this.options.transport === undefined
+        ? new V2Client(options)
+        : new V2Client(options, this.options.transport);
+    this.clients.set(directory, client);
+    return client;
+  }
+
+  /**
+   * Run a call that names a session, and say when the session is gone.
+   *
+   * The 2.x server answers 404 for a session it does not have. A case can
+   * remove its own session on purpose, and that is the case's own doing: the
+   * turn produced nothing, and the case's expectations judge that. A 404 on
+   * any other path is a fault of the host and is left alone.
+   */
+  private async session<T>(
+    input: { sessionID: string; directory: string },
+    call: (client: V2Client) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await call(this.client(input.directory));
+    } catch (error) {
+      if (isSessionNotFound(error)) throw new SessionGoneError(input.sessionID);
+      throw error;
+    }
+  }
+
+  async createSession(input: { title: string; directory: string }): Promise<string> {
+    const session = await this.client(input.directory).createSession({ title: input.title });
+    return session.id;
+  }
+
+  async prompt(input: HarnessPrompt): Promise<void> {
+    await this.session(input, async (client) => {
+      // The agent of a turn is the agent of its session: the prompt body names
+      // the agents a message is put to, and the route below is the one that
+      // switches the agent of the session. A turn that runs under the default
+      // agent is a turn under test that never used the role.
+      await client.attachAgent(input.sessionID, input.agent);
+      // The model of a turn is the model of its session: the prompt body has no
+      // model, and the route that changes it is the one below.
+      if (input.model !== undefined) {
+        await client.setModel(input.sessionID, {
+          id: input.model.modelID,
+          providerID: input.model.providerID,
+        });
+      }
+      await client.prompt(input.sessionID, {
+        text: input.text,
+        agents: [{ name: input.agent }],
+      });
+    });
+  }
+
+  async messages(input: { sessionID: string; directory: string }): Promise<HarnessMessage[]> {
+    const list = await this.session(input, (client) => client.messages(input.sessionID));
+    return v2Messages(list.messages);
+  }
+
+  async busySessions(input: { directory: string }): Promise<ReadonlySet<string>> {
+    const active = await this.client(input.directory).activeSessions();
+    return new Set(Object.keys(active));
+  }
+
+  async events(input: { directory: string }): Promise<AsyncIterable<HarnessEvent>> {
+    const stream = await this.client(input.directory).events();
+    return v2Events(stream);
+  }
+
+  async replyPermission(input: {
+    sessionID: string;
+    permissionID: string;
+    directory: string;
+    decision: PermissionDecision;
+  }): Promise<void> {
+    await this.client(input.directory).replyPermission(input.sessionID, input.permissionID, {
+      decision: input.decision,
+    });
+  }
+
+  async boardStatus(input: { directory: string }): Promise<HarnessMcpStatus | undefined> {
+    const status = await this.client(input.directory).mcpStatus();
+    const server = mcpServer(status, 'openagentsy');
+    if (server === undefined) return undefined;
+    return {
+      status: server.status.status,
+      ...(server.status.error !== undefined ? { error: server.status.error } : {}),
+    };
+  }
+
+  async interrupt(input: { sessionID: string; directory: string }): Promise<void> {
+    await this.client(input.directory).interrupt(input.sessionID);
+  }
+
+  async deleteSession(input: { sessionID: string; directory: string }): Promise<void> {
+    try {
+      // The server answers 204 with an empty body, and the client says so.
+      await this.session(input, (client) => client.deleteSession(input.sessionID));
+    } catch (error) {
+      // The session is gone: that is what the delete wanted, and a kill that
+      // found nothing to delete has still killed the session.
+      if (!isSessionGone(error)) throw error;
+    }
+  }
+
+  async listSessions(input: { directory: string }): Promise<HarnessSession[]> {
+    const list = await this.client(input.directory).listSessions();
+    return list.sessions.map((session) => ({
+      id: session.id,
+      ...(session.title !== undefined ? { title: session.title } : {}),
+      ...(session.parentID !== undefined ? { parentID: session.parentID } : {}),
+      ...(session.directory !== undefined ? { directory: session.directory } : {}),
+    }));
+  }
+}
+
+/**
+ * The messages of an OpenCode 2 session, in the shape the harness reads.
+ *
+ * The 2.x server sends a union of tagged messages. A user message is flat:
+ * its text is on the message itself and it has no parts. Only an assistant
+ * message carries parts, and the text of a part is on the part while the
+ * name of a tool and the arguments of its call are on the part's state.
+ *
+ * The idle message is the 2.x way of saying that the turn is over, and the
+ * harness has no message for it: the error it carries is the error of the
+ * turn, so it is folded into the last assistant message and the message
+ * itself is dropped. A session that answered then reads exactly like a
+ * session of the 1.x server answered.
+ */
+export function v2Messages(messages: readonly V2Message[]): HarnessMessage[] {
+  const mapped: HarnessMessage[] = [];
+  for (const message of messages) {
+    if (message.type === 'idle') {
+      foldIdleError(mapped, message);
+      continue;
+    }
+    mapped.push(v2Message(message));
+  }
+  return mapped;
+}
+
+/** The error of the turn, folded into the last assistant message. */
+function foldIdleError(mapped: HarnessMessage[], idle: V2Message): void {
+  const error = v2Error(idle);
+  if (error === undefined) return;
+  const last = mapped.at(-1);
+  if (last === undefined || last.info.role !== 'assistant' || last.info.error !== undefined) return;
+  last.info.error = error;
+}
+
+/** One message of an OpenCode 2 session, in the shape the harness reads. */
+function v2Message(message: V2Message): HarnessMessage {
+  const type = message.type ?? 'unknown';
+  const time = v2Time(message);
+  if (type === 'user') return v2UserMessage(message, time);
+  if (type === 'assistant') return v2AssistantMessage(message, time);
+  if (type === 'synthetic') return v2SyntheticMessage(message, time);
+  return { info: { role: type, ...(time === undefined ? {} : { time }) }, parts: [] };
+}
+
+/**
+ * A user message of an OpenCode 2 session.
+ *
+ * The message is flat: its text is on the message itself and it has no
+ * parts.
+ */
+function v2UserMessage(message: V2Message, time: HarnessTime | undefined): HarnessMessage {
+  return {
+    info: { role: 'user', ...(time === undefined ? {} : { time }) },
+    parts: [{ type: 'text', text: message.text ?? '' }],
+  };
+}
+
+/**
+ * An assistant message of an OpenCode 2 session.
+ *
+ * The parts carry the answer: the text of a part is on the part, and the
+ * name of a tool and the arguments of its call are on the part's state.
+ */
+function v2AssistantMessage(message: V2Message, time: HarnessTime | undefined): HarnessMessage {
+  const error = v2Error(message);
+  const tokens = harnessTokens(message.tokens);
+  const cost = message.cost;
+  return {
+    info: {
+      role: 'assistant',
+      ...(time === undefined ? {} : { time }),
+      ...(error === undefined ? {} : { error }),
+      ...(tokens === undefined ? {} : { tokens }),
+      ...(cost !== undefined ? { cost } : {}),
+    },
+    parts: (message.content ?? []).map(v2Part),
+  };
+}
+
+/**
+ * A synthetic message of an OpenCode 2 session.
+ *
+ * The model switch is a message of its own and it carries no reply, so the
+ * part is marked and the reader of the reply passes over it.
+ */
+function v2SyntheticMessage(message: V2Message, time: HarnessTime | undefined): HarnessMessage {
+  return {
+    info: { role: 'assistant', ...(time === undefined ? {} : { time }) },
+    parts: [{ type: 'text', text: message.text ?? '', synthetic: true, ignored: true }],
+  };
+}
+
+/** The times of a message of an OpenCode 2 session. */
+function v2Time(message: V2Message): HarnessTime | undefined {
+  const time = message.time;
+  if (time === undefined) return undefined;
+  const created = time.created;
+  const completed = time.completed;
+  return {
+    ...(created !== undefined ? { created } : {}),
+    ...(completed !== undefined ? { completed } : {}),
+  };
+}
+
+/** The error of a failed turn of an OpenCode 2 session. */
+function v2Error(
+  message: V2Message,
+): { message?: string; data?: { statusCode?: number } } | undefined {
+  const error = message.error;
+  if (error === undefined) return undefined;
+  const text = error.message;
+  const status = error.status;
+  return {
+    ...(text !== undefined ? { message: text } : {}),
+    ...(status !== undefined ? { data: { statusCode: status } } : {}),
+  };
+}
+
+/** One part of an assistant message of an OpenCode 2 session. */
+function v2Part(part: V2MessagePart): HarnessPart {
+  const text = part.text;
+  const name = part.name;
+  const state = part.state;
+  const input = state?.input;
+  return {
+    type: part.type ?? 'unknown',
+    ...(text !== undefined ? { text } : {}),
+    ...(name !== undefined ? { tool: name } : {}),
+    ...(state === undefined ? {} : { state: { ...(input !== undefined ? { input } : {}) } }),
+  };
+}
+
+/** The tokens a turn used, when the server counted them. */
+function harnessTokens(value: unknown): HarnessMessage['info']['tokens'] | undefined {
+  const shape = asObject(value);
+  if (shape === undefined) return undefined;
+  const cache = asObject(shape['cache']) ?? {};
+  return {
+    input: numberOf(shape['input']),
+    output: numberOf(shape['output']),
+    reasoning: numberOf(shape['reasoning']),
+    cache: { read: numberOf(cache['read']), write: numberOf(cache['write']) },
+  };
+}
+
+/** The number under a key, or zero. */
+function numberOf(value: unknown): number {
+  return typeof value === 'number' ? value : 0;
+}
+
+/** The events of an OpenCode 2 server, in the shape the pump reads. */
+async function* v2Events(stream: V2EventStream): AsyncGenerator<HarnessEvent> {
+  try {
+    for await (const event of stream) {
+      yield { type: event.type, ...(event.data !== undefined ? { data: event.data } : {}) };
+    }
+  } finally {
+    // The socket of the stream stays open until it is closed, and a case that
+    // is over leaves it behind.
+    await stream.close();
+  }
+}
+
 export type SessionTurn = {
   /** The text the agent under test produced. */
   text: string;
@@ -16,8 +531,16 @@ export type SessionTurn = {
 };
 
 export type OpenCodeHarness = {
-  client: OpencodeClient;
+  client: HarnessClient;
   root: string;
+  /**
+   * The runtime the harness started.
+   *
+   * A verdict says which runtime measured it: the runtimes differ in more
+   * than their API, and a run that cannot name its runtime is a run whose
+   * result cannot be read.
+   */
+  runtime: OpenCodeRuntime;
   stop: () => Promise<void>;
   /**
    * The faults that are still watching.
@@ -26,20 +549,106 @@ export type OpenCodeHarness = {
    * here and waits for it when the case ends. A watcher that is dropped
    * keeps polling after the case is gone.
    */
-  watches: { killed: Promise<string | undefined>; stop: () => void }[];
+  watches: KillWatch[];
   /**
    * The host errors the server wrote since it started, each with the case it
-   * belongs to. `stop` reads the same list and throws when it is not empty.
+   * belongs to. `stop` reads the same list and throws when it holds a fault.
    *
    * The sessions the harness killed are excluded: their abort is the fault
-   * the case injected, not a host failure.
+   * the case injected, not a host failure. The errors the policy exempts are
+   * reported next to the faults, so the run says what it ignored.
    */
-  hostErrors: (killedSessions?: ReadonlySet<string>) => Promise<HostError[]>;
+  hostErrors: (killedSessions?: ReadonlySet<string>) => Promise<HostErrorReport>;
   /**
    * Say which case a session belongs to, so a host error that names it is
    * attributed instead of falling back to the suite as a whole.
    */
   trackSession: (sessionID: string, caseLabel: string) => void;
+  /**
+   * Say that a case injected a fault into a session.
+   *
+   * The provider faults (a 429 and a provider that is down) are injected into
+   * the turn the harness runs, and the server writes the fault as an ERROR
+   * naming the session. That error is the case proving the fault landed, not
+   * the host failing, so the harness excludes it the way it excludes the
+   * errors of a session it killed.
+   */
+  markFaultedSession: (sessionID: string) => void;
+  /**
+   * The idle events the event stream carried.
+   *
+   * The subscription of a case is scoped to its directory and sees the
+   * idle event of every session in it, so the registry is how the wait for
+   * a turn learns that the turn is over.
+   */
+  idle: IdleRegistry;
+};
+
+/**
+ * The OpenCode the harness started.
+ *
+ * The binary is named by the environment, because a machine may have more
+ * than one: the suite talks to the 2.x API, and a machine whose `opencode`
+ * is a 1.x serves the 1.x API instead. The default is the one on the path.
+ */
+export type OpenCodeRuntime = {
+  /** The binary the harness runs. */
+  binary: string;
+  /** The version the binary reported, for example "1.19.4". */
+  version: string;
+  /** The major version: 1 or 2. */
+  major: number;
+};
+
+/**
+ * The binary the harness starts.
+ *
+ * The suite drives the OpenCode 2 API, so the binary is the one that serves
+ * it. The environment names it, because the machine's `opencode` may be a
+ * different major version, and the path is not a thing the code may decide.
+ */
+export function runtimeBinary(): string {
+  const named = process.env.OPENAGENTSY_EVAL_BIN?.trim();
+  return named !== undefined && named !== '' ? named : 'opencode';
+}
+
+/**
+ * Read the version of the runtime the harness will start.
+ *
+ * A version that cannot be read is a run whose result cannot be read, so the
+ * harness stops rather than measuring with a runtime it cannot name.
+ */
+export async function readRuntime(binary: string): Promise<OpenCodeRuntime> {
+  let output: string;
+  try {
+    const result = await execFileAsync(binary, ['--version']);
+    output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  } catch (error) {
+    throw new Error(
+      `the opencode runtime ${binary} could not be started: ${(error as Error).message}`,
+    );
+  }
+  const found = /(\d+)\.(\d+)\.(\d+)/.exec(output);
+  if (found === null) {
+    throw new Error(`the opencode runtime ${binary} did not report a version: ${output.trim()}`);
+  }
+  return { binary, version: found[0], major: Number(found[1]) };
+}
+
+/**
+ * A permission request, as the harness reads it.
+ */
+export type PermissionRequest = {
+  /** The session that asked. */
+  sessionID: string;
+  /** The id of the request. */
+  permissionID: string;
+  /** What the session says about the request. */
+  title: string;
+  /** What the session wants to do, for example `edit`. */
+  type: string;
+  /** The paths the request is about. */
+  patterns: string[];
 };
 
 /**
@@ -49,15 +658,142 @@ export type OpenCodeHarness = {
  * nobody is there to answer, so the tool call waits forever. The harness
  * answers, the way the user in the case would.
  */
-export type PermissionPolicy = (request: {
-  sessionID: string;
-  permissionID: string;
-  title: string;
-  type: string;
-  patterns: string[];
-}) => 'once' | 'always' | 'reject';
+export type PermissionPolicy = (request: PermissionRequest) => PermissionDecision;
 
 const DEFAULT_PERMISSION: PermissionPolicy = () => 'once';
+
+/**
+ * The patterns a permission request names.
+ *
+ * The server sends the pattern under the key `pattern`, as a string or as a
+ * list of them. A reader that looks for `patterns` sees an empty list for
+ * every request, and a policy that refuses a path by its patterns can then
+ * never refuse one.
+ */
+export function permissionPatterns(properties: {
+  pattern?: string | string[] | undefined;
+  patterns?: string[] | undefined;
+  resources?: string[] | undefined;
+}): string[] {
+  if (Array.isArray(properties.pattern)) return properties.pattern;
+  if (typeof properties.pattern === 'string') return [properties.pattern];
+  if (Array.isArray(properties.patterns)) return properties.patterns;
+  if (Array.isArray(properties.resources)) return properties.resources;
+  return [];
+}
+
+/**
+ * The events that carry a permission request.
+ *
+ * OpenCode 1 sent `permission.updated` and OpenCode 2 sends
+ * `permission.asked`. Every other event of the stream is not a request, and
+ * some of them carry an id and a session id of their own: the id of a tool
+ * call, for one, and the server refuses that as the id of a permission.
+ */
+const PERMISSION_EVENTS = new Set(['permission.updated', 'permission.asked']);
+
+/**
+ * The permission request an event carries, when it is one.
+ *
+ * OpenCode 1 sent `permission.updated` and put the request under
+ * `properties`, with the paths it is about under `pattern`. OpenCode 2 sends
+ * `permission.asked` and puts the request under `data`, with the same paths
+ * under `resources`. Both spellings are read here, so a request of either
+ * shape is answered the same way.
+ */
+export function permissionRequestOf(event: HarnessEvent): PermissionRequest | undefined {
+  if (!PERMISSION_EVENTS.has(event.type)) return undefined;
+  const payload = asObject(event.properties) ?? asObject(event.data);
+  if (payload === undefined) return undefined;
+  const id = payload['id'];
+  const sessionID = payload['sessionID'];
+  if (typeof id !== 'string' || typeof sessionID !== 'string') return undefined;
+  const pattern = payload['pattern'];
+  const patternValue = typeof pattern === 'string' ? pattern : stringList(pattern);
+  const patterns = stringList(payload['patterns']);
+  const resources = stringList(payload['resources']);
+  return {
+    sessionID,
+    permissionID: id,
+    title: stringOf(payload, 'title') ?? stringOf(payload, 'message') ?? '',
+    type: stringOf(payload, 'type') ?? stringOf(payload, 'action') ?? '',
+    patterns: permissionPatterns({
+      ...(patternValue !== undefined ? { pattern: patternValue } : {}),
+      ...(patterns !== undefined ? { patterns } : {}),
+      ...(resources !== undefined ? { resources } : {}),
+    }),
+  };
+}
+
+/**
+ * The idle events the event stream carried, per session.
+ *
+ * The server says a session is idle when its turn is over, and the
+ * harness's own subscription sees the event: the turn of a session is over
+ * when the server says the session is idle. The registry counts the idle
+ * events of every session and remembers where the turn of a session began,
+ * so an idle that came before the prompt cannot end the turn.
+ */
+export class IdleRegistry {
+  private readonly idle = new Map<string, number>();
+  private readonly marks = new Map<string, number>();
+
+  /** Record that the server said the session is idle. */
+  record(sessionID: string): void {
+    this.idle.set(sessionID, (this.idle.get(sessionID) ?? 0) + 1);
+  }
+
+  /** Note that the turn of a session begins now. */
+  beginTurn(sessionID: string): void {
+    this.marks.set(sessionID, this.idle.get(sessionID) ?? 0);
+  }
+
+  /** The idle events the session had since its turn began. */
+  sinceTurnStart(sessionID: string): number {
+    return (this.idle.get(sessionID) ?? 0) - (this.marks.get(sessionID) ?? 0);
+  }
+}
+
+/**
+ * The session an event says is idle.
+ *
+ * The 2.x server sends the envelope `{id, created, type, location?, data}`,
+ * and the payload of the event is under `data`.
+ *
+ * Two events say that a session is idle: `session.idle`, and a
+ * `session.status` whose status is `idle`. The v2 schema calls the first
+ * one deprecated, so the second one is what a v2 server sends.
+ */
+export function idleSessionOf(event: unknown): string | undefined {
+  const shape = asObject(event);
+  if (shape === undefined) return undefined;
+  const type = shape['type'];
+  if (typeof type !== 'string') return undefined;
+  const body = asObject(shape['data']);
+  const sessionID = body?.['sessionID'];
+  if (typeof sessionID !== 'string') return undefined;
+  if (type === 'session.idle') return sessionID;
+  if (type !== 'session.status') return undefined;
+  return asObject(body?.['status'])?.['type'] === 'idle' ? sessionID : undefined;
+}
+
+/** Is the value an object and not an array? */
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+/** The string under a key, when the value is a string. */
+function stringOf(object: Record<string, unknown>, key: string): string | undefined {
+  const value = object[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** The strings of a list, when the value is a list. */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === 'string');
+}
 
 /**
  * Watch the server for permission requests and answer them.
@@ -65,17 +801,24 @@ const DEFAULT_PERMISSION: PermissionPolicy = () => 'once';
  * The event stream is scoped to a directory, so one subscription serves one
  * case. Without an answer the first shell command of a case waits forever,
  * which looks like a slow model and is not.
+ *
+ * The subscription stays scoped to the case. A subscription for the whole
+ * server would have every case answer every case's requests, and a case
+ * whose policy refuses the protected paths would refuse another case's
+ * edit. A request from a session outside the case's directory is the case
+ * that owns it that answers, and the lines below say which case answered
+ * which request.
  */
 export async function answerPermissions(
   harness: OpenCodeHarness,
   directory: string,
   policy: PermissionPolicy = DEFAULT_PERMISSION,
 ): Promise<() => void> {
-  const stream = await harness.client.event.subscribe({ query: { directory } });
+  const stream = await harness.client.events({ directory });
   let stopped = false;
 
   const pump = async (): Promise<void> => {
-    for await (const event of stream.stream) {
+    for await (const event of stream) {
       if (stopped) return;
       if (process.env.OPENAGENTSY_EVAL_TRACE) {
         const { appendFileSync } = await import('node:fs');
@@ -84,34 +827,47 @@ export async function answerPermissions(
           `${new Date().toISOString()} ${event.type}\n`,
         );
       }
-      if (event.type !== 'permission.updated') continue;
-      const properties = event.properties as {
-        id: string;
-        sessionID: string;
-        title?: string;
-        type?: string;
-        patterns?: string[];
-      };
-      const response = policy({
-        sessionID: properties.sessionID,
-        permissionID: properties.id,
-        title: properties.title ?? '',
-        type: properties.type ?? '',
-        patterns: properties.patterns ?? [],
-      });
+      // The idle event is the end of a turn, so it is kept: the wait for a
+      // turn reads it, and a run that hung says nothing without it.
+      const idleSession = idleSessionOf(event);
+      if (idleSession !== undefined) harness.idle.record(idleSession);
+      const request = permissionRequestOf(event);
+      if (request === undefined) continue;
+      // Every request is written down before it is answered. A case that
+      // waits for a permission answer and a case that waits for a child
+      // session that never returns look the same in a run log, and only the
+      // request line tells the two apart.
+      process.stdout.write(
+        `[permission] ${request.sessionID} asks for ${request.type} in ${directory}: ${request.patterns.join(' ')}\n`,
+      );
+      const response = policy(request);
       // The subscription is scoped to the case directory, so a session that
       // asks here belongs to this case; a host error naming it is attributed.
-      harness.trackSession(properties.sessionID, basename(directory));
-      await harness.client.postSessionIdPermissionsPermissionId({
-        path: { id: properties.sessionID, permissionID: properties.id },
-        body: { response },
-        query: { directory },
+      harness.trackSession(request.sessionID, basename(directory));
+      await harness.client.replyPermission({
+        sessionID: request.sessionID,
+        permissionID: request.permissionID,
+        directory,
+        decision: response,
       });
+      process.stdout.write(`[permission] ${request.sessionID} answered ${response}\n`);
+    }
+    if (!stopped) {
+      // The stream ended without the harness asking for it: the server
+      // closed the subscription. Every permission request from now on waits
+      // for an answer that will not come, and a case that waits looks like
+      // a slow model.
+      process.stderr.write(
+        `[permission] the pump for ${directory} ended: the server closed the event stream, and every permission request from now on waits for an answer that will not come\n`,
+      );
     }
   };
 
-  void pump().catch(() => {
-    // The server went away first, which happens at teardown.
+  void pump().catch((error: unknown) => {
+    // The pump answers the permissions of a case. A throw ends the
+    // answering for the rest of the case, and nothing else in the run says
+    // so, so the death is written down loudly.
+    process.stderr.write(`[permission] the pump for ${directory} died: ${String(error)}\n`);
   });
 
   return () => {
@@ -153,6 +909,28 @@ export type HostError = {
 
 /** One error block, before it is attributed to a case. */
 export type HostErrorBlock = { line: string; sessionID?: string };
+
+/**
+ * The errors a run keeps, and the ones the policy exempts.
+ *
+ * The exempted ones are kept as well: a run that hides them is a run that
+ * lies about what happened, so they are counted and reported.
+ */
+export type HostErrorReport = {
+  /** The errors that fail the run. */
+  faults: HostError[];
+  /** The errors the policy exempts. */
+  exempted: HostError[];
+  /** The errors of the sessions the case injected a fault into. */
+  injected: HostError[];
+};
+
+/** The error blocks that are faults, and the ones the policy exempts. */
+export type HostErrorBlocks = {
+  faults: HostErrorBlock[];
+  exempted: HostErrorBlock[];
+  injected: HostErrorBlock[];
+};
 
 /** A line the server wrote, with its level. Continuation lines have none. */
 const LOG_HEADER = /^timestamp=\S+ level=(\S+) /;
@@ -207,7 +985,7 @@ export function attributeHostErrors(
 }
 
 /**
- * The host errors that are faults of the run.
+ * The host errors that are faults of the run, and the ones the policy exempts.
  *
  * One error is expected: the case that kills a builder on purpose
  * (`fault builder killed`) aborts the builder's session mid-turn, and the
@@ -219,14 +997,161 @@ export function attributeHostErrors(
  *
  * The killed sessions are the ones the watches resolved to: a watch that gave
  * up resolves undefined and contributes nothing.
+ *
+ * One more class is exempt, and only one: a file watcher that could not
+ * attach (see `isWatcherFailure`). It is reported, but it does not fail the
+ * run.
+ *
+ * A third class is the case's own doing as well: the case that injects a
+ * fault into its own turn (a provider that answers 429, a provider that is
+ * down) sees the server write that fault as an ERROR naming the session. The
+ * harness knows the sessions it faulted, and the errors of those sessions are
+ * counted and reported, not failed.
  */
+export function splitHostErrors(
+  blocks: readonly HostErrorBlock[],
+  killedSessions: ReadonlySet<string>,
+  faultedSessions: ReadonlySet<string> = new Set(),
+): HostErrorBlocks {
+  const faults: HostErrorBlock[] = [];
+  const exempted: HostErrorBlock[] = [];
+  const injected: HostErrorBlock[] = [];
+  for (const block of blocks) {
+    if (block.sessionID !== undefined && killedSessions.has(block.sessionID)) continue;
+    if (block.sessionID !== undefined && faultedSessions.has(block.sessionID)) {
+      injected.push(block);
+      continue;
+    }
+    if (isWatcherFailure(block)) {
+      exempted.push(block);
+      continue;
+    }
+    faults.push(block);
+  }
+  return { faults, exempted, injected };
+}
+
+/** The host errors that are faults of the run. */
 export function hostFaults(
   blocks: readonly HostErrorBlock[],
   killedSessions: ReadonlySet<string>,
 ): HostErrorBlock[] {
-  return blocks.filter(
-    (block) => block.sessionID === undefined || !killedSessions.has(block.sessionID),
-  );
+  return splitHostErrors(blocks, killedSessions).faults;
+}
+
+/**
+ * The message the server writes when a file watcher cannot attach.
+ *
+ * Measured on 2026-10-27 on macOS: the server opens a watcher on the
+ * directory a case serves, and FSEvents refuses to open a stream for a path
+ * under the OS temp dir, so the server writes this error.
+ */
+const WATCHER_FAILURE = 'failed to subscribe';
+
+/**
+ * The `key=value` fields of a structured log line.
+ *
+ * The server writes the fields in order, and a value with a space in it is
+ * quoted. A `key=value` inside a quoted value belongs to that value, so the
+ * line is walked and not searched.
+ */
+export function logFields(line: string): Map<string, string> {
+  const fields = new Map<string, string>();
+  for (const match of line.matchAll(/([\w.]+)=("(?:[^"\\]|\\.)*"|[^\s]*)/g)) {
+    const key = match[1];
+    const raw = match[2];
+    if (key === undefined || raw === undefined) continue;
+    fields.set(key, raw.startsWith('"') ? raw.slice(1, -1).replace(/\\(["\\])/g, '$1') : raw);
+  }
+  return fields;
+}
+
+/**
+ * Is this error a file watcher that could not attach?
+ *
+ * The measured line (2026-10-27, macOS) is:
+ *
+ *   level=ERROR … message="failed to subscribe" directory=/…/openagentsy-eval-seeded-bug-cwZs34/.git cause="Error: Error starting FSEvents stream …"
+ *
+ * The policy of the suite is that a case which passed while the host failed
+ * did not measure the agent. The failures that make a passing case
+ * meaningless are a model that refused, a tool that broke and a server that
+ * died. A watcher that could not subscribe is none of those: no tool call
+ * depends on it, and the state of the case on disk, on the board and in the
+ * audit log is complete. So a watcher that cannot attach is never a host
+ * fault, on any path.
+ *
+ * The path does not decide, and it is not the path the error names that
+ * matters. The OpenCode 1 server watched the directory of the case, and the
+ * OpenCode 2 server watches the machine's global skill directories as well;
+ * the watcher cannot attach to those either, and the same noise came back
+ * through a different path.
+ *
+ * The error has to name the directory it could not watch: a failure to
+ * subscribe that names no directory is not a file watcher, and the harness
+ * reads the event stream, so a stream that cannot be subscribed to is a fault
+ * of the host.
+ */
+export function isWatcherFailure(block: HostErrorBlock): boolean {
+  const fields = logFields(block.line.split('\n', 1)[0] ?? '');
+  if (fields.get('message') !== WATCHER_FAILURE) return false;
+  const directory = fields.get('directory');
+  return directory !== undefined && directory !== '';
+}
+
+/** Is the path the directory itself, or a path under it? */
+function isWithin(dir: string, path: string): boolean {
+  if (path === dir) return true;
+  return path.startsWith(dir.endsWith(sep) ? dir : `${dir}${sep}`);
+}
+
+/**
+ * Is this watcher failure on a throwaway directory of this run?
+ *
+ * The report tells the reader where the failure was, and a directory that
+ * only looks like a case directory is not one.
+ */
+function onCaseDir(error: HostError, caseDirs: ReadonlySet<string>): boolean {
+  const directory = logFields(error.line.split('\n', 1)[0] ?? '').get('directory');
+  if (directory === undefined || directory === '') return false;
+  return [...caseDirs].some((dir) => isWithin(dir, directory));
+}
+
+/**
+ * The line the run reports the exempted errors with.
+ *
+ * The count and the first error are both in it: a run that hides the errors
+ * it ignored is a run that lies about what happened. The path is in it too,
+ * because the reader has to see whether the watcher failed on a directory of
+ * this run or on a path of the machine, and the two say different things.
+ */
+export function watcherExemptionLine(
+  exempted: readonly HostError[],
+  caseDirs: ReadonlySet<string> = caseDirsOfRun(),
+): string {
+  const first = exempted[0];
+  const detail = first === undefined ? '' : `\n  ${first.line.replace(/\n/g, '\n  ')}`;
+  const onCase = exempted.filter((error) => onCaseDir(error, caseDirs)).length;
+  return `the opencode server wrote ${exempted.length} watcher error(s)${watcherErrorsWhere(onCase, exempted.length)}; a watcher that cannot attach is not a host fault:${detail}`;
+}
+
+/** Where the exempted watcher failures were. */
+function watcherErrorsWhere(onCase: number, total: number): string {
+  if (onCase === total) return ' on a throwaway directory of this run';
+  if (onCase === 0) return ' on another path';
+  return `: ${onCase} on a throwaway directory of this run, ${total - onCase} on another path`;
+}
+
+/**
+ * The line the run reports the errors of a faulted session with.
+ *
+ * The count and the first error are both in it: a run that hides the errors
+ * it ignored is a run that lies about what happened.
+ */
+export function injectedFaultLine(injected: readonly HostError[]): string {
+  const first = injected[0];
+  const detail = first === undefined ? '' : `\n  ${first.line.replace(/\n/g, '\n  ')}`;
+  return `the opencode server wrote ${injected.length} error(s) about a session the case injected a fault into; the fault is the case's own doing:${detail}`;
 }
 
 /**
@@ -236,19 +1161,23 @@ export function hostFaults(
  * the size the file had when the run started, and only what was appended
  * afterwards is read. A block naming a session the harness killed is the
  * injected fault, not a host error, so it is dropped here.
+ *
+ * The errors the policy exempts are returned next to the faults, because a
+ * run that does not say what it ignored cannot be read.
  */
 export async function readHostErrors(
   logFile: string,
   fromOffset = 0,
   sessions: ReadonlyMap<string, string> = new Map(),
   killedSessions: ReadonlySet<string> = new Set(),
-): Promise<HostError[]> {
+  faultedSessions: ReadonlySet<string> = new Set(),
+): Promise<HostErrorReport> {
   let bytes: Buffer;
   try {
     bytes = await readFile(logFile);
   } catch {
     // No log yet is no error: a server that has not started has written none.
-    return [];
+    return { faults: [], exempted: [], injected: [] };
   }
   // The offset is the size the file had when the run started, and a log that
   // already ended in a partial line leaves it mid-line. Start at the first
@@ -257,13 +1186,19 @@ export async function readHostErrors(
   let start = Math.max(0, fromOffset);
   if (start > 0 && start < bytes.length && bytes[start - 1] !== 0x0a) {
     const newline = bytes.indexOf(0x0a, start);
-    if (newline === -1) return [];
+    if (newline === -1) return { faults: [], exempted: [], injected: [] };
     start = newline + 1;
   }
-  return attributeHostErrors(
-    hostFaults(hostErrorsIn(bytes.subarray(start).toString('utf8')), killedSessions),
-    sessions,
+  const split = splitHostErrors(
+    hostErrorsIn(bytes.subarray(start).toString('utf8')),
+    killedSessions,
+    faultedSessions,
   );
+  return {
+    faults: attributeHostErrors(split.faults, sessions),
+    exempted: attributeHostErrors(split.exempted, sessions),
+    injected: attributeHostErrors(split.injected, sessions),
+  };
 }
 
 /**
@@ -401,6 +1336,22 @@ export async function sweepStaleHarnessFiles(
 export async function startHarness(options: { port?: number } = {}): Promise<OpenCodeHarness> {
   const port = options.port ?? 40_000 + Math.floor(Math.random() * 5_000);
   const baseUrl = `http://127.0.0.1:${port}`;
+  // The runtime is named before the server starts, and the run says which
+  // one it is: a verdict that cannot name the runtime cannot be read, and
+  // the machine may have more than one `opencode` on it.
+  const binary = runtimeBinary();
+  const runtime = await readRuntime(binary);
+  process.stdout.write(`the suite runs ${runtime.binary} ${runtime.version}\n`);
+
+  // The harness speaks the 2.x API, and a 1.x server does not serve it. A
+  // run against a 1.x binary would fail on every call with a 404, and the
+  // run stops here instead, before the server starts, and says which runtime
+  // it found.
+  if (runtime.major < 2) {
+    throw new Error(
+      `the harness speaks OpenCode 2 only, and the runtime is ${runtime.binary} ${runtime.version}`,
+    );
+  }
 
   // The server's output goes to a file even when no log path is given, so a
   // CI run shows why a server that never answered did not answer. `serve` is
@@ -424,9 +1375,8 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // exists would otherwise carry an earlier run's errors into this suite.
   const logStart = fstatSync(logFd).size;
 
-  // OpenCode 2 serves with a password and OpenCode 1 does not, so the
-  // password is set for both and sent with every request. The harness talks
-  // to the same server API on both, so one harness covers both runtimes.
+  // OpenCode 2 serves with a password, and the password is sent with every
+  // request.
   const password = process.env.OPENAGENTSY_EVAL_PASSWORD ?? 'openagentsy-eval';
 
   // The suite gets its own database. Without this the server opens the
@@ -436,8 +1386,15 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
   // the caller's OpenCode 1 unable to read it.
   const database = join(tmpdir(), `openagentsy-eval-${port}.db`);
 
-  const child: ChildProcess = spawn('opencode', serveArgs(port), {
+  // The server runs in a directory of its own. It serves whatever directory
+  // a request names, so its own working directory is never the project: a
+  // server that decides to run a git command where it happens to sit would
+  // write into the repository that started the suite.
+  const serverCwd = await mkdtemp(join(tmpdir(), 'openagentsy-eval-server-cwd-'));
+
+  const child: ChildProcess = spawn(binary, serveArgs(port), {
     stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+    cwd: serverCwd,
     env: { ...childEnv(), OPENCODE_SERVER_PASSWORD: password, OPENCODE_DB: database },
   });
 
@@ -454,38 +1411,42 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
     throw error;
   }
 
-  const client = createOpencodeClient({
-    baseUrl,
-    headers: { Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}` },
-  });
+  // The harness talks to the 2.x API, and the harness's logic sits on this
+  // side of that boundary.
+  const client: HarnessClient = new V2HarnessClient({ baseUrl, password });
 
-  const watches: { killed: Promise<string | undefined>; stop: () => void }[] = [];
+  const watches: KillWatch[] = [];
   const sessions = new Map<string, string>();
-  const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostError[]> =>
-    readHostErrors(logFile, logStart, sessions, killedSessions);
+  // The sessions a case injected a fault into. The server writes that fault
+  // as an ERROR naming the session, and the fault is the case's own doing.
+  const faultedSessions = new Set<string>();
+  const hostErrors = (killedSessions: ReadonlySet<string> = new Set()): Promise<HostErrorReport> =>
+    readHostErrors(logFile, logStart, sessions, killedSessions, faultedSessions);
 
   return {
     client,
     root: baseUrl,
+    runtime,
     watches,
     hostErrors,
+    idle: new IdleRegistry(),
     trackSession: (sessionID, caseLabel) => {
       sessions.set(sessionID, caseLabel);
+    },
+    markFaultedSession: (sessionID) => {
+      faultedSessions.add(sessionID);
     },
     stop: async () => {
       // A watcher that is still looking for a session stops looking: a
       // pending timer keeps the process alive.
       for (const watch of watches) watch.stop();
       // The sessions the harness killed on purpose are the case's fault, not
-      // the host's: the server logs each abort at ERROR. The watches resolve
-      // to the id they killed (or undefined when they gave up), so they are
-      // the list of errors the cases asked for. Collect it before the server
-      // goes away, while an abort that is still in flight can still land.
-      const killedSessions = new Set(
-        (await Promise.all(watches.map((watch) => watch.killed))).filter(
-          (id): id is string => id !== undefined,
-        ),
-      );
+      // the host's: the server logs each abort at ERROR. The watches answer
+      // with every session they killed (a fault that kills every builder
+      // the Lead dispatches kills more than one), so the whole list is
+      // collected. Collect it before the server goes away, while an abort
+      // that is still in flight can still land.
+      const killedSessions = new Set((await Promise.all(watches.map((watch) => watch.all))).flat());
       child.kill('SIGTERM');
       // The server writes to the log file it was given, and it may still be
       // writing when the process is asked to stop. Waiting for the exit
@@ -506,21 +1467,31 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
       // can hide an error the server wrote while it was serving them. It reads
       // through `hostErrors`, the same view a caller asking mid-run gets, so
       // the log is read before it is removed.
-      let faults: HostError[] = [];
+      let report: HostErrorReport = { faults: [], exempted: [], injected: [] };
       try {
-        faults = await hostErrors(killedSessions);
+        report = await hostErrors(killedSessions);
       } finally {
         // This run's database, sidecars and (when it named it) log are garbage
         // once the server is gone. Nothing else is in the list: not the board
         // database, not its records or leases, and no file that is not ours.
         await removeHarnessFiles(database, ownsLogFile ? logFile : undefined);
+        // The server's own directory goes with it.
+        await rm(serverCwd, { recursive: true, force: true });
       }
-      if (faults.length > 0) {
-        const detail = faults
+      // The errors the policy exempts are reported: a run that hides the
+      // errors it ignored is a run that lies about what happened.
+      if (report.exempted.length > 0) {
+        process.stdout.write(`${watcherExemptionLine(report.exempted)}\n`);
+      }
+      if (report.injected.length > 0) {
+        process.stdout.write(`${injectedFaultLine(report.injected)}\n`);
+      }
+      if (report.faults.length > 0) {
+        const detail = report.faults
           .map((fault) => `[${fault.case}] ${fault.line.replace(/\n/g, '\n  ')}`)
           .join('\n');
         throw new Error(
-          `the opencode server wrote ${faults.length} host error(s); a case that passed while the host failed did not measure the agent:\n${detail}`,
+          `the opencode server wrote ${report.faults.length} host error(s); a case that passed while the host failed did not measure the agent:\n${detail}`,
         );
       }
     },
@@ -539,6 +1510,19 @@ export async function startHarness(options: { port?: number } = {}): Promise<Ope
  * would have been given up.
  */
 export const TRIAL_BUDGET_MS = 1_800_000;
+
+/**
+ * The margin between the budget of a turn and the timeout of a case.
+ *
+ * The harness gives up on a turn itself, with an error that says what it
+ * saw: the session, the idle event, the last message. Vitest gives up on
+ * the case, with a line that says nothing. A case whose timeout and whose
+ * turn budget are the same number is a race vitest wins, and the harness's
+ * diagnosis never reaches the log: the case that hung for thirty minutes
+ * reported only "Test timed out in 1800000ms". The margin keeps the
+ * harness's own message in the log.
+ */
+export const TURN_BUDGET_MARGIN_MS = 30_000;
 
 /**
  * A provider refusal the harness is about to retry.
@@ -589,6 +1573,14 @@ export type PromptOptions = {
    * up finds no tool.
    */
   waitForBoard?: boolean;
+  /**
+   * The case points the model provider at a server that fails.
+   *
+   * The fault lands in the turn of the session this call creates, and the
+   * server writes it as an ERROR naming the session. The error is the case
+   * proving the fault landed, not the host failing.
+   */
+  injectsProviderFault?: boolean;
 };
 
 function sleep(ms: number): Promise<void> {
@@ -667,9 +1659,14 @@ export function replyPartsOf(messages: readonly unknown[]): {
  * The key for a System One model belongs to the harness, which grades the
  * case. A case runs without it: the agent under test must not be able to
  * reach a classifier, or the case measures something else than the agent.
+ *
+ * The git variables go too. A child that inherits them addresses the
+ * repository they point at instead of the one it was told about, and the
+ * suite's own repository is the one they point at when the suite runs from
+ * a commit.
  */
 export function childEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string | undefined> {
-  const copy: Record<string, string | undefined> = { ...env };
+  const copy = gitFreeEnv(env);
   delete copy.TYPESAFE_API_KEY;
   return copy;
 }
@@ -690,11 +1687,9 @@ export async function waitForBoard(
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const status = await harness.client.mcp.status({ query: { directory } });
-    const servers = status.data ?? {};
-    const board = servers.openagentsy;
-    if (board !== undefined && 'status' in board && board.status === 'connected') return;
-    if (board !== undefined && 'status' in board && board.status === 'failed') {
+    const board = await harness.client.boardStatus({ directory });
+    if (board?.status === 'connected') return;
+    if (board?.status === 'failed') {
       throw new Error(`the board server failed to start: ${JSON.stringify(board)}`);
     }
     if (Date.now() >= deadline) {
@@ -720,20 +1715,14 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   const { harness, directory, agent } = options;
   const client = harness.client;
 
-  const created = await client.session.create({
-    body: { title: `eval ${agent}` },
-    query: { directory },
-  });
-  if (created.error) {
-    throw new Error(`could not create a session: ${JSON.stringify(created.error)}`);
-  }
-  const sessionID = created.data?.id;
-  if (sessionID === undefined) {
-    throw new Error('the server created a session without an id');
-  }
+  const sessionID = await client.createSession({ title: `eval ${agent}`, directory });
   // A host error that names this session belongs to this case. The case is
   // its throwaway directory; the directory is what the suite gives it.
   harness.trackSession(sessionID, basename(directory));
+  // A case that injects a fault into its own turn gets the errors of that
+  // turn: the server writes the fault as an ERROR naming the session, and
+  // the fault is the case's own doing.
+  if (options.injectsProviderFault === true) harness.markFaultedSession(sessionID);
 
   // The board is an MCP server, and the server starts it when a session in
   // that directory begins. A tool call that arrives before the server is up
@@ -745,75 +1734,122 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
   }
 
   const ask = async () => {
-    const asked = await client.session.promptAsync({
-      path: { id: sessionID },
-      body: {
-        agent,
-        ...(options.model !== undefined ? { model: parseModel(options.model) } : {}),
-        parts: [{ type: 'text', text: options.text }],
-      },
-      query: { directory },
+    // The idle events that came before this turn are not this turn's: the
+    // wait ends on the idle of the turn it waits for.
+    harness.idle.beginTurn(sessionID);
+    await client.prompt({
+      sessionID,
+      directory,
+      agent,
+      ...(options.model !== undefined ? { model: parseModel(options.model) } : {}),
+      text: options.text,
     });
-    if (asked.error) {
-      throw new Error(`the prompt failed: ${JSON.stringify(asked.error)}`);
-    }
   };
 
-  await ask();
-
   const timeoutMs = options.timeoutMs ?? TRIAL_BUDGET_MS;
-  await waitForIdle(client, sessionID, directory, timeoutMs);
-
-  const messages = await client.session.messages({
-    path: { id: sessionID },
-    query: { directory },
-  });
-  const last = messages.data?.at(-1);
-  // The whole list, not only the last message: a climb puts a synthetic
-  // message at the end of the session, and the reply is the message before
-  // it.
-  let replyFrom: readonly unknown[] = messages.data ?? [];
-
-  // A rate limited turn is the provider's answer, not the agent's. The free
-  // model tiers answer with 429 when a burst trips their limit, so the turn
-  // is asked again after a wait. The number of tries is bounded, so a
-  // provider that is down for good ends the turn instead of looping.
-  const attempts = options.rateLimitRetries ?? 2;
-  let providerError = providerErrorOf(last);
-  for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
-    const waitMs = (attempt + 1) * 30_000;
-    // The refusal is written down before the wait, not after it: a run that
-    // is slow because the provider refuses has to say so while it is slow.
-    // The loop is only entered when the turn was refused, so a turn that
-    // answered the first time is never reported.
-    options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
-    await sleep(waitMs);
+  try {
     await ask();
-    await waitForIdle(client, sessionID, directory, timeoutMs);
-    const again = await client.session.messages({
-      path: { id: sessionID },
-      query: { directory },
-    });
-    const recovered = again.data?.at(-1);
-    providerError = providerErrorOf(recovered);
-    if (providerError === undefined) {
-      // The turn came back. The reply is this one, not the refusal that
-      // came before it.
-      replyFrom = again.data ?? [];
-      break;
+
+    await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
+
+    // The whole list, not only the last message: a climb puts a synthetic
+    // message at the end of the session, and the reply is the message before
+    // it.
+    let replyFrom: readonly unknown[] = await client.messages({ sessionID, directory });
+    const last = replyFrom.at(-1);
+
+    // A rate limited turn is the provider's answer, not the agent's. The free
+    // model tiers answer with 429 when a burst trips their limit, so the turn
+    // is asked again after a wait. The number of tries is bounded, so a
+    // provider that is down for good ends the turn instead of looping.
+    const attempts = options.rateLimitRetries ?? 2;
+    let providerError = providerErrorOf(last);
+    for (let attempt = 0; attempt < attempts && providerError !== undefined; attempt += 1) {
+      const waitMs = (attempt + 1) * 30_000;
+      // The refusal is written down before the wait, not after it: a run that
+      // is slow because the provider refuses has to say so while it is slow.
+      // The loop is only entered when the turn was refused, so a turn that
+      // answered the first time is never reported.
+      options.onProviderRefusal?.({ status: providerError, attempt: attempt + 1, waitMs });
+      await sleep(waitMs);
+      await ask();
+      await waitForIdle({ client, sessionID, directory, timeoutMs, idle: harness.idle });
+      const again = await client.messages({ sessionID, directory });
+      const recovered = again.at(-1);
+      providerError = providerErrorOf(recovered);
+      if (providerError === undefined) {
+        // The turn came back. The reply is this one, not the refusal that
+        // came before it.
+        replyFrom = again;
+        break;
+      }
     }
+
+    const { text, toolCalls } = replyPartsOf(replyFrom);
+
+    return { text, toolCalls, files: [], sessionID };
+  } catch (error) {
+    if (!isSessionGone(error)) throw error;
+    // The session is gone: a case removed it, and the turn produced nothing.
+    // The case's own expectations judge that, not the harness.
+    return { text: '', toolCalls: [], files: [], sessionID };
   }
-
-  const { text, toolCalls } = replyPartsOf(replyFrom);
-
-  return { text, toolCalls, files: [], sessionID };
 }
+
+/** How long the poll of the busy map sleeps between two checks. */
+const POLL_INTERVAL_MS = 500;
+
+/** What the wait says about a session that has no assistant message. */
+const NO_ASSISTANT_MESSAGE = 'none';
+
+/**
+ * What the wait knows about the turn it waits for.
+ *
+ * A wait that gives up says all of it: a run that hung for thirty minutes
+ * reported only that the turn did not finish, and the hunt for the reason
+ * took three runs.
+ */
+type TurnWait = {
+  /** The session the turn runs in. */
+  sessionID: string;
+  /** Whether the server ever reported the session as busy. */
+  seenBusy: boolean;
+  /** The idle events the server sent for the session since the turn began. */
+  idleEvents: number;
+  /** What the last assistant message looked like. */
+  lastMessage: string;
+  /** How long the wait has gone on. */
+  waitedMs: number;
+};
+
+/** The options of the wait for a turn to end. */
+export type WaitForIdleOptions = {
+  /** The client the wait asks the server with. */
+  client: HarnessClient;
+  /** The session the turn runs in. */
+  sessionID: string;
+  /** The directory the session lives in. */
+  directory: string;
+  /** How long the wait may take, in milliseconds. */
+  timeoutMs: number;
+  /** The idle events the event stream carried. */
+  idle: IdleRegistry;
+  /** How long the poll sleeps between two checks. */
+  pollMs?: number;
+};
+
 /**
  * Wait until the session has nothing left to do.
  *
- * The server reports the sessions that are busy, so the wait is a poll of
- * that map. A session that is not in it is idle, and its last message holds
- * the reply.
+ * The server says a session is idle when its turn is over, and the
+ * harness's own subscription sees that event: the wait ends when the
+ * server says the session under test is idle. The event is matched to the
+ * session, because it fires for every session of the case, and the idle of
+ * another session ends another session's turn.
+ *
+ * The poll of the busy map is the fallback for a server that sends no
+ * event. The server reports the sessions that are busy, a session that is
+ * not in the map is idle, and its last message holds the reply.
  *
  * A turn can also end without a reply: the model streams an empty message
  * and the server never completes it. The session is then idle and the last
@@ -821,53 +1857,177 @@ export async function runTurn(options: PromptOptions): Promise<SessionTurn> {
  * produced nothing. That is a failure of the case, not a wait worth ten
  * minutes: a case that hung that way looked like a slow model.
  */
-async function waitForIdle(
-  client: OpencodeClient,
-  sessionID: string,
-  directory: string,
-  timeoutMs: number,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let reported = false;
-  while (Date.now() < deadline) {
-    const status = await client.session.status({ query: { directory } });
-    const busy = status.data as Record<string, unknown> | undefined;
-    const isBusy = busy !== undefined && Object.hasOwn(busy, sessionID);
-
-    if (isBusy) {
-      reported = true;
-    } else {
-      const last = await lastAssistantMessage(client, sessionID, directory);
-      if (last?.info?.time?.completed) return;
-      // The session is idle and the last assistant message never completed.
-      // Either the turn is over with nothing in it, or it has not started.
-      if (reported) return;
-      if (last !== undefined) return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+export async function waitForIdle(options: WaitForIdleOptions): Promise<void> {
+  const { client, sessionID, directory, timeoutMs, idle } = options;
+  const pollMs = options.pollMs ?? POLL_INTERVAL_MS;
+  const started = Date.now();
+  const deadline = started + timeoutMs;
+  const state: TurnWait = {
+    sessionID,
+    seenBusy: false,
+    idleEvents: 0,
+    lastMessage: NO_ASSISTANT_MESSAGE,
+    waitedMs: 0,
+  };
+  for (;;) {
+    // The event wins: the server said the session is idle, so the turn is
+    // over and the wait does not have to guess it from the busy map.
+    state.idleEvents = idle.sinceTurnStart(sessionID);
+    if (state.idleEvents > 0) return;
+    if (Date.now() >= deadline) break;
+    if (await pollOnce(client, sessionID, directory, state)) return;
+    await sleep(pollMs);
   }
-  throw new Error(`the turn did not finish within ${timeoutMs}ms`);
+  state.idleEvents = idle.sinceTurnStart(sessionID);
+  state.waitedMs = Date.now() - started;
+  // One last look at the messages, so the line names the message of the
+  // turn even when the session was busy every time the poll asked.
+  state.lastMessage = await lastMessageOf(client, sessionID, directory, state.lastMessage);
+  throw new Error(turnWaitMessage(state, timeoutMs));
 }
 
-async function lastAssistantMessage(
-  client: OpencodeClient,
+/**
+ * The last assistant message of a session, or what the wait already knew.
+ *
+ * A server that cannot answer right now does not take the diagnosis with
+ * it: the line says what the poll saw.
+ */
+async function lastMessageOf(
+  client: HarnessClient,
   sessionID: string,
   directory: string,
-): Promise<{ info?: { role?: string; time?: { completed?: number } } } | undefined> {
-  const messages = await client.session.messages({
-    path: { id: sessionID },
-    query: { directory },
-  });
-  const last = messages.data?.at(-1);
-  if (last?.info?.role !== 'assistant') return undefined;
+  known: string,
+): Promise<string> {
+  try {
+    const messages = await readSessionMessages(client, sessionID, directory);
+    return describeMessage(messages.lastAssistant);
+  } catch {
+    return known;
+  }
+}
+
+/**
+ * One check of the busy map, and of the last message of the session.
+ *
+ * The check is the fallback for a server that sends no idle event. It says
+ * whether the wait is over: a finished assistant message is the reply of
+ * the turn, a session that was busy and is not any more has finished, and
+ * an assistant message that never completed is a turn that produced
+ * nothing.
+ */
+async function pollOnce(
+  client: HarnessClient,
+  sessionID: string,
+  directory: string,
+  state: TurnWait,
+): Promise<boolean> {
+  const busy = await client.busySessions({ directory });
+  if (busy.has(sessionID)) {
+    state.seenBusy = true;
+    return false;
+  }
+  const messages = await readSessionMessages(client, sessionID, directory);
+  state.lastMessage = describeMessage(messages.lastAssistant);
+  const last = messages.last;
+  const isAssistant = last?.role === 'assistant';
+  if (isAssistant && last?.completed !== undefined) return true;
+  if (state.seenBusy) return true;
+  return isAssistant;
+}
+
+/**
+ * The messages of a session, as the wait reads them.
+ *
+ * The last message is the one the turn is judged on: a session whose last
+ * message is a user message has not produced its reply yet, and that is
+ * what the retry path relies on. The last assistant message is what a run
+ * that waits too long has to describe.
+ */
+type SessionMessages = {
+  /** The last message of the session, whatever its role. */
+  last?: MessageSummary;
+  /** The last assistant message of the session. */
+  lastAssistant?: MessageSummary;
+};
+
+/** What a message looks like, for a run that has to say it. */
+type MessageSummary = {
+  /** The role of the message. */
+  role: string;
+  /** When the message completed, when it did. */
+  completed?: number;
+  /** How many parts the message has. */
+  parts: number;
+  /** How many characters of text the message carries. */
+  characters: number;
+};
+
+/** Read the messages of a session. */
+async function readSessionMessages(
+  client: HarnessClient,
+  sessionID: string,
+  directory: string,
+): Promise<SessionMessages> {
+  const list = await client.messages({ sessionID, directory });
+  let last: MessageSummary | undefined;
+  let lastAssistant: MessageSummary | undefined;
+  for (const message of list) {
+    const summary = summarizeMessage(message);
+    if (summary === undefined) continue;
+    last = summary;
+    if (summary.role === 'assistant') lastAssistant = summary;
+  }
   return {
-    info: {
-      role: last.info.role,
-      ...(last.info.time?.completed !== undefined
-        ? { time: { completed: last.info.time.completed } }
-        : {}),
-    },
+    ...(last === undefined ? {} : { last }),
+    ...(lastAssistant === undefined ? {} : { lastAssistant }),
   };
+}
+
+/** What one message of a session looks like. */
+function summarizeMessage(message: unknown): MessageSummary | undefined {
+  const shape = asObject(message);
+  if (shape === undefined) return undefined;
+  const info = asObject(shape['info']);
+  const role = info?.['role'];
+  const time = asObject(info?.['time']);
+  const completed = time?.['completed'];
+  const parts = Array.isArray(shape['parts']) ? shape['parts'] : [];
+  let characters = 0;
+  for (const part of parts) {
+    const text = asObject(part)?.['text'];
+    if (typeof text === 'string') characters += text.length;
+  }
+  return {
+    role: typeof role === 'string' ? role : 'unknown',
+    ...(typeof completed === 'number' ? { completed } : {}),
+    parts: parts.length,
+    characters,
+  };
+}
+
+/** What the last assistant message looked like, in a line. */
+function describeMessage(message: MessageSummary | undefined): string {
+  if (message === undefined) return NO_ASSISTANT_MESSAGE;
+  const shape = `an assistant message with ${message.parts} part(s) and ${message.characters} characters of text`;
+  if (message.completed === undefined) return `${shape} that never completed`;
+  return `${shape} that completed at ${message.completed}`;
+}
+
+/**
+ * The line a run reports a turn that did not end with.
+ *
+ * The harness gives up on a turn with the state it saw, because a run that
+ * hung for thirty minutes and reported only that the turn did not finish
+ * took three runs to diagnose.
+ */
+function turnWaitMessage(wait: TurnWait, timeoutMs: number): string {
+  return [
+    `the turn of session ${wait.sessionID} did not finish within ${timeoutMs}ms`,
+    `  the server reported the session busy: ${wait.seenBusy ? 'yes' : 'no'}`,
+    `  the server sent an idle event for the session: ${wait.idleEvents > 0 ? 'yes' : 'no'} (${wait.idleEvents} since the turn began)`,
+    `  the last assistant message: ${wait.lastMessage}`,
+    `  the wait had gone on for ${wait.waitedMs}ms`,
+  ].join('\n');
 }
 
 /** A model is written provider/model. */
@@ -880,9 +2040,38 @@ export function parseModel(model: string): { providerID: string; modelID: string
   };
 }
 
+/**
+ * The throwaway directories this run created.
+ *
+ * The suite makes one per case, under the OS temp dir, and the server names
+ * the directory in the error it writes when its watcher cannot attach. The
+ * fault does not depend on the path, but the report does: this list is what
+ * tells the reader whether the watcher failed on a directory of this run or
+ * on a path of the machine.
+ *
+ * A directory stays in the list after its case is over: the error is written
+ * while the case runs and read at teardown, when the directory is gone.
+ */
+const caseDirs = new Set<string>();
+
+/** The throwaway directories this run created. */
+export function caseDirsOfRun(): ReadonlySet<string> {
+  return caseDirs;
+}
+
 /** A throwaway directory for one case. */
 export async function createCaseDir(prefix: string): Promise<string> {
-  return mkdtemp(join(tmpdir(), `openagentsy-eval-${prefix}-`));
+  const dir = await mkdtemp(join(tmpdir(), `openagentsy-eval-${prefix}-`));
+  // The server logs the path it resolved, and on macOS the temp dir is
+  // behind a symlink. Both forms are kept, so the error names the directory
+  // whichever way it was written.
+  caseDirs.add(dir);
+  try {
+    caseDirs.add(await realpath(dir));
+  } catch {
+    // A directory that cannot be resolved is still the one the harness made.
+  }
+  return dir;
 }
 
 export async function removeCaseDir(path: string): Promise<void> {
@@ -929,57 +2118,382 @@ export async function startFaultServer(mode: '429' | 'down'): Promise<FaultServe
   };
 }
 
-/** Abort a session's turn, the way a killed builder stops mid-task. */
-export async function abortSession(
-  client: OpencodeClient,
+/**
+ * How long the kill keeps cutting the session it killed.
+ *
+ * The abort is what stops the generation that is in flight, and one abort is
+ * not always enough: the watch finds the session the moment the dispatch
+ * creates it, which is before its turn is running, and an abort of an idle
+ * session is a no-op. The session is cut again and again for this long, so
+ * a turn that starts after the first abort is cut as well.
+ */
+const KILL_WINDOW_MS = 60_000;
+
+/**
+ * How often the kill cuts the session it killed.
+ *
+ * The cuts are close together on purpose: a builder that is cut has a
+ * window before the next cut, and a window long enough for a tool call is a
+ * window long enough for a completion record.
+ */
+const KILL_INTERVAL_MS = 500;
+
+/**
+ * End a session, the way a killed builder stops mid-task.
+ *
+ * An abort cancels the turn that is running, and the session resumes: the
+ * measured run (2026-10-27) had a builder that kept working for 59 seconds
+ * after the kill and posted its completion record, and the comment above
+ * the watch records a child that generated for nineteen minutes after its
+ * abort. Deleting the session ends it: the session is gone, so there is
+ * nothing to resume and nothing left to post a record.
+ *
+ * The aborts come first and they are repeated, and the delete comes last.
+ * The order is not a detail. The OpenCode 2 server finds a session by its
+ * row, so an abort of a deleted session answers 404 and stops nothing
+ * (measured against a live OpenCode 2 server, 2026-10-27). The row has to
+ * be there for the aborts to find it, and it has to go in the end, so that
+ * there is nothing left to resume.
+ *
+ * The repeats are not a belt and braces. The watch finds the session the
+ * moment the dispatch creates it, and that is before the turn is running,
+ * so the first abort lands on an idle session and does nothing. A second
+ * abort of a deleted session is worth nothing either, so the aborts have to
+ * come before the delete and keep coming.
+ *
+ * A delete the server refuses leaves the aborts as the only kill there is,
+ * so they go on when the delete fails.
+ */
+export async function killSession(
+  client: HarnessClient,
   sessionID: string,
   directory: string,
+  options: { windowMs?: number; intervalMs?: number; until?: () => boolean } = {},
 ): Promise<void> {
-  await client.session.abort({ path: { id: sessionID }, query: { directory } });
+  const windowMs = options.windowMs ?? KILL_WINDOW_MS;
+  const intervalMs = options.intervalMs ?? KILL_INTERVAL_MS;
+
+  await cutSession(client, sessionID, directory, windowMs, intervalMs, options.until);
+
+  try {
+    await client.deleteSession({ sessionID, directory });
+  } catch (error) {
+    // The server refused the delete, or the client cannot delete: the aborts
+    // are all the kill there is, and they go on.
+    process.stderr.write(`[kill] the session ${sessionID} was not deleted: ${String(error)}\n`);
+    await cutSession(client, sessionID, directory, windowMs, intervalMs, options.until);
+  }
 }
 
 /**
- * Kill a session the moment it appears, and keep watching until it does.
+ * Cut a session, again and again, for a while.
  *
- * A fault that fires between two turns fires after the work is done: the
- * builder had already written its file and posted its completion record
- * before the harness got a turn to kill it, and the agent under test
- * could not tell the difference. A watcher runs while the turn runs, so
- * the kill lands in the middle of the work.
- *
- * The promise settles when the session was killed, or when the watch gave
- * up. It never rejects: a fault that cannot fire is a case that says so,
- * not a run that crashes.
+ * Every cut is a separate request and the session may be gone already, in
+ * which case the outcome is the one that was wanted. The cut stops early
+ * when the caller says the case is over.
  */
-export function killSessionWhenItAppears(
-  client: OpencodeClient,
+async function cutSession(
+  client: HarnessClient,
+  sessionID: string,
+  directory: string,
+  windowMs: number,
+  intervalMs: number,
+  until?: () => boolean,
+): Promise<void> {
+  for (let elapsed = 0; elapsed < windowMs; elapsed += intervalMs) {
+    if (until?.() === true) return;
+    try {
+      await client.interrupt({ sessionID, directory });
+    } catch {
+      // The session may be gone already; that is the outcome we wanted.
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+
+/**
+ * The session the fault targets: the builder the Lead dispatched.
+ *
+ * The title is not a safe signal: OpenCode names a session from the task
+ * description, and it does that AFTER the dispatch returns, so a child that
+ * works fast is finished before its title exists (measured 2026-10-27: the
+ * child wrote its file and posted its completion fourteen seconds after the
+ * case started, and the title-based kill arrived after the work was done).
+ *
+ * The parent is the signal that is there from the start: a dispatched child
+ * carries the parent id of the session that dispatched it, while the case's
+ * own sessions - the Lead and the judge - are roots, and the archivist, which
+ * the Lead dispatches at the end of its turn, says so in its title.
+ */
+export function killTargets(
+  sessions: {
+    id?: string | undefined;
+    title?: string | undefined;
+    parentID?: string | undefined;
+  }[],
+  baseline: Set<string>,
+  matches: (title: string) => boolean,
+): string[] {
+  const targets: string[] = [];
+  for (const session of sessions) {
+    const target = killTargetOf(session, baseline, matches);
+    if (target !== undefined) targets.push(target);
+  }
+  return targets;
+}
+
+/**
+ * The session a kill may land on, when it may land on one.
+ */
+function killTargetOf(
+  session: {
+    id?: string | undefined;
+    title?: string | undefined;
+    parentID?: string | undefined;
+  },
+  baseline: Set<string>,
+  matches: (title: string) => boolean,
+): string | undefined {
+  if (session.id === undefined) return undefined;
+  const title = (session.title ?? '').trim();
+  // The archivist is left alone wherever it is: the harvest session is a
+  // root whose title says what it is, and a kill that took it would take
+  // the memory of the session it was harvesting.
+  if (/archiv|harvest/i.test(title)) return undefined;
+  const isChild = session.parentID !== undefined && session.parentID !== null;
+  if (isChild) return session.id;
+  if (title === '') return baseline.has(session.id) ? undefined : session.id;
+  return matches(title) ? session.id : undefined;
+}
+
+export function selectKillTarget(
+  sessions: {
+    id?: string | undefined;
+    title?: string | undefined;
+    parentID?: string | undefined;
+  }[],
+  baseline: Set<string>,
+  matches: (title: string) => boolean,
+): string | undefined {
+  return killTargets(sessions, baseline, matches)[0];
+}
+
+/**
+ * The sessions that belong to the case's directory.
+ *
+ * A session of another case is never this case's, and the watch that looks
+ * for a session to kill must not find one: the server's own filter is a
+ * query, and a query is a thing the server can change (measured on a live
+ * OpenCode 2.2.0 server, 2026-10-27: the list route ignored the location
+ * query and answered with every session on the server, so the kill of one
+ * case landed on another case's session and the case under test never saw
+ * its fault).
+ *
+ * A session that names no directory is kept: the guard is about proof, and
+ * a session without a directory is not proof of another case.
+ */
+async function sessionsOfCase(
+  sessions: HarnessSession[],
+  directory: string,
+): Promise<HarnessSession[]> {
+  const here = await canonicalPath(directory);
+  const mine: HarnessSession[] = [];
+  for (const session of sessions) {
+    const own = session.directory;
+    if (own === undefined) {
+      mine.push(session);
+      continue;
+    }
+    if ((await canonicalPath(own)) === here) mine.push(session);
+  }
+  return mine;
+}
+
+/**
+ * The path the file system knows.
+ *
+ * The server answers with the path of a directory and the case names the
+ * same place another way: `/var` is a link to `/private/var` on macOS. The
+ * comparison that decides whether a session belongs to a directory is made
+ * on the paths the file system knows, so the two spellings are one path.
+ */
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * The kill of every session the watch has not killed yet.
+ *
+ * The kills run beside the watch: the watch says at once which session it
+ * found, and the kill keeps cutting that session in the background, because
+ * a cut takes a window to be sure.
+ */
+function startKills(
+  client: HarnessClient,
+  directory: string,
+  targets: string[],
+  killedIds: string[],
+  options: {
+    windowMs: number;
+    intervalMs: number;
+    repeat: boolean;
+    until: () => boolean;
+  },
+  answerKilled: (id: string | undefined) => void,
+): void {
+  for (const target of targets) {
+    if (killedIds.includes(target)) continue;
+    killedIds.push(target);
+    answerKilled(killedIds[0]);
+    void killSession(client, target, directory, {
+      windowMs: options.windowMs,
+      intervalMs: options.intervalMs,
+      until: options.until,
+    });
+    // A watch that does not repeat stops at the first session: one kill is
+    // the fault, and the Lead may dispatch another builder.
+    if (!options.repeat) break;
+  }
+}
+
+/**
+ * The sessions a kill may land on, and the baseline of the watch.
+ *
+ * The server is asked for the sessions of the case, and the answer is
+ * filtered again: the sessions of the case, and only of the case. A watch
+ * that looks for a session to kill must never find another case's session
+ * (the server's own filter is a query, and a query is a thing the server
+ * can change).
+ *
+ * A server that is not up yet is not a reason to stop watching: the poll
+ * answers with nothing and the watch tries again.
+ */
+async function findKillTargets(
+  client: HarnessClient,
   directory: string,
   matches: (title: string) => boolean,
-  options: { attempts?: number; intervalMs?: number } = {},
-): { killed: Promise<string | undefined>; stop: () => void } {
-  const attempts = options.attempts ?? 120;
+  baseline: Set<string> | undefined,
+): Promise<{ baseline?: Set<string>; targets: string[] }> {
+  try {
+    const sessions = await client.listSessions({ directory });
+    const mine = await sessionsOfCase(sessions, directory);
+    const ids = baseline ?? new Set(mine.map((session) => session.id));
+    return { baseline: ids, targets: killTargets(mine, ids, matches) };
+  } catch {
+    return { targets: [] };
+  }
+}
+
+/**
+ * A watch that kills the sessions it finds.
+ */
+export type KillWatch = {
+  /** The first session the watch killed, when it killed one. */
+  killed: Promise<string | undefined>;
+  /**
+   * Every session the watch killed.
+   *
+   * The promise is answered when the watch stops, because a watch that
+   * kills every builder the Lead dispatches kills more than one, and the
+   * run has to know all of them: the server writes an error for every
+   * session it aborts, and those errors are the fault the case injected.
+   */
+  all: Promise<string[]>;
+  /** Stop the watch. */
+  stop: () => void;
+};
+
+export function killSessionWhenItAppears(
+  client: HarnessClient,
+  directory: string,
+  matches: (title: string) => boolean,
+  options: {
+    attempts?: number;
+    intervalMs?: number;
+    windowMs?: number;
+    /**
+     * Whether the watch keeps killing after the first one.
+     *
+     * A builder that dies once can be replaced: the Lead dispatches another
+     * one and the work gets done. The fault of this case is a builder that
+     * dies, and a case that lets the Lead recover measures the recovery
+     * instead of the fault. A watch that repeats kills every builder the
+     * Lead dispatches, for as long as the case runs, so the work cannot be
+     * done and the Lead has to report the death. The case still fails when
+     * a builder posts a completion: that means the kill did not land.
+     */
+    repeat?: boolean;
+  } = {},
+): KillWatch {
+  // The watch lives until the harness stops it, not for a fixed number of
+  // polls: the Lead decides when to dispatch, and that can take minutes
+  // (measured 2026-10-27: a watch that gave up after sixty seconds expired
+  // before the child appeared, and the fault did not land). The harness
+  // stops the watches when the suite ends.
+  const attempts = options.attempts ?? Number.POSITIVE_INFINITY;
   const intervalMs = options.intervalMs ?? 500;
+  // The kill keeps cutting the session it killed, and the window is how
+  // long it does that for. The delete comes at the end of the window, so
+  // the session's row is there for every cut: the OpenCode 2 server finds a
+  // session by its row, and a cut of a deleted session stops nothing
+  // (measured against a live OpenCode 2 server, 2026-10-27). The delete is
+  // what makes the kill stay: the session is gone, so there is nothing to
+  // resume and nothing left to post a record. Only the killed session is
+  // cut; a builder the Lead legitimately re-dispatches is a new session id
+  // and is never touched.
+  const windowMs = options.windowMs ?? KILL_WINDOW_MS;
+  const repeat = options.repeat ?? false;
+  // A dispatched child can finish a small task before the server ever gives
+  // it a title (measured 2026-10-27: a one-line hello.txt completed with
+  // the session still untitled, the title match never fired, and the fault
+  // did not land). The sessions the watch started with are the harness's
+  // own - the case's session, an already-running judge - so a session that
+  // is NEW since the first poll is the dispatched child, titled or not. A
+  // baseline member that gains a matching title later is still caught by
+  // the title test, which covers a child that raced into the baseline.
+  let baseline: Set<string> | undefined;
   let stopped = false;
-  const killed = (async (): Promise<string | undefined> => {
+  const killedIds: string[] = [];
+  let answerKilled: (id: string | undefined) => void = () => {};
+  let answerAll: (ids: string[]) => void = () => {};
+  const killed = new Promise<string | undefined>((resolve) => {
+    answerKilled = resolve;
+  });
+  const all = new Promise<string[]>((resolve) => {
+    answerAll = resolve;
+  });
+  void (async (): Promise<void> => {
     for (let attempt = 0; attempt < attempts && !stopped; attempt += 1) {
-      try {
-        const listed = await client.session.list({ query: { directory } });
-        const hit = (listed.data ?? []).find(
-          (session) => session.title !== undefined && matches(session.title),
-        );
-        if (hit?.id !== undefined) {
-          await client.session.abort({ path: { id: hit.id }, query: { directory } });
-          return hit.id;
-        }
-      } catch {
-        // A server that is not up yet is not a reason to stop watching.
-      }
+      const found = await findKillTargets(client, directory, matches, baseline);
+      if (found.baseline !== undefined) baseline = found.baseline;
+      startKills(
+        client,
+        directory,
+        found.targets,
+        killedIds,
+        {
+          windowMs,
+          intervalMs,
+          repeat,
+          until: () => stopped,
+        },
+        answerKilled,
+      );
+      // A watch that does not repeat stops at the first session.
+      if (killedIds.length > 0 && !repeat) break;
+      if (stopped) break;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
-    return undefined;
+    answerKilled(killedIds[0]);
+    answerAll(killedIds);
   })();
   return {
     killed,
+    all,
     stop: () => {
       stopped = true;
     },

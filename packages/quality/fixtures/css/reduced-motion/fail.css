@@ -1,0 +1,4 @@
+/* Fails: the animation has no reduced-motion fallback. */
+.button {
+  transition: opacity 0.2s ease;
+}

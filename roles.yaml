@@ -11,7 +11,15 @@
 #   scope         declared scope, copied verbatim into the agent prompt
 #   permissions   ordered rules per tool. "*" first, specifics after, because
 #                 the last matching rule wins in both OpenCode versions.
-#   skills        skill allowlist. [] means every skill is allowed.
+#                 A key that is not an action names a tool. An MCP tool is
+#                 `server_tool`, and the board server is called
+#                 `openagentsy`, so the tool `oa_task_create` is
+#                 `openagentsy_oa_task_create` to the host. The bare names
+#                 are kept beside them: the hook resolves a tool name to
+#                 its base name, and the map is read by people as well.
+#   skills        skill allowlist. [] means every skill is allowed. A mapping
+#                 carries the routing too: allow is the list of skill names,
+#                 routing is the text that says which skill a change loads.
 #   modelProfile  what the model selector scores candidates against.
 #   effort        reasoning-effort ladder, see PLAN.md V.5.
 
@@ -26,6 +34,14 @@ protectedPaths:
   - ".opencode/plugins/**"
   - "roles.yaml"
   - "packages/core/src/policy/**"
+  # The approval store is a person and the gate, never an agent. The lock
+  # family is part of the same store: a lock that an agent can delete is a
+  # lock that an agent can steal.
+  - ".openagentsy/approvals.json"
+  - ".openagentsy/approvals.json.lock"
+  - ".openagentsy/approvals.json.lock.reclaim"
+  - ".openagentsy/approvals.json.lock.stale"
+  - ".openagentsy/approvals.json.lock.release.*"
   - "ETHICS.md"
   - "SAFETY.md"
   - "GOVERNANCE.md"
@@ -123,6 +139,12 @@ roles:
       leased to you, and you took a lease before writing it. The record is
       the report, and the judge reads it.
       In the final report, separate what was verified from what was inferred.
+      Recovery loop: every round, in this order. READ loads the board and the
+      in-progress tasks. RECOVER checks only the state of the work before any
+      decision about the work: does the saved next step still make sense, did
+      a delegated result come back, should the Lead wait, retry or re-dispatch.
+      DECIDE picks the next action. PERSIST writes it to the board. REPORT
+      speaks only after PERSIST wrote the state.
     permissions:
       edit:
         - resource: "*"
@@ -183,7 +205,55 @@ roles:
       openagentsy_board_budget_set:
         - resource: "*"
           effect: allow
-    skills: []
+      # The todo list of the project. The Lead creates and structures the
+      # tasks and reads them all: the report to the human comes from the
+      # list. The permission map is the primary enforcement: the hook cannot
+      # see an MCP call on the pinned binary, so the tool is taken away here
+      # rather than trusted there.
+      openagentsy_oa_task_create: allow
+      openagentsy_oa_task_update: allow
+      openagentsy_oa_task_archive: allow
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      # The memories a person decided to keep. Reading a memory is a tool
+      # call; deciding what is kept is not.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # The quality check. The rule shows the agent eight lines of findings
+      # after every write; the tool returns all of them. Reading the
+      # findings is a tool call, and the waiver is not.
+      oa_quality_check: allow
+      openagentsy_oa_quality_check: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The Lead is an agent
+      # too, so the decide tool is taken away from it as well: the person
+      # decides, through the command that calls the same code.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
+    skills:
+      allow: []
+      routing: |
+        For UI, copy or comment work, load oa-ui / oa-copy / oa-comments. Mechanical checks run automatically.
+        oa-ui: .css, .html, .htm, .tsx, .jsx, .vue, .svelte, DESIGN.md.
+        oa-copy: user-facing copy or agent prose.
+        oa-comments: comment edits.
     modelProfile:
       primarySignal: agentic
       hardRequirements: [tool_calls, reasoning_variants, large_context]
@@ -197,7 +267,7 @@ roles:
   scout:
     description: Maps unfamiliar code and returns file:line findings without changing anything.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 30
     scope: |
@@ -222,6 +292,39 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # The todo list of the project. This role reads it: the Lead creates
+      # and structures the tasks, and the permission map is the primary
+      # enforcement - the hook cannot see an MCP call on the pinned binary.
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      openagentsy_oa_task_create: deny
+      openagentsy_oa_task_update: deny
+      openagentsy_oa_task_archive: deny
+      # The memories a person decided to keep.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The hook cannot see an
+      # MCP call, so the tool is taken away here rather than trusted there.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
     skills: [openagentsy-scout]
     modelProfile:
       primarySignal: coding
@@ -237,7 +340,7 @@ roles:
   researcher:
     description: Fetches current external documentation and cites the source for every claim.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 40
     scope: |
@@ -261,6 +364,39 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # The todo list of the project. This role reads it: the Lead creates
+      # and structures the tasks, and the permission map is the primary
+      # enforcement - the hook cannot see an MCP call on the pinned binary.
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      openagentsy_oa_task_create: deny
+      openagentsy_oa_task_update: deny
+      openagentsy_oa_task_archive: deny
+      # The memories a person decided to keep.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The hook cannot see an
+      # MCP call, so the tool is taken away here rather than trusted there.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:
       primarySignal: coding
@@ -276,7 +412,7 @@ roles:
   builder:
     description: Implements exactly one bean inside its leased files and worktree.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: true
     steps: 40
     scope: |
@@ -359,7 +495,53 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
-    skills: [openagentsy-handoff]
+      # The todo list of the project. A builder reads it and moves its own
+      # task along; it does not create the tasks or archive them, because
+      # the Lead structures the list. The permission map cannot say "its
+      # own task" - it names tools, not the tasks they touch - so that half
+      # of the rule is the builder's own to keep.
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      openagentsy_oa_task_update: allow
+      openagentsy_oa_task_create: deny
+      openagentsy_oa_task_archive: deny
+      # The memories a person decided to keep.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # The quality check. The rule shows the agent eight lines of findings
+      # after every write; the tool returns all of them. Reading the
+      # findings is a tool call, and the waiver is not.
+      oa_quality_check: allow
+      openagentsy_oa_quality_check: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The hook cannot see an
+      # MCP call, so the tool is taken away here rather than trusted there.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
+    skills:
+      allow: [openagentsy-handoff, oa-ui, oa-copy, oa-comments]
+      routing: |
+        For UI, copy or comment work, load oa-ui / oa-copy / oa-comments. Mechanical checks run automatically.
+        oa-ui: .css, .html, .htm, .tsx, .jsx, .vue, .svelte, DESIGN.md.
+        oa-copy: user-facing copy or agent prose.
+        oa-comments: comment edits.
     modelProfile:
       primarySignal: coding
       hardRequirements: [tool_calls]
@@ -375,7 +557,7 @@ roles:
   reviewer:
     description: Reviews a diff against acceptance criteria from a clean context, on a different model family.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 30
     scope: |
@@ -434,6 +616,39 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # The todo list of the project. This role reads it: the Lead creates
+      # and structures the tasks, and the permission map is the primary
+      # enforcement - the hook cannot see an MCP call on the pinned binary.
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      openagentsy_oa_task_create: deny
+      openagentsy_oa_task_update: deny
+      openagentsy_oa_task_archive: deny
+      # The memories a person decided to keep.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The hook cannot see an
+      # MCP call, so the tool is taken away here rather than trusted there.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
     skills: [openagentsy-review]
     modelProfile:
       primarySignal: coding
@@ -449,7 +664,7 @@ roles:
   advisor:
     description: Consulted for hard judgement calls. Reviews a fork of the asker's context and recommends.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 30
     scope: |
@@ -468,6 +683,39 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # The todo list of the project. This role reads it: the Lead creates
+      # and structures the tasks, and the permission map is the primary
+      # enforcement - the hook cannot see an MCP call on the pinned binary.
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      openagentsy_oa_task_create: deny
+      openagentsy_oa_task_update: deny
+      openagentsy_oa_task_archive: deny
+      # The memories a person decided to keep.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The hook cannot see an
+      # MCP call, so the tool is taken away here rather than trusted there.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:
       primarySignal: overall
@@ -482,7 +730,7 @@ roles:
   archivist:
     description: Distils what a finished session learned into candidate memories. Runs at session end.
     mode: subagent
-    hidden: true
+    hidden: false
     writes: false
     steps: 20
     scope: |
@@ -510,6 +758,39 @@ roles:
       openagentsy_board_lease_grant: deny
       openagentsy_board_lease_revoke: deny
       openagentsy_board_budget_set: deny
+      # The todo list of the project. This role reads it: the Lead creates
+      # and structures the tasks, and the permission map is the primary
+      # enforcement - the hook cannot see an MCP call on the pinned binary.
+      openagentsy_oa_task_list: allow
+      openagentsy_oa_task_show: allow
+      openagentsy_oa_task_next: allow
+      openagentsy_oa_task_create: deny
+      openagentsy_oa_task_update: deny
+      openagentsy_oa_task_archive: deny
+      # The memories a person decided to keep.
+      openagentsy_oa_memory_search: allow
+      openagentsy_oa_memory_list: allow
+      # A lesson, a quality waiver and a memory are decisions a person makes.
+      # The permission map is the primary enforcement: the hook cannot see an
+      # MCP call on the pinned binary, so the tool is taken away here rather
+      # than trusted there.
+      oa_lesson_decide: deny
+      openagentsy_lesson_decide: deny
+      oa_quality_waive: deny
+      openagentsy_quality_waive: deny
+      # A memory is kept when a person decides it is. The hook cannot see an
+      # MCP call, so the tool is taken away here rather than trusted there.
+      oa_memory_decide: deny
+      openagentsy_memory_decide: deny
+      # The names the host knows the decide tools by. The server is called
+      # `openagentsy`, so `oa_lesson_decide` arrives as
+      # `openagentsy_oa_lesson_decide`, `oa_quality_waive` as
+      # `openagentsy_oa_quality_waive` and `oa_memory_decide` as
+      # `openagentsy_oa_memory_decide`. A deny under a name no host calls
+      # is a deny for nothing, so the effective names are here as well.
+      openagentsy_oa_lesson_decide: deny
+      openagentsy_oa_quality_waive: deny
+      openagentsy_oa_memory_decide: deny
     skills: []
     modelProfile:
       primarySignal: long_context

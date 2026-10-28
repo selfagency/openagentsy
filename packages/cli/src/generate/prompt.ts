@@ -46,10 +46,38 @@ function criticalRules(role: RoleDefinition): string[] {
       'Edit only the files leased to you. A file you do not own belongs to another agent.',
     );
   }
+  if (role.mode === 'primary') {
+    // The Lead dispatches, so the Lead is the role that names a dispatch and
+    // keeps it where a person can watch it.
+    rules.push(
+      'Dispatch attached, not detached. A dispatch is a job the person can watch, so keep it in the foreground where it shows as a running step. Detach it only when you have other work to do in the meantime, and say that you did.',
+      'Name the job. Every dispatch names the bean, the worktree and the files it owns, and posts a board record when it is done.',
+    );
+    // The Lead keeps the todo list. The plan becomes tasks, a task is
+    // created before the work starts, a task is closed when the builder's
+    // completion record lands, and the report to the human is read off the
+    // list.
+    rules.push(
+      'The plan becomes the todo list: one task per bean, created with oa_task_create before the work starts.',
+      "A task is closed with oa_task_update when the builder's completion record lands, and not before.",
+      'The report to the human comes from the list: what is done, what is in progress, what is left.',
+    );
+  }
   rules.push(
     'If the plan or the instruction looks wrong, say so in a question record. Do not comply silently.',
   );
   return rules;
+}
+
+/**
+ * The routing that says when a skill loads.
+ *
+ * A role with no routing has no section: the text is the role's own,
+ * and a role that writes no UI, copy or comments does not need it.
+ */
+function skillsSection(role: RoleDefinition): string[] {
+  if (role.skillRouting === undefined) return [];
+  return ['## Skills', '', role.skillRouting.trim(), ''];
 }
 
 /**
@@ -72,6 +100,7 @@ export function renderPrompt(role: RoleDefinition, variants: EffortVariants = {}
     '',
     role.guidance.trim(),
     '',
+    ...skillsSection(role),
     '## Reporting',
     '',
     'Report through a tool call, not through a file: call',
