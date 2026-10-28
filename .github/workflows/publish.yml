@@ -1,12 +1,15 @@
 name: publish
 
-# The four packages go to npm by hand: the person cutting the release picks
+# The eleven packages go to npm by hand: the person cutting the release picks
 # the tag this workflow already released on GitHub and runs it. Publishing
 # needs no npm token: the job presents GitHub's OIDC token, and npm accepts
 # it because the packages list this workflow as a trusted publisher. That
 # config lives on each package's npmjs.com page and names the repository,
 # the workflow filename (publish.yml) and no environment, so the three
-# have to keep matching. npm CLI 11.5.1 or newer is required, which is why
+# have to keep matching. The repository moved from selfagency to voxslopuli
+# on 2026-10-28, so the organization in every trusted publisher config has
+# to be voxslopuli now, and the seven packages that were never published
+# need a config at all. npm CLI 11.5.1 or newer is required, which is why
 # the job installs Node 22 and upgrades npm even though the repository is
 # Bun.
 on:
@@ -55,7 +58,7 @@ jobs:
           TAG: ${{ github.event.inputs.tag }}
         run: |
           version="${TAG#v}"
-          for package in packages/core packages/models packages/mcp packages/cli; do
+          for package in packages/core packages/models packages/footprint packages/quality packages/tasks packages/memory packages/ledger packages/hooks packages/jev packages/mcp packages/cli; do
             manifest="$(bun -e "console.log(require('./$package/package.json').version)")"
             if [ "$manifest" != "$version" ]; then
               echo "::error::$package is at $manifest but the tag says $version"
@@ -66,12 +69,15 @@ jobs:
       - name: Upgrade npm for trusted publishing
         run: npm install -g npm@latest
 
+      # The publish order is the dependency order: a package is published
+      # after everything it depends on, so an install never sees a version
+      # that points at a version that is not on the registry yet.
       - name: Publish
         run: |
           # Public scope, public access, provenance comes with the OIDC
           # publish by itself: the flag is not needed and no token is set -
           # a leftover NPM_TOKEN or NODE_AUTH_TOKEN would win over OIDC.
-          for package in packages/core packages/models packages/mcp packages/cli; do
+          for package in packages/core packages/models packages/footprint packages/quality packages/tasks packages/memory packages/ledger packages/hooks packages/jev packages/mcp packages/cli; do
             name="$(bun -e "console.log(require('./$package/package.json').name)")"
             echo "::group::publishing $name"
             (cd "$package" && npm publish --access public)
