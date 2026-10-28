@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
@@ -103,23 +103,6 @@ function gitDirs(cwd: string): GitDirs | undefined {
 }
 
 /**
- * The canonical form of a directory.
- *
- * The two ways into one repository do not spell it the same way: a checkout
- * reached through a symlink says one name and git says another, so the state
- * root of the main checkout would be a different string depending on whether
- * the session sits in the checkout or in a worktree of it. The state root is
- * one directory, so it gets one name: the real one.
- */
-function canonical(dir: string): string {
-  try {
-    return realpathSync(dir);
-  } catch {
-    return dir;
-  }
-}
-
-/**
  * The main repository root of a common git directory.
  *
  * The common directory is the `.git` of the main checkout, so the root is
@@ -180,12 +163,12 @@ function nearestProjectRoot(cwd: string, boundary?: string): string | undefined 
  */
 export function resolveStateRoot(cwd: string): string {
   const dirs = gitDirs(cwd);
-  if (dirs === undefined) return canonical(nearestProjectRoot(cwd) ?? resolve(cwd));
+  if (dirs === undefined) return nearestProjectRoot(cwd) ?? resolve(cwd);
   // A linked worktree has a git directory of its own and shares the common
   // one with the main checkout: the state belongs to the main checkout.
-  if (dirs.gitDir !== dirs.commonDir) return canonical(mainRootOf(dirs.commonDir));
+  if (dirs.gitDir !== dirs.commonDir) return mainRootOf(dirs.commonDir);
   const main = mainRootOf(dirs.commonDir);
-  return canonical(nearestProjectRoot(cwd, main) ?? main);
+  return nearestProjectRoot(cwd, main) ?? main;
 }
 
 /**
