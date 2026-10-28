@@ -3,14 +3,13 @@ name: publish
 # The eleven packages go to npm by hand: the person cutting the release picks
 # the tag this workflow already released on GitHub and runs it. Publishing
 # needs no npm token: the job presents GitHub's OIDC token, and npm accepts
-# it because the packages list this workflow as a trusted publisher. That
-# config lives on each package's npmjs.com page and names the repository,
-# the workflow filename (publish.yml) and no environment, so the three
-# have to keep matching. The repository moved from selfagency to voxslopuli
-# on 2026-10-28, so the organization in every trusted publisher config has
-# to be voxslopuli now, and the seven packages that were never published
-# need a config at all. npm CLI 11.5.1 or newer is required, which is why
-# the job installs Node 22 and upgrades npm even though the repository is
+# it because every package lists this workflow as a trusted publisher. That
+# config lives on each package's npmjs.com page and names the repository
+# (voxslopuli/openagentsy), the workflow filename (publish.yml) and no
+# environment, so the three have to keep matching; all eleven carry it,
+# with the permissions to publish, to stage and to manage dist-tags.
+# npm CLI 11.5.1 or newer is required for trusted publishing, which is why
+# the job installs Node 24 and upgrades npm even though the repository is
 # Bun.
 on:
   workflow_dispatch:
@@ -44,7 +43,7 @@ jobs:
       # OIDC through npm 11.5.1 or newer.
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "22"
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
 
       - name: Install
@@ -72,6 +71,16 @@ jobs:
       # The publish order is the dependency order: a package is published
       # after everything it depends on, so an install never sees a version
       # that points at a version that is not on the registry yet.
+      #
+      # The publish runs from a copy outside the tree, for two measured
+      # reasons. npm reads the project root's devEngines and refuses to run
+      # in a tree whose root asks for another package manager, and the root
+      # of this repository asks for bun - it refuses from a package
+      # directory too, because npm resolves the project root to the
+      # workspace root. And npm does not rewrite the workspace: ranges, so a
+      # package published from the tree carries a range that cannot be
+      # resolved by an install; the staged copy has no root above it, and
+      # its manifest carries the versions the workspace protocol named.
       - name: Publish
         run: |
           # Public scope, public access, provenance comes with the OIDC
@@ -79,7 +88,14 @@ jobs:
           # a leftover NPM_TOKEN or NODE_AUTH_TOKEN would win over OIDC.
           for package in packages/core packages/models packages/footprint packages/quality packages/tasks packages/memory packages/ledger packages/hooks packages/jev packages/mcp packages/cli; do
             name="$(bun -e "console.log(require('./$package/package.json').name)")"
-            echo "::group::publishing $name"
-            (cd "$package" && npm publish --access public)
+            version="$(bun -e "console.log(require('./$package/package.json').version)")"
+            stage="$RUNNER_TEMP/publish/$name"
+            bun scripts/stage-package.mjs "$package" "$stage"
+            echo "::group::publishing $name@$version"
+            if (cd "$stage" && npm view "$name" "$version" version >/dev/null 2>&1); then
+              echo "$name@$version is already on the registry"
+            else
+              (cd "$stage" && npm publish --access public)
+            fi
             echo "::endgroup::"
           done
