@@ -71,13 +71,45 @@ let main: string;
 /** The linked worktree: the directory the session works in. */
 let worktree: string;
 
+/**
+ * The git variables that point a command at a repository.
+ *
+ * A git that runs a hook sets these in the environment of the hook, and a
+ * child inherits them: the child then addresses the repository of the hook
+ * instead of the one it was asked about — and a test that adds and commits
+ * in the repository of the hook writes into the project. The variables are
+ * removed, so the repository is the one the test named.
+ */
+const GIT_REPOSITORY_VARS = [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_CEILING_DIRECTORIES',
+  'GIT_PREFIX',
+  'GIT_NAMESPACE',
+];
+
+/** The environment of a git child: the caller's, without the git variables. */
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (GIT_REPOSITORY_VARS.includes(key)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
 /** Run a git command in a directory, and fail loudly when it does not work. */
 function git(cwd: string, args: string[]): void {
   execFileSync('git', ['-C', cwd, ...args], {
     encoding: 'utf8',
     stdio: 'pipe',
     env: {
-      ...process.env,
+      ...cleanEnv(),
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'commit.gpgsign',
       GIT_CONFIG_VALUE_0: 'false',

@@ -2,6 +2,7 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { type ProjectRoots, resolveProjectRoots } from '@openagentsy/core';
+import type { FetchLike } from '@openagentsy/models';
 import { formatApproveResult, runApprove } from './commands/approve.js';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
@@ -259,6 +260,7 @@ async function modelsCommand(
   roots: ProjectRoots,
   values: Values,
   positionals: string[],
+  options: CommandOptions,
 ): Promise<number> {
   const sub = positionals[1] ?? 'init';
   if (sub !== 'init' && sub !== 'refresh' && sub !== 'switch') {
@@ -281,6 +283,7 @@ async function modelsCommand(
     ...(values['allow-retention'] ? { allowRetention: true } : {}),
     ...(values.key ? { key: values.key } : {}),
     ...(values.yes ? { yes: true } : {}),
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
   });
   reportModels(result.changes, result.rejected, result.failures);
   if (result.touches) {
@@ -372,10 +375,24 @@ async function approveCommand(
   return result.ok ? 0 : 1;
 }
 
+/**
+ * What the caller can inject into a run.
+ *
+ * The models command reaches the network for the provider catalogue, so the
+ * test that exercises it needs a fetch of its own. A test that reaches
+ * models.dev is a test whose time depends on a machine's connection.
+ */
+export type CommandOptions = { fetchImpl?: FetchLike };
+
 /** The command table. One entry per command, so the dispatch is a lookup. */
 const COMMANDS: Record<
   string,
-  (roots: ProjectRoots, values: Values, positionals: string[]) => Promise<number>
+  (
+    roots: ProjectRoots,
+    values: Values,
+    positionals: string[],
+    options: CommandOptions,
+  ) => Promise<number>
 > = {
   build: buildCommand,
   audit: auditCommand,
@@ -396,7 +413,7 @@ const COMMANDS: Record<
  * The commands are a table and the options are parsed in one place, so this
  * function stays small enough to read.
  */
-export async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[], options: CommandOptions = {}): Promise<number> {
   // The board's driver is bun:sqlite, so the whole tool needs Bun. A Node
   // install fails at the first query, and the message here says which
   // runtime to use instead of showing a module resolution error.
@@ -452,7 +469,7 @@ export async function main(argv: string[]): Promise<number> {
   // worktree the second is the main repository root.
   const roots = resolveProjectRoots(values.root ?? process.cwd());
 
-  return handler(roots, values, positionals);
+  return handler(roots, values, positionals, options);
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {

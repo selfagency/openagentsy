@@ -255,7 +255,12 @@ describe('the models command', () => {
   });
 
   it('says what the switch touches besides the lock', async () => {
-    const code = await main(['models', 'switch', 'ollama', '--yes', '--root', root]);
+    // The fetch is the test's own: the command reaches the provider
+    // catalogue, and a test that reaches models.dev is a test whose time
+    // depends on a machine's connection.
+    const code = await main(['models', 'switch', 'ollama', '--yes', '--root', root], {
+      fetchImpl: fakeFetch,
+    });
     expect(code).toBe(0);
     const output = written.join('');
     expect(output).toContain('the switch touches more than the lock');
