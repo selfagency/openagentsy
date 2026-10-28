@@ -5,14 +5,18 @@ status: todo
 type: task
 priority: normal
 created_at: 2026-10-28T15:25:06Z
-updated_at: 2026-10-28T18:31:20Z
+updated_at: 2026-10-28T19:01:57Z
 ---
 
 The trusted publishers must name voxslopuli (GitHub Actions, repository openagentsy, workflow publish.yml, no environment) and the publish workflow must publish from a staged copy outside the tree. Both are the human's actions: the trusted publisher is on npm's site and the workflow is a person-only file.
 
 
 
-All eleven packages are published at 0.2.0 by hand, and every one of them now carries the trusted publisher that can publish from publish.yml (repository voxslopuli/openagentsy, no environment, with the permissions to publish, to stage and to manage dist-tags). Verified against the registry on 2026-10-28: 11 of 11.
+0.2.1 and 0.2.2 are published by hand (all eleven packages, with the author on every one, and the workspace ranges written out as real versions). The last publish was 0.2.2, which also carries the shebang fix: the bin ran under node and died on bun:sqlite, so the published package could not be started at all.
+
+WHAT IS STILL A PERSON'S ACTION: the publish workflow. Until it stages each package outside the tree and skips the versions already on the registry, every release made through it publishes packages that cannot be installed, because npm does not rewrite the workspace: ranges - the old 0.1.1 releases carry workspace:^ and fail to install.
+
+All eleven packages carry the trusted publisher that can publish from publish.yml (repository voxslopuli/openagentsy, no environment, with the permissions to publish, to stage and to manage dist-tags). Verified against the registry on 2026-10-28: 11 of 11.
 
 WHAT IS LEFT IS THE WORKFLOW, which is a person-only file (packages/hooks/src/rules.ts PROTECTED_DIRS lists .github/workflows). Two changes:
 
