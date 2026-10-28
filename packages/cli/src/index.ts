@@ -6,6 +6,7 @@ import type { FetchLike } from '@openagentsy/models';
 import { formatApproveResult, runApprove } from './commands/approve.js';
 import { formatBoard, runBoard } from './commands/board.js';
 import { runBuild } from './commands/build.js';
+import { formatConformanceReport, runConformance } from './commands/conformance.js';
 import { formatDoctorReport, runDoctor } from './commands/doctor.js';
 import {
   formatLedgerReport,
@@ -36,6 +37,7 @@ Commands:
   audit              Report the quality findings of the change, and say which path ran
   board              Show the records, leases and budgets, for a human to read
   build              Generate the agent, command and skill files
+  conformance        Report what is proven, observed or unverified
   doctor             Report what is installed, where it came from, and what is missing
   ledger             Show the tokens, the cost and the waste of the work
   ledger export      Write the counters of the ledger as JSON
@@ -67,7 +69,7 @@ Options:
   --allow-retention   Allow models that are not zero data retention
   --key <key>         BenchLM key, for the keyed REST API
   --yes               Write the lock file without asking
-  --json              Write the output as JSON (ledger)
+  --json              Write the output as JSON (ledger, conformance)
   --ttl <ms>          How long a grant lives (default: 15 minutes, max: 1 day)
   --dry-run           Print what setup would write without writing it
   --magic-context     Turn OpenCode's compaction off, for a project with a
@@ -142,6 +144,22 @@ async function boardCommand(roots: ProjectRoots): Promise<number> {
 async function doctorCommand(roots: ProjectRoots): Promise<number> {
   const report = await runDoctor(roots);
   process.stdout.write(formatDoctorReport(report));
+  return 0;
+}
+
+/**
+ * The conformance report.
+ *
+ * The report says what is proven, observed or unverified, one capability at
+ * a time, and it shows the evidence of an observed capability.
+ */
+async function conformanceCommand(roots: ProjectRoots, values: Values): Promise<number> {
+  const report = await runConformance(roots);
+  if (values.json === true) {
+    process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    return 0;
+  }
+  process.stdout.write(formatConformanceReport(report));
   return 0;
 }
 
@@ -397,6 +415,7 @@ const COMMANDS: Record<
   build: buildCommand,
   audit: auditCommand,
   board: boardCommand,
+  conformance: conformanceCommand,
   doctor: doctorCommand,
   ledger: ledgerCommand,
   lessons: lessonsCommand,

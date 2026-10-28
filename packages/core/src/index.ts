@@ -1,5 +1,6 @@
 export * from './board/index.js';
 export * from './board/tools.js';
+export * from './conformance/index.js';
 export * from './dispatch.js';
 export * from './etag.js';
 export * from './paths.js';

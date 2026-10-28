@@ -171,7 +171,9 @@ describe('the board server over stdio', () => {
     // A waiver is a decision a person makes, and the map takes the tool
     // away from every agent role.
     expect(names).toContain('oa_quality_waive');
-    expect(names.length).toBe(20);
+    // The conformance tool reports what is proven, observed or unverified.
+    expect(names).toContain('oa_conformance_report');
+    expect(names.length).toBe(21);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
