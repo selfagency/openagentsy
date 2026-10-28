@@ -99,6 +99,14 @@ const BEANS_CONFIG = `beans:
   id_length: 8
 `;
 
+/** The first-party documents, in the order the doctor reports them. */
+const DOCUMENT_FILES = ['ETHICS.md', 'SAFETY.md', 'GOVERNANCE.md', 'CHANGELOG-SAFETY.md'];
+
+/** A first-party document, at the version the framework says. */
+function firstPartyDocument(version = '1.0.0'): string {
+  return `# OpenAgentsy\n\n**Version:** ${version}\n\nThe body of the document.\n`;
+}
+
 describe('the doctor', () => {
   it('names the Lead by the agent a person picks', async () => {
     // The agent id is 'agentsy' and the role key is 'lead'. The doctor used
@@ -321,6 +329,70 @@ describe('the regeneration check', () => {
     expect(report.regeneration.drifted).toEqual([]);
     expect(
       report.warnings.some((entry) => entry.includes('the regeneration check did not run')),
+    ).toBe(true);
+  });
+});
+
+describe('the first-party documents', () => {
+  it('reports each document and the version it is at', async () => {
+    for (const file of DOCUMENT_FILES) {
+      await writeFile(join(root, file), firstPartyDocument(), 'utf8');
+    }
+
+    const report = await runDoctor(rootsOf(root));
+    expect(report.documents.documents.map((entry) => entry.file)).toEqual(DOCUMENT_FILES);
+    expect(report.documents.documents.every((entry) => entry.exists)).toBe(true);
+    expect(report.documents.version).toBe('1.0.0');
+
+    const printed = formatDoctorReport(report);
+    expect(printed).toContain('First-party documents');
+    expect(printed).toContain('ETHICS.md');
+    expect(printed).toContain('found, version 1.0.0');
+  });
+
+  it('reports a missing document as absent, and says so', async () => {
+    for (const file of DOCUMENT_FILES.slice(0, 3)) {
+      await writeFile(join(root, file), firstPartyDocument(), 'utf8');
+    }
+
+    const report = await runDoctor(rootsOf(root));
+    const changelog = report.documents.documents.find(
+      (entry) => entry.file === 'CHANGELOG-SAFETY.md',
+    );
+    expect(changelog?.exists).toBe(false);
+    expect(
+      report.warnings.some((warning) => warning.includes('CHANGELOG-SAFETY.md is missing')),
+    ).toBe(true);
+    expect(formatDoctorReport(report)).toContain('missing');
+  });
+
+  it('does not fault a project that carries none of them', async () => {
+    const report = await runDoctor(rootsOf(root));
+    expect(report.documents.documents.every((entry) => !entry.exists)).toBe(true);
+
+    const mentioned = report.warnings.filter((warning) =>
+      DOCUMENT_FILES.some((file) => warning.includes(file)),
+    );
+    expect(mentioned).toEqual([]);
+    expect(formatDoctorReport(report)).toContain('none of the first-party documents');
+  });
+
+  it('flags documents that are at different versions', async () => {
+    await writeFile(join(root, 'ETHICS.md'), firstPartyDocument('1.0.0'), 'utf8');
+    await writeFile(join(root, 'SAFETY.md'), firstPartyDocument('1.0.1'), 'utf8');
+
+    const report = await runDoctor(rootsOf(root));
+    expect(report.documents.version).toBeUndefined();
+    expect(report.warnings.some((warning) => warning.includes('different versions'))).toBe(true);
+  });
+
+  it('flags a document that declares no version', async () => {
+    await writeFile(join(root, 'ETHICS.md'), '# OpenAgentsy\n\nNo version here.\n', 'utf8');
+    await writeFile(join(root, 'SAFETY.md'), firstPartyDocument(), 'utf8');
+
+    const report = await runDoctor(rootsOf(root));
+    expect(
+      report.warnings.some((warning) => warning.includes('ETHICS.md has no version line')),
     ).toBe(true);
   });
 });

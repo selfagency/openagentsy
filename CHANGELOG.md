@@ -32,6 +32,8 @@ Every release, from the commits that made it.
 ### Added
 
 - the phase 2 plan is revision 3: the ethics framework, the safety benchmark suite, the incident response runbook, the privacy consolidation, the policy module library, the scope declarations, the credential broker and the sandbox for untrusted code are specified as §17–§24, and the delta document is the record of what changed
+- the first-party documents at the repository root: `ETHICS.md` states the stance and the twelve commitments, `SAFETY.md` states the controls, the eight-layer guardrail stack, the benchmark categories, the metrics and the release criteria, `GOVERNANCE.md` states the process, the six-step incident runbook and the severity matrix, and `CHANGELOG-SAFETY.md` holds them to account. They are adapted from the agentsy documents and scoped to a coding agent framework, and they carry the policy ids the rest of step 2f keys off
+- `oa doctor` reports the first-party documents: whether the project carries them, which version each one is at, and which version they agree on. A missing document is a finding, not a crash
 
 ## 0.1.0 - 2026-10-23
 

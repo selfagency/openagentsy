@@ -111,6 +111,27 @@ export type ConfigMap = {
   overlaps: string[];
 };
 
+/** One of the first-party documents the framework ships at the project root. */
+export type FirstPartyDocument = {
+  /** The file name, at the root of the project. */
+  file: string;
+  /** What the document is for, in one line. */
+  what: string;
+  /** Where it was looked for. */
+  path: string;
+  /** Whether the project carries it. */
+  exists: boolean;
+  /** The version it declares, when it declares one. */
+  version: string | undefined;
+};
+
+/** The first-party documents of a project, and the version they agree on. */
+export type DocumentsReport = {
+  documents: FirstPartyDocument[];
+  /** The version every document declares, when they all declare the same one. */
+  version: string | undefined;
+};
+
 export type DoctorReport = {
   opencode: { version: OpenCodeVersion | undefined; target: Target };
   config: ConfigReport;
@@ -120,6 +141,7 @@ export type DoctorReport = {
   skills: FoundSkill[];
   board: BoardReport;
   regeneration: RegenerationReport;
+  documents: DocumentsReport;
   warnings: string[];
 };
 
@@ -212,6 +234,21 @@ const AUTHORITIES = [
     protected: true,
   },
 ];
+
+/**
+ * The first-party documents, and what each one is for.
+ *
+ * They live at the root of the project because they are the project's own:
+ * the stance, the controls and the process the framework is held to. The
+ * doctor reports whether the project carries them and which version they are
+ * at, so a project that has adopted them can show that it has.
+ */
+const FIRST_PARTY_DOCUMENTS = [
+  { file: 'ETHICS.md', what: 'the ethical stance' },
+  { file: 'SAFETY.md', what: 'the safety controls' },
+  { file: 'GOVERNANCE.md', what: 'the governance process' },
+  { file: 'CHANGELOG-SAFETY.md', what: 'the safety changelog' },
+] as const;
 
 /** The Phase 2 keys, as they are when nobody says otherwise. */
 const PHASE2_DEFAULTS = {
@@ -379,6 +416,93 @@ async function readConfigMap(root: string, opencodePaths: string[]): Promise<Con
       opencodePaths,
     ),
   };
+}
+
+/**
+ * The version a document declares.
+ *
+ * The marker is the same in all four documents, so the doctor reads one
+ * line and does not have to know what each document is.
+ */
+function documentVersion(content: string): string | undefined {
+  const match = /^\*\*Version:\*\*\s+(\S+)\s*$/m.exec(content);
+  return match?.[1];
+}
+
+/**
+ * The first-party documents of a project.
+ *
+ * A document that is not there is reported as missing, and a document that
+ * cannot be read is reported as missing too: the doctor describes what it
+ * can see, and never presents a file it could not read as present.
+ */
+async function readDocuments(root: string): Promise<DocumentsReport> {
+  const documents: FirstPartyDocument[] = [];
+  for (const entry of FIRST_PARTY_DOCUMENTS) {
+    const path = join(root, entry.file);
+    const content = await readFile(path, 'utf8').catch(() => undefined);
+    documents.push({
+      file: entry.file,
+      what: entry.what,
+      path,
+      exists: content !== undefined,
+      version: content === undefined ? undefined : documentVersion(content),
+    });
+  }
+  return { documents, version: sharedVersion(documents) };
+}
+
+/**
+ * The version the documents agree on, when they all declare the same one.
+ *
+ * A document without a version breaks the agreement: one file that does not
+ * say which version it is at means the project cannot be said to be at a
+ * version at all.
+ */
+function sharedVersion(documents: FirstPartyDocument[]): string | undefined {
+  const present = documents.filter((document) => document.exists);
+  if (present.length === 0) return undefined;
+  const declared = present.map((document) => document.version);
+  if (declared.some((version) => version === undefined)) return undefined;
+  const unique = new Set(declared);
+  return unique.size === 1 ? [...unique][0] : undefined;
+}
+
+/**
+ * What is wrong with the first-party documents of a project.
+ *
+ * A project that carries none of them has not adopted the framework's
+ * documents, which is a fact about the project and not a fault in it. A
+ * project that carries some of them and is missing another has an incomplete
+ * set, and that is a finding.
+ */
+function documentWarnings(report: DocumentsReport): string[] {
+  const warnings: string[] = [];
+  const present = report.documents.filter((document) => document.exists);
+  if (present.length === 0) return warnings;
+
+  for (const document of report.documents) {
+    if (!document.exists) {
+      warnings.push(
+        `${document.file} is missing, and the project carries the other first-party documents`,
+      );
+    } else if (document.version === undefined) {
+      warnings.push(
+        `${document.file} has no version line, so the doctor cannot say which version it is at`,
+      );
+    }
+  }
+
+  const versions = new Set(
+    present.map((document) => document.version).filter((version) => version !== undefined),
+  );
+  if (versions.size > 1) {
+    const detail = present
+      .map((document) => `${document.file} ${document.version ?? 'none'}`)
+      .join(', ');
+    warnings.push(`the first-party documents are at different versions: ${detail}`);
+  }
+  return warnings;
 }
 
 async function countAuditLines(path: string): Promise<number> {
@@ -610,8 +734,10 @@ export async function runDoctor(roots: ProjectRoots): Promise<DoctorReport> {
 
   const config = await readProjectConfig(workspace);
   const configMap = await readConfigMap(workspace, config.paths);
+  const documents = await readDocuments(workspace);
 
   warnings.push(...compactionWarnings(config));
+  warnings.push(...documentWarnings(documents));
   if (!config.exists) {
     warnings.push('no project config found, run: openagentsy setup');
   }
@@ -710,6 +836,7 @@ export async function runDoctor(roots: ProjectRoots): Promise<DoctorReport> {
       auditEntries: await countAuditLines(auditPath),
     },
     regeneration,
+    documents,
     warnings,
   };
 }
@@ -778,6 +905,28 @@ function phase2Lines(effective: Phase2Config): string[] {
 }
 
 /**
+ * The lines about the first-party documents.
+ *
+ * A document that is not there says so, because a reader who is told a
+ * document is present must be able to rely on it.
+ */
+function documentLines(report: DocumentsReport): string[] {
+  const lines = ['First-party documents'];
+  for (const document of report.documents) {
+    const state = !document.exists
+      ? 'missing'
+      : document.version === undefined
+        ? 'found, no version'
+        : `found, version ${document.version}`;
+    lines.push(`  ${document.file.padEnd(20)}${state} - ${document.what}`);
+  }
+  if (report.documents.every((document) => !document.exists)) {
+    lines.push('  none of the first-party documents are in this project');
+  }
+  return lines;
+}
+
+/**
  * The lines about the generated files that disagree with a fresh render.
  *
  * A tree the generator wrote has nothing to say here, so the section is
@@ -830,6 +979,9 @@ export function formatDoctorReport(report: DoctorReport): string {
       lines.push(`  - ${overlap}`);
     }
   }
+
+  lines.push('');
+  lines.push(...documentLines(report.documents));
 
   if (hasRegenerationFinding(report.regeneration)) {
     lines.push('');
