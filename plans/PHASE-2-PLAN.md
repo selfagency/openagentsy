@@ -1,6 +1,6 @@
 # OpenAgentsy Phase 2: Implementation Plan (revision 3)
 
-> **This is revision 3, and revision 3 is applied.** The eight new sections (§17 Ethics framework, §18 Safety benchmark suite, §19 Incident response, §20 Privacy and bounded personalization, §21 Policy module library, §22 Scope declarations, §23 Credential broker, §24 Sandbox for untrusted code) are in this document, as are the extensions to §3, §4, §6, §8, §9, §10, §11, §13, §14, §15 and §16. The delta document [`PHASE-2-PLAN-REVISION3.md`](./PHASE-2-PLAN-REVISION3.md) is the record of what changed: it grounds the new sections in `selfagency/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` and the creative patterns from agentsy's packages (orchestrator task-board, runtime hooks, session recovery, cognitive memory / learning loop, secrets broker, tokenomics, retrieval, gateway), and its revision notes R-17..R-65 map every change to its source. Where a revision-3 section describes a path the project has since left behind, the status note below says so.
+> **This is revision 3, and revision 3 is applied.** The eight new sections (§17 Ethics framework, §18 Safety benchmark suite, §19 Incident response, §20 Privacy and bounded personalization, §21 Policy module library, §22 Scope declarations, §23 Credential broker, §24 Sandbox for untrusted code) are in this document, as are the extensions to §3, §4, §6, §8, §9, §10, §11, §13, §14, §15 and §16. The delta document [`PHASE-2-PLAN-REVISION3.md`](./PHASE-2-PLAN-REVISION3.md) is the record of what changed: it grounds the new sections in `voxslopuli/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` and the creative patterns from agentsy's packages (orchestrator task-board, runtime hooks, session recovery, cognitive memory / learning loop, secrets broker, tokenomics, retrieval, gateway), and its revision notes R-17..R-65 map every change to its source. Where a revision-3 section describes a path the project has since left behind, the status note below says so.
 
 > **Status, 2026-10-28.** This plan was written for a project that spoke both OpenCode 1 and 2. **The project speaks OpenCode 2 only** now (decision of 2026-10-27): the v1 plugin path, the generator's v1 translation, the CLI's `--target` flag, the harness's v1 client and the CI's v1 leg are gone. The v2 facts this plan marked **VERIFY** are **[measured]** — the permission hook carries the agent, the shell key is `shell`, the turn-end events are `session.execution.*`, the session list is filtered by `directory` and not by `location[directory]`, an interrupt needs `resume=false`, and the shell environment policy lives in the v2 shell domain's `create.before` hook. Where a section below still describes a v1 path it is **history**: §7.7's V1 sidebar fallback is void, and §15's rows for 2c and 2d are met. The full list is under "Revision notes" below.
 
@@ -21,7 +21,7 @@
 
 Step 2.0 (pnpm → Bun workspaces + Turborepo) and the GPL-3.0-or-later license **are already landed**; §1 records the state and the small residue that remains.
 
-Revision 3 (delta in `PHASE-2-PLAN-REVISION3.md`) adds §17–§24 (ethics framework, safety benchmark, incident response, privacy, policy modules, scope declarations, credential broker, sandbox) and extends §3, §4, §6, §8, §9, §10, §11, §13, §14, §15, §16 with patterns adapted from `selfagency/agentsy`.
+Revision 3 (delta in `PHASE-2-PLAN-REVISION3.md`) adds §17–§24 (ethics framework, safety benchmark, incident response, privacy, policy modules, scope declarations, credential broker, sandbox) and extends §3, §4, §6, §8, §9, §10, §11, §13, §14, §15, §16 with patterns adapted from `voxslopuli/agentsy`.
 
 Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode API detail is inferred rather than read from source, it's marked **VERIFY**; every **VERIFY** maps to one conformance check (§11). Facts the repo has already measured are marked **[measured]**. One rule applies throughout: **a security property never rests on an unverified fact** — where a measurement and the generated docs disagree, the design follows the measurement (§8.2).
 
@@ -29,7 +29,7 @@ Code below is TypeScript in the style of the Phase 1 codebase. Where an OpenCode
 
 ## Revision notes
 
-What changed from revision 1 to revision 3, and why. Sources: the Phase 1 code review (findings F-01..F-38), the plan review (P-01..P-16), and — for R-17..R-65 — `selfagency/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` and the agentsy packages, as recorded in [`PHASE-2-PLAN-REVISION3.md`](./PHASE-2-PLAN-REVISION3.md).
+What changed from revision 1 to revision 3, and why. Sources: the Phase 1 code review (findings F-01..F-38), the plan review (P-01..P-16), and — for R-17..R-65 — `voxslopuli/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` and the agentsy packages, as recorded in [`PHASE-2-PLAN-REVISION3.md`](./PHASE-2-PLAN-REVISION3.md).
 
 | Change | Where | Source |
 | --- | --- | --- |
@@ -149,8 +149,8 @@ The monorepo is GPL-3.0-or-later (`LICENSE`, `NOTICE`, root `package.json`), lan
 | miqdadbadjuber/anti-slop | MIT | Rules adapted into code and skills, keeping their `R-XX` IDs in rule metadata. Attribution headers and NOTICE entry. |
 | Nutlope/hallmark | MIT | Floor rules adapted, keeping their Floor numbers. `sloplint.mjs` is called as an external check when installed, not vendored. |
 | EcoLogits methodology | CC BY-SA 4.0 (docs) | Formulas re-implemented, with credit in the UI and README. **VERIFY** the license of `ecologits/data/models.json` before bundling it. Until then, fetch it at runtime and cache it. |
-| `selfagency/agentsy` `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` | GPL-3.0-or-later | Adapted into the first-party `ETHICS.md`, `SAFETY.md` and `GOVERNANCE.md` at the repo root, with attribution in each document's footer (§17.1). |
-| `selfagency/agentsy` packages (orchestrator, runtime, session, memory, secrets, tokenomics, retrieval, gateway) | GPL-3.0-or-later | Patterns adapted into the plan and the code — task board, recovery loop, sandbox, learning loop, credential broker, budgets, routing, retrieval ordering (§3, §4, §6, §8, §9, §23, §24). No package or MCP dependency. Attribution headers and NOTICE entry. |
+| `voxslopuli/agentsy` `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md` | GPL-3.0-or-later | Adapted into the first-party `ETHICS.md`, `SAFETY.md` and `GOVERNANCE.md` at the repo root, with attribution in each document's footer (§17.1). |
+| `voxslopuli/agentsy` packages (orchestrator, runtime, session, memory, secrets, tokenomics, retrieval, gateway) | GPL-3.0-or-later | Patterns adapted into the plan and the code — task board, recovery loop, sandbox, learning loop, credential broker, budgets, routing, retrieval ordering (§3, §4, §6, §8, §9, §23, §24). No package or MCP dependency. Attribution headers and NOTICE entry. |
 
 ---
 
@@ -2419,7 +2419,7 @@ Questions 1–14 are revision 2's; the void V1 question below is kept for the re
 
 ## 17. Ethics framework
 
-**Position.** Revision 2 has ethics-relevant rules scattered across §6.4, §7.6, §8.6, §10.2, §14. Revision 3 consolidates them under a principled framework, expressed as three first-party documents that live at the repo root and are versioned with the framework. The documents are adapted from `selfagency/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md`, scoped to OpenAgentsy's domain (a coding agent framework, not a general-purpose chatbot). Where agentsy's docs speak to chatbot risks (companionship, emotional support, crisis handling), OpenAgentsy's docs translate the same principles to coding-agent risks (over-trust in agent-generated code, displacement of human reviewers, scope creep from coding into prose/policy/HR, dark-pattern UI in the sidebar, hidden memory of user behavior).
+**Position.** Revision 2 has ethics-relevant rules scattered across §6.4, §7.6, §8.6, §10.2, §14. Revision 3 consolidates them under a principled framework, expressed as three first-party documents that live at the repo root and are versioned with the framework. The documents are adapted from `voxslopuli/agentsy`'s `ETHICS.md`, `SAFETY.md`, `GOVERNANCE.md`, scoped to OpenAgentsy's domain (a coding agent framework, not a general-purpose chatbot). Where agentsy's docs speak to chatbot risks (companionship, emotional support, crisis handling), OpenAgentsy's docs translate the same principles to coding-agent risks (over-trust in agent-generated code, displacement of human reviewers, scope creep from coding into prose/policy/HR, dark-pattern UI in the sidebar, hidden memory of user behavior).
 
 ### 17.1 First-party documents
 
@@ -3155,7 +3155,7 @@ agentsy's `packages/runtime/src/sandbox/container/rivet-sandbox.ts` was disabled
 
 [^beans]: hmans/beans (Apache-2.0) — https://github.com/hmans/beans
 [^beansplugin]: Beans OpenCode plugin — https://github.com/hmans/beans/blob/main/.opencode/plugin/beans-prime.ts
-[^agentsyhooks]: agentsy runtime hooks — https://github.com/selfagency/agentsy/tree/main/packages/runtime/src/hooks
+[^agentsyhooks]: agentsy runtime hooks — https://github.com/voxslopuli/agentsy/tree/main/packages/runtime/src/hooks
 [^bs]: streetturtle/opencode-better-sidebar — https://github.com/streetturtle/opencode-better-sidebar
 [^tokscale]: junhoyeo/tokscale (MIT) — https://github.com/junhoyeo/tokscale
 [^tt]: xiufengsun/TokenTracker (MIT) — https://github.com/xiufengsun/TokenTracker
@@ -3166,7 +3166,7 @@ agentsy's `packages/runtime/src/sandbox/container/rivet-sandbox.ts` was disabled
 [^eco]: EcoLogits — https://github.com/mlco2/ecologits
 [^ipcc]: IPCC AR6 WG1 Summary for Policymakers, D.1.1
 [^li]: Li et al., "Making AI Less Thirsty" — https://arxiv.org/abs/2304.03271
-[^safety]: agentsy SAFETY.md — https://github.com/selfagency/agentsy/blob/main/SAFETY.md
+[^safety]: agentsy SAFETY.md — https://github.com/voxslopuli/agentsy/blob/main/SAFETY.md
 [^ocv2]: OpenCode V2 plugins docs — https://opencode.ai/v2/docs/cli/plugins
 [^tai]: OpenCode Plugins Reference, generated from OpenCode v1.19.4 source (TurboAI) — https://www.turboai.dev/docs/opencode/plugins
 [^jl]: John Lindquist, OpenCode Plugins Guide — https://gist.github.com/johnlindquist/0adf1032b4e84942f3e1050aba3c5e4a
@@ -3182,38 +3182,38 @@ agentsy's `packages/runtime/src/sandbox/container/rivet-sandbox.ts` was disabled
 
 ### Revision 3 additions
 
-- `selfagency/agentsy` `ETHICS.md` — ethics statement, TESCREAL opposition, VSD, Design Justice, Weizenbaum, Gebru "think small", 12 core commitments, 13 prohibited patterns, 12 ethics review questions, maintainer duties.
-- `selfagency/agentsy` `SAFETY.md` — 8-layer guardrail stack, 11 policy modules, 9 output review middleware detectors, 6 interaction-level safeguards, 6 product-level safeguards, scope and purpose accountability, 12 testing requirement categories, 12 required safety metrics, 10 release criteria.
-- `selfagency/agentsy` `GOVERNANCE.md` — roles, decision-making, contribution guidelines with PR rejection criteria, ethics enforcement, safety enforcement, 6-step incident response, policy versioning, transparency.
-- `selfagency/agentsy` `packages/orchestrator/src/task-board/types.ts` — `paused` status, `CheckpointSnapshot`, per-attempt tool-call idempotency.
-- `selfagency/agentsy` `packages/orchestrator/src/task-board/in-memory.ts` — `VALID_TRANSITIONS` map, DAG cycle detection.
-- `selfagency/agentsy` `packages/orchestrator/src/recovery/policy.ts` — structured retry/fallback/escalation pipeline, safe DSL evaluator.
-- `selfagency/agentsy` `packages/runtime/src/hooks/approval-hook.ts` — 26-pattern destructive-tool list.
-- `selfagency/agentsy` `packages/runtime/src/approval/approval-manager.ts` — `ApprovalManager` with auto-deny timeout.
-- `selfagency/agentsy` `packages/runtime/src/sandbox/virtual/sandbox-worker.ts` — VM-context sandbox worker.
-- `selfagency/agentsy` `packages/runtime/src/sandbox/virtual/dynamic-trigger.ts` — trust-tier gating.
-- `selfagency/agentsy` `packages/runtime/src/sandbox/virtual/container-detector.ts` — container-runtime detector.
-- `selfagency/agentsy` `packages/runtime/src/sandbox/container/rivet-sandbox.ts` — disabled due to CVE-2024-10086 (rejected).
-- `selfagency/agentsy` `packages/runtime/src/ag-ui/interrupt-handler.ts` — `InterruptReason` enum, `InterruptController`.
-- `selfagency/agentsy` `packages/session/src/recovery/restorer.ts` — four-tier restore strategy, `crashMeta`.
-- `selfagency/agentsy` `packages/session/src/context-fingerprint.ts` — `ContextFingerprint`, `isCacheValid`.
-- `selfagency/agentsy` `packages/memory/src/cognitive/learning/loop-orchestrator.ts` — 5-stage learning loop.
-- `selfagency/agentsy` `packages/memory/src/cognitive/learning/observation-extractor.ts` — 5 observation kinds.
-- `selfagency/agentsy` `packages/memory/src/cognitive/learning/dialectic-resolver.ts` — Jaccard + polarity contradiction detection, source-priority resolution.
-- `selfagency/agentsy` `packages/memory/src/cognitive/learning/consolidation-specialist.ts` — deduction / induction / surprisal / temporal specialists.
-- `selfagency/agentsy` `packages/memory/src/cognitive/learning/solidifier.ts` — promote / demote / merge / archive thresholds.
-- `selfagency/agentsy` `packages/memory/src/cognitive/learning/canary-detector.ts` — `healthy | stale | degraded | contradicted` health statuses.
-- `selfagency/agentsy` `packages/memory/src/cognitive/persona/persona-store.ts` — persona store (rejected for emotional modeling; only communication-style subset adopted, §20.4.1).
-- `selfagency/agentsy` `packages/secrets/src/broker/` — `CredentialBroker`, `Keyring` abstraction, `AuditEntry`.
-- `selfagency/agentsy` `packages/secrets/src/detection/` — secret patterns (7), `PostToolCall` redaction hook.
-- `selfagency/agentsy` `packages/tokenomics/src/context-moved/budget.ts` — `TokenBudget` five categories, yellow-window warning.
-- `selfagency/agentsy` `packages/tokenomics/src/token-manager.ts` — `requestTokens` / `releaseTokens` reservation, `PacingController`.
-- `selfagency/agentsy` `packages/tokenomics/src/routing/routing-report.ts` — worst-first routing diagnostics.
-- `selfagency/agentsy` `packages/retrieval/src/security/` — source allowlist, provenance-tagged ingestion, `verified` flag.
-- `selfagency/agentsy` `packages/retrieval/src/context/` — lost-in-the-middle ordering, three ordering strategies.
-- `selfagency/agentsy` `packages/gateway/src/health/circuit-breaker.ts` — per-replica circuit breaker.
-- `selfagency/agentsy` `packages/gateway/src/health/provider-health-registry.ts` — circuit-tripped callback, three-state derivation.
-- `selfagency/agentsy` `packages/gateway/src/replica-selector.ts` — `local-preference: preferred | required | disabled`.
-- `selfagency/agentsy` `packages/gateway/src/local-detector.ts` — 6 backend probes.
-- `selfagency/agentsy` `packages/shared/src/cortexkit/db.ts` — WAL mode, `busy_timeout`, `SQLITE_BUSY` retry with `Atomics.wait`.
-- `selfagency/agentsy` `packages/shared/src/cortexkit/db-path.ts` — XDG-respecting DB path.
+- `voxslopuli/agentsy` `ETHICS.md` — ethics statement, TESCREAL opposition, VSD, Design Justice, Weizenbaum, Gebru "think small", 12 core commitments, 13 prohibited patterns, 12 ethics review questions, maintainer duties.
+- `voxslopuli/agentsy` `SAFETY.md` — 8-layer guardrail stack, 11 policy modules, 9 output review middleware detectors, 6 interaction-level safeguards, 6 product-level safeguards, scope and purpose accountability, 12 testing requirement categories, 12 required safety metrics, 10 release criteria.
+- `voxslopuli/agentsy` `GOVERNANCE.md` — roles, decision-making, contribution guidelines with PR rejection criteria, ethics enforcement, safety enforcement, 6-step incident response, policy versioning, transparency.
+- `voxslopuli/agentsy` `packages/orchestrator/src/task-board/types.ts` — `paused` status, `CheckpointSnapshot`, per-attempt tool-call idempotency.
+- `voxslopuli/agentsy` `packages/orchestrator/src/task-board/in-memory.ts` — `VALID_TRANSITIONS` map, DAG cycle detection.
+- `voxslopuli/agentsy` `packages/orchestrator/src/recovery/policy.ts` — structured retry/fallback/escalation pipeline, safe DSL evaluator.
+- `voxslopuli/agentsy` `packages/runtime/src/hooks/approval-hook.ts` — 26-pattern destructive-tool list.
+- `voxslopuli/agentsy` `packages/runtime/src/approval/approval-manager.ts` — `ApprovalManager` with auto-deny timeout.
+- `voxslopuli/agentsy` `packages/runtime/src/sandbox/virtual/sandbox-worker.ts` — VM-context sandbox worker.
+- `voxslopuli/agentsy` `packages/runtime/src/sandbox/virtual/dynamic-trigger.ts` — trust-tier gating.
+- `voxslopuli/agentsy` `packages/runtime/src/sandbox/virtual/container-detector.ts` — container-runtime detector.
+- `voxslopuli/agentsy` `packages/runtime/src/sandbox/container/rivet-sandbox.ts` — disabled due to CVE-2024-10086 (rejected).
+- `voxslopuli/agentsy` `packages/runtime/src/ag-ui/interrupt-handler.ts` — `InterruptReason` enum, `InterruptController`.
+- `voxslopuli/agentsy` `packages/session/src/recovery/restorer.ts` — four-tier restore strategy, `crashMeta`.
+- `voxslopuli/agentsy` `packages/session/src/context-fingerprint.ts` — `ContextFingerprint`, `isCacheValid`.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/learning/loop-orchestrator.ts` — 5-stage learning loop.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/learning/observation-extractor.ts` — 5 observation kinds.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/learning/dialectic-resolver.ts` — Jaccard + polarity contradiction detection, source-priority resolution.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/learning/consolidation-specialist.ts` — deduction / induction / surprisal / temporal specialists.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/learning/solidifier.ts` — promote / demote / merge / archive thresholds.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/learning/canary-detector.ts` — `healthy | stale | degraded | contradicted` health statuses.
+- `voxslopuli/agentsy` `packages/memory/src/cognitive/persona/persona-store.ts` — persona store (rejected for emotional modeling; only communication-style subset adopted, §20.4.1).
+- `voxslopuli/agentsy` `packages/secrets/src/broker/` — `CredentialBroker`, `Keyring` abstraction, `AuditEntry`.
+- `voxslopuli/agentsy` `packages/secrets/src/detection/` — secret patterns (7), `PostToolCall` redaction hook.
+- `voxslopuli/agentsy` `packages/tokenomics/src/context-moved/budget.ts` — `TokenBudget` five categories, yellow-window warning.
+- `voxslopuli/agentsy` `packages/tokenomics/src/token-manager.ts` — `requestTokens` / `releaseTokens` reservation, `PacingController`.
+- `voxslopuli/agentsy` `packages/tokenomics/src/routing/routing-report.ts` — worst-first routing diagnostics.
+- `voxslopuli/agentsy` `packages/retrieval/src/security/` — source allowlist, provenance-tagged ingestion, `verified` flag.
+- `voxslopuli/agentsy` `packages/retrieval/src/context/` — lost-in-the-middle ordering, three ordering strategies.
+- `voxslopuli/agentsy` `packages/gateway/src/health/circuit-breaker.ts` — per-replica circuit breaker.
+- `voxslopuli/agentsy` `packages/gateway/src/health/provider-health-registry.ts` — circuit-tripped callback, three-state derivation.
+- `voxslopuli/agentsy` `packages/gateway/src/replica-selector.ts` — `local-preference: preferred | required | disabled`.
+- `voxslopuli/agentsy` `packages/gateway/src/local-detector.ts` — 6 backend probes.
+- `voxslopuli/agentsy` `packages/shared/src/cortexkit/db.ts` — WAL mode, `busy_timeout`, `SQLITE_BUSY` retry with `Atomics.wait`.
+- `voxslopuli/agentsy` `packages/shared/src/cortexkit/db-path.ts` — XDG-respecting DB path.

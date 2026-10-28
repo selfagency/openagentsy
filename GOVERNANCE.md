@@ -316,8 +316,8 @@ internal discussion.
 ---
 
 *OpenAgentsy is licensed GPL-3.0-or-later. This document is adapted from the
-`GOVERNANCE.md` of `selfagency/agentsy`
-(<https://github.com/selfagency/agentsy>), licensed GPL-3.0-or-later, and the
+`GOVERNANCE.md` of `voxslopuli/agentsy`
+(<https://github.com/voxslopuli/agentsy>), licensed GPL-3.0-or-later, and the
 adaptation is recorded in `NOTICE`. The governance shape, the decision classes,
 the runbook, the severity matrix and the transparency goal are the source's;
 the ids, the runbook's six steps as the plan specifies them, the label table,

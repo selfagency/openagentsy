@@ -412,7 +412,7 @@ and successful system.
 ---
 
 *OpenAgentsy is licensed GPL-3.0-or-later. This document is adapted from the
-`SAFETY.md` of `selfagency/agentsy` (<https://github.com/selfagency/agentsy>),
+`SAFETY.md` of `voxslopuli/agentsy` (<https://github.com/voxslopuli/agentsy>),
 licensed GPL-3.0-or-later, and the adaptation is recorded in `NOTICE`. The
 guardrail stack, the safety frame and the metric list are the source's; the
 ids, the layer table, the benchmark categories, the release criteria and every

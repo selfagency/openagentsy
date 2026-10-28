@@ -1,6 +1,6 @@
 {
   "name": "@openagentsy/evals",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -14,8 +14,8 @@
   },
   "dependencies": {
     "@langwatch/scenario": "^1.7.0",
-    "@openagentsy/core": "*",
-    "@openagentsy/jev": "*",
+    "@openagentsy/core": "workspace:^",
+    "@openagentsy/jev": "workspace:^",
     "@openagentsy/ledger": "workspace:^",
     "ai": "^6.0.0",
     "jsonc-parser": "^3.3.1",

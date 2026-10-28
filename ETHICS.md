@@ -68,7 +68,7 @@ disagrees with a commitment says so in writing.
 
 ## The translation from the source
 
-This document is adapted from the `ETHICS.md` of `selfagency/agentsy`, which
+This document is adapted from the `ETHICS.md` of `voxslopuli/agentsy`, which
 states the same stance for a general-purpose assistant. The stance is the
 source's. The domain is not, and the translation is deliberate: a coding agent
 framework fails in different ways than a companion chat does, and the
@@ -410,7 +410,7 @@ beings.
 ---
 
 *OpenAgentsy is licensed GPL-3.0-or-later. This document is adapted from the
-`ETHICS.md` of `selfagency/agentsy` (<https://github.com/selfagency/agentsy>),
+`ETHICS.md` of `voxslopuli/agentsy` (<https://github.com/voxslopuli/agentsy>),
 licensed GPL-3.0-or-later, and the adaptation is recorded in `NOTICE`. The
 stance, the grounding and the review questions are the source's; the ids, the
 commitments as they apply to a coding agent framework, and every example are

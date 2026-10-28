@@ -18,9 +18,9 @@
     },
     "packages/adapter-opencode": {
       "name": "@openagentsy/adapter-opencode",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
-        "@openagentsy/core": "*",
+        "@openagentsy/core": "workspace:^",
         "@openagentsy/hooks": "workspace:^",
         "@openagentsy/ledger": "workspace:^",
         "zod": "^4.1.8",
@@ -33,17 +33,17 @@
     },
     "packages/cli": {
       "name": "openagentsy",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "openagentsy": "./dist/index.js",
         "oa": "./dist/index.js",
       },
       "dependencies": {
-        "@openagentsy/core": "0.1.0",
+        "@openagentsy/core": "workspace:^",
         "@openagentsy/footprint": "workspace:^",
         "@openagentsy/hooks": "workspace:^",
         "@openagentsy/ledger": "workspace:^",
-        "@openagentsy/models": "0.1.0",
+        "@openagentsy/models": "workspace:^",
         "@openagentsy/quality": "workspace:^",
         "jsonc-parser": "^3.3.1",
         "yaml": "^2.8.0",
@@ -56,7 +56,7 @@
     },
     "packages/core": {
       "name": "@openagentsy/core",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "drizzle-orm": "^0.45.4",
         "yaml": "^2.8.0",
@@ -70,11 +70,11 @@
     },
     "packages/evals": {
       "name": "@openagentsy/evals",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@langwatch/scenario": "^1.7.0",
-        "@openagentsy/core": "*",
-        "@openagentsy/jev": "*",
+        "@openagentsy/core": "workspace:^",
+        "@openagentsy/jev": "workspace:^",
         "@openagentsy/ledger": "workspace:^",
         "ai": "^6.0.0",
         "jsonc-parser": "^3.3.1",
@@ -89,7 +89,7 @@
     },
     "packages/footprint": {
       "name": "@openagentsy/footprint",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@types/node": "^24.3.0",
         "typescript": "^5.9.2",
@@ -97,7 +97,7 @@
     },
     "packages/hooks": {
       "name": "@openagentsy/hooks",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/core": "workspace:^",
         "@openagentsy/quality": "workspace:^",
@@ -110,7 +110,7 @@
     },
     "packages/jev": {
       "name": "@openagentsy/jev",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "zod": "^4.1.8",
       },
@@ -121,7 +121,7 @@
     },
     "packages/ledger": {
       "name": "@openagentsy/ledger",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/core": "workspace:^",
         "@openagentsy/footprint": "workspace:^",
@@ -135,15 +135,15 @@
     },
     "packages/mcp": {
       "name": "@openagentsy/mcp",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "bin": {
         "openagentsy-mcp": "./dist/index.js",
       },
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.21.0",
-        "@openagentsy/core": "0.1.0",
+        "@openagentsy/core": "workspace:^",
         "@openagentsy/hooks": "workspace:^",
-        "@openagentsy/jev": "*",
+        "@openagentsy/jev": "workspace:^",
         "@openagentsy/ledger": "workspace:^",
         "@openagentsy/memory": "workspace:^",
         "@openagentsy/tasks": "workspace:^",
@@ -157,7 +157,7 @@
     },
     "packages/memory": {
       "name": "@openagentsy/memory",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/adapter-opencode": "workspace:^",
         "@openagentsy/core": "workspace:^",
@@ -171,9 +171,9 @@
     },
     "packages/models": {
       "name": "@openagentsy/models",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
-        "@openagentsy/core": "0.1.0",
+        "@openagentsy/core": "workspace:^",
         "yaml": "^2.8.0",
         "zod": "^4.6.0",
       },
@@ -184,7 +184,7 @@
     },
     "packages/offload": {
       "name": "@openagentsy/offload",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/core": "workspace:^",
         "zod": "4.6.7",
@@ -196,7 +196,7 @@
     },
     "packages/quality": {
       "name": "@openagentsy/quality",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/core": "workspace:^",
         "typescript": "^5.9.2",
@@ -208,7 +208,7 @@
     },
     "packages/sidebar": {
       "name": "@openagentsy/sidebar",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/core": "workspace:^",
         "@openagentsy/footprint": "workspace:^",
@@ -233,7 +233,7 @@
     },
     "packages/tasks": {
       "name": "@openagentsy/tasks",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@openagentsy/adapter-opencode": "workspace:^",
         "@openagentsy/core": "workspace:^",
