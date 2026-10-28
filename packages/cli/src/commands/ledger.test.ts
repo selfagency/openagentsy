@@ -2,7 +2,13 @@ import { mkdirSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeDatabase, createRecord, migrate, openDatabase } from '@openagentsy/core';
+import {
+  closeDatabase,
+  createRecord,
+  migrate,
+  openDatabase,
+  type ProjectRoots,
+} from '@openagentsy/core';
 import { closeLedger, openLedger, recordAssistantMessage, runGit } from '@openagentsy/ledger';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -17,6 +23,11 @@ import {
 } from './ledger.js';
 
 let root: string;
+
+/** The two roots of a project that is its own state root. */
+function rootsOf(root: string): ProjectRoots {
+  return { workspace: root, stateRoot: root };
+}
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'openagentsy-ledger-cli-'));
@@ -230,7 +241,7 @@ describe('the scan-reverts command', () => {
     const repo = await seedRepo();
     seedBuilder(repo, 'task-1');
 
-    const report = await runLedgerScanReverts(repo, { since: '30 days ago' });
+    const report = await runLedgerScanReverts(rootsOf(repo), { since: '30 days ago' });
 
     expect(report.found).toBe(1);
     expect(report.written).toBe(1);
@@ -255,7 +266,7 @@ describe('the outcomes command', () => {
   it('finds the commits that name a task and writes them down', async () => {
     const repo = await seedRepo();
 
-    const report = await runLedgerOutcomes(repo, { since: '30 days ago' });
+    const report = await runLedgerOutcomes(rootsOf(repo), { since: '30 days ago' });
 
     expect(report.found).toBe(1);
     expect(report.written).toBe(1);
@@ -277,8 +288,8 @@ describe('the outcomes command', () => {
 
   it('writes the outcome once, however often it runs', async () => {
     const repo = await seedRepo();
-    await runLedgerOutcomes(repo, { since: '30 days ago' });
-    const report = await runLedgerOutcomes(repo, { since: '30 days ago' });
+    await runLedgerOutcomes(rootsOf(repo), { since: '30 days ago' });
+    const report = await runLedgerOutcomes(rootsOf(repo), { since: '30 days ago' });
     expect(report.written).toBe(0);
   });
 });

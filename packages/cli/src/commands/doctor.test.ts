@@ -1,9 +1,15 @@
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ProjectRoots } from '@openagentsy/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runBuild } from './build.js';
 import { formatDoctorReport, runDoctor } from './doctor.js';
+
+/** The two roots of a project that is its own state root. */
+function rootsOf(root: string): ProjectRoots {
+  return { workspace: root, stateRoot: root };
+}
 
 let root: string;
 
@@ -97,13 +103,13 @@ describe('the doctor', () => {
   it('names the Lead by the agent a person picks', async () => {
     // The agent id is 'agentsy' and the role key is 'lead'. The doctor used
     // to print 'oa-lead', which is a file that does not exist.
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     const lead = report.roles.find((role) => role.role === 'lead');
     expect(lead?.agent).toBe('agentsy');
   });
 
   it('names the other roles by the agent file they are in', async () => {
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     const builder = report.roles.find((role) => role.role === 'builder');
     expect(builder?.agent).toBe('oa-builder');
   });
@@ -115,12 +121,12 @@ describe('the doctor', () => {
       JSON.stringify({ compaction: { auto: false } }),
       'utf8',
     );
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.warnings.some((warning) => warning.includes('compaction is off'))).toBe(true);
   });
 
   it('says nothing about the compaction when it is left alone', async () => {
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.warnings.some((warning) => warning.includes('compaction'))).toBe(false);
   });
 
@@ -132,7 +138,7 @@ describe('the doctor', () => {
     await mkdir(join(root, '.opencode'), { recursive: true });
     await writeFile(join(root, '.opencode', 'opencode.jsonc'), JSON.stringify({}), 'utf8');
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.config.paths).toHaveLength(2);
     expect(report.config.paths.some((path) => path.includes('.opencode'))).toBe(true);
   });
@@ -145,7 +151,7 @@ describe('the config map', () => {
     await writeFile(join(root, '.beans.yml'), BEANS_CONFIG, 'utf8');
     await writeFile(join(root, 'openagentsy.models.lock.json'), JSON.stringify({}), 'utf8');
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.configMap.authorities).toHaveLength(5);
     expect(report.configMap.authorities.every((authority) => authority.exists)).toBe(true);
     const paths = report.configMap.authorities.map((authority) => authority.path);
@@ -162,7 +168,7 @@ describe('the config map', () => {
   });
 
   it('says a file is missing and falls back to the defaults', async () => {
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
 
     const missing = report.configMap.authorities.filter((authority) => !authority.exists);
     expect(missing.map((authority) => authority.path)).toEqual([
@@ -185,7 +191,7 @@ describe('the config map', () => {
   it('reads the Phase 2 keys out of the openagentsy file', async () => {
     await writeFile(join(root, 'openagentsy.jsonc'), AGENTSY_CONFIG, 'utf8');
 
-    const effective = (await runDoctor(root)).configMap.effective;
+    const effective = (await runDoctor(rootsOf(root))).configMap.effective;
     expect(effective.tasks.path).toBe('.work');
     expect(effective.tasks.prefix).toBe('x-');
     expect(effective.tasks.idLength).toBe(6);
@@ -202,7 +208,7 @@ describe('the config map', () => {
     await writeFile(join(root, 'openagentsy.jsonc'), AGENTSY_CONFIG, 'utf8');
     await writeFile(join(root, '.beans.yml'), BEANS_CONFIG, 'utf8');
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.configMap.effective.tasks.path).toBe('.beans-tasks');
     expect(report.configMap.effective.tasks.prefix).toBe('b-');
     expect(report.configMap.effective.tasks.idLength).toBe(8);
@@ -217,7 +223,7 @@ describe('the config map', () => {
  * against the target the installed files name.
  */
 async function buildAgents(root: string): Promise<void> {
-  await runBuild({ root, outDir: join(root, '.opencode') });
+  await runBuild({ workspace: root, stateRoot: root, outDir: join(root, '.opencode') });
 }
 
 /** The files of a tree, by name and content. */
@@ -242,7 +248,7 @@ describe('the regeneration check', () => {
     const original = await readFile(agentFile, 'utf8');
     await writeFile(agentFile, `${original}\nhand edited\n`, 'utf8');
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     const warning = report.warnings.find((entry) => entry.includes('oa-builder.md'));
     expect(warning).toBeDefined();
     expect(warning).toContain('openagentsy build');
@@ -252,7 +258,7 @@ describe('the regeneration check', () => {
   it('says nothing about a tree the generator wrote', async () => {
     await buildAgents(root);
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.regeneration.drifted).toEqual([]);
     expect(report.warnings.some((entry) => entry.includes('openagentsy build'))).toBe(false);
   });
@@ -261,7 +267,7 @@ describe('the regeneration check', () => {
     await buildAgents(root);
     const before = await tree(root);
 
-    await runDoctor(root);
+    await runDoctor(rootsOf(root));
 
     const after = await tree(root);
     expect(after).toEqual(before);
@@ -272,7 +278,7 @@ describe('the regeneration check', () => {
     const dir = join(root, '.opencode', 'agents');
     await chmod(dir, 0o000);
     try {
-      const report = await runDoctor(root);
+      const report = await runDoctor(rootsOf(root));
       expect(report.regeneration.error).toBeDefined();
       expect(report.regeneration.drifted).toEqual([]);
     } finally {
@@ -291,7 +297,7 @@ describe('the regeneration check', () => {
       'utf8',
     );
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.regeneration.error).toBeDefined();
     expect(report.regeneration.drifted).toEqual([]);
     expect(
@@ -310,7 +316,7 @@ describe('the regeneration check', () => {
       await writeFile(file, content.replace('permissions:', 'permission:'), 'utf8');
     }
 
-    const report = await runDoctor(root);
+    const report = await runDoctor(rootsOf(root));
     expect(report.regeneration.error).toBeDefined();
     expect(report.regeneration.drifted).toEqual([]);
     expect(

@@ -3,11 +3,17 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import type { ProjectRoots } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
 import { formatAuditReport, runAudit } from './audit.js';
 import { runWaiver } from './waivers.js';
 
 const exec = promisify(execFile);
+
+/** The two roots of a project that is its own state root. */
+function rootsOf(root: string): ProjectRoots {
+  return { workspace: root, stateRoot: root };
+}
 
 /** A stylesheet with a floor finding: the page root clips its overflow. */
 const FLOOR_CSS = 'html {\n  overflow-x: hidden;\n}\n';
@@ -90,7 +96,7 @@ describe('the audit command', () => {
       await writeFile(join(root, 'src/app.css'), FLOOR_CSS);
       await git(root, ['add', 'src/app.css']);
 
-      const report = await runAudit(root);
+      const report = await runAudit(rootsOf(root));
 
       expect(report.scope).toBe('changed');
       expect(report.files).toContain('src/app.css');
@@ -108,7 +114,7 @@ describe('the audit command', () => {
     try {
       await writeFile(join(root, 'src/app.ts'), 'export const value = 1;\n');
 
-      const report = await runAudit(root, { scope: 'all' });
+      const report = await runAudit(rootsOf(root), { scope: 'all' });
 
       // The scope holds no page and no stylesheet, so the linter had
       // nothing to read and the static rules ran alone.
@@ -132,7 +138,7 @@ describe('the audit command', () => {
       );
       expect(waiver.ok).toBe(true);
 
-      const report = await runAudit(root, { scope: 'all' });
+      const report = await runAudit(rootsOf(root), { scope: 'all' });
 
       expect(report.reflex).toBe(0);
       expect(report.waived.length).toBe(1);
@@ -150,7 +156,7 @@ describe('the audit command', () => {
       await writeFile(join(root, 'src/app.css'), FLOOR_CSS);
       await writeFile(join(root, 'src/theme.css'), REFLEX_CSS);
 
-      const report = await runAudit(root, { scope: 'all' });
+      const report = await runAudit(rootsOf(root), { scope: 'all' });
 
       expect(report.floor).toBe(1);
       expect(report.reflex).toBe(1);
@@ -165,7 +171,7 @@ describe('the audit command', () => {
     try {
       await writeFile(join(root, 'src/theme.css'), REFLEX_CSS);
 
-      const report = await runAudit(root, { scope: 'all' });
+      const report = await runAudit(rootsOf(root), { scope: 'all' });
 
       expect(report.floor).toBe(0);
       expect(report.reflex).toBe(1);
@@ -183,7 +189,7 @@ describe('the audit command', () => {
         '{\n  // the check runs on the command, not on every write\n  "quality": { "mode": "after" }\n}\n',
       );
 
-      const report = await runAudit(root, { scope: 'all' });
+      const report = await runAudit(rootsOf(root), { scope: 'all' });
 
       expect(report.mode).toBe('after');
       const text = formatAuditReport(report);
@@ -197,7 +203,7 @@ describe('the audit command', () => {
   it('runs the check on every write by default', async () => {
     const { root, remove } = await project();
     try {
-      const report = await runAudit(root, { scope: 'all' });
+      const report = await runAudit(rootsOf(root), { scope: 'all' });
 
       expect(report.mode).toBe('during');
       expect(formatAuditReport(report)).toContain('during');

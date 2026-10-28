@@ -1,13 +1,16 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { agentIdFor, agentIdOf, loadRoles, type RolesFile } from '@openagentsy/core';
 import { agentFileName, renderAgent } from '../generate/agent.js';
 import { COMMANDS, renderCommand } from '../generate/commands.js';
 import { lockEntryFor, lockVariants, type ModelLock, readModelLock } from '../generate/lock.js';
 
 export type BuildOptions = {
-  root: string;
+  /** The workspace: the roles, the templates and the output live here. */
+  workspace: string;
+  /** The state root: the model lock lives here. */
+  stateRoot: string;
   rolesPath?: string;
   lockPath?: string;
   outDir?: string;
@@ -116,6 +119,10 @@ async function copySkills(
 
 /**
  * Render every role's agent file, and return the ids that were written.
+ *
+ * The roles and the templates are the workspace's, and the model lock is
+ * the state root's: the lock is the choice of models the project made, and
+ * a worktree of the project has the same lock as the project.
  */
 async function renderAgents(
   roles: RolesFile,
@@ -139,10 +146,10 @@ async function renderAgents(
 }
 
 export async function runBuild(options: BuildOptions): Promise<BuildResult> {
-  const root = options.root;
-  const rolesPath = options.rolesPath ?? join(root, 'roles.yaml');
-  const lockPath = options.lockPath ?? join(root, 'openagentsy.models.lock.json');
-  const outDir = options.outDir ?? join(root, '.opencode');
+  const { workspace, stateRoot } = options;
+  const rolesPath = options.rolesPath ?? join(workspace, 'roles.yaml');
+  const lockPath = options.lockPath ?? join(stateRoot, 'openagentsy.models.lock.json');
+  const outDir = options.outDir ?? join(workspace, '.opencode');
 
   const roles = await loadRoles(rolesPath);
   const lock = await readModelLock(lockPath);
@@ -150,7 +157,7 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
 
   if (!lock) {
     warnings.push(
-      `no model lock at ${relative(root, lockPath)}, generated agents inherit the OpenCode default model`,
+      `no model lock at ${lockPath}, generated agents inherit the OpenCode default model`,
     );
   }
 
@@ -170,7 +177,7 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
   }
 
   const skills = await copySkills(
-    join(root, 'templates', '.opencode', 'skills'),
+    join(workspace, 'templates', '.opencode', 'skills'),
     join(outDir, 'skills'),
   );
   warnings.push(...skills.warnings);

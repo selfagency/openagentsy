@@ -1,12 +1,14 @@
 import type { Dirent } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ProjectRoots } from '@openagentsy/core';
 import {
   type Finding,
   runQualityAudit,
   type SloplintDegradation,
   type SloplintPath,
 } from '@openagentsy/hooks/quality/audit';
+import { loadWaiverLookup } from '@openagentsy/hooks/quality/waivers';
 import { gitText } from '@openagentsy/ledger';
 import { parse as parseJsonc } from 'jsonc-parser';
 
@@ -122,13 +124,23 @@ const DEGRADATION_TEXT: Record<SloplintDegradation, string> = {
 /**
  * The audit.
  */
-export async function runAudit(root: string, options: AuditOptions = {}): Promise<AuditReport> {
+export async function runAudit(
+  roots: ProjectRoots,
+  options: AuditOptions = {},
+): Promise<AuditReport> {
+  const { workspace, stateRoot } = roots;
   const scope = options.scope ?? 'changed';
   const base = options.base ?? 'HEAD';
-  const resolved = scope === 'all' ? { files: await projectFiles(root) } : changedFiles(root, base);
-  const mode = await readQualityMode(root);
-  const result = await runQualityAudit({ root, files: resolved.files });
-  return reportOf({ root, scope, base, mode, result, ...resolved });
+  const resolved =
+    scope === 'all' ? { files: await projectFiles(workspace) } : changedFiles(workspace, base);
+  const mode = await readQualityMode(workspace);
+  // The waivers are the state root's: a waiver is a decision about the
+  // project, and a worktree of the project has the same waivers as the
+  // project. The files are the workspace's: they are the files of the
+  // branch under audit.
+  const waivers = await loadWaiverLookup(stateRoot);
+  const result = await runQualityAudit({ root: workspace, files: resolved.files, waivers });
+  return reportOf({ root: workspace, scope, base, mode, result, ...resolved });
 }
 
 /** What the report is made of. */

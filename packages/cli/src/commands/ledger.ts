@@ -1,5 +1,6 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { ProjectRoots } from '@openagentsy/core';
 import {
   closeLedger,
   detectCacheMiss,
@@ -28,6 +29,9 @@ import {
  * what the waste was and what came of the work. There is no transcript
  * here, and there never will be: the ledger holds counters, so a report
  * can say what the work cost without ever holding the work.
+ *
+ * The ledger is the state root's, so a command run in a worktree reports
+ * the ledger of the project and not a ledger of its own.
  */
 
 export type LedgerReport = {
@@ -37,8 +41,8 @@ export type LedgerReport = {
   counters: LedgerExport;
 };
 
-export async function runLedger(root: string): Promise<LedgerReport> {
-  const databasePath = ledgerPath(root);
+export async function runLedger(stateRoot: string): Promise<LedgerReport> {
+  const databasePath = ledgerPath(stateRoot);
   // A project that has no ledger yet has nothing to show, and reading it
   // should not create one.
   const exists = await access(databasePath).then(
@@ -46,12 +50,17 @@ export async function runLedger(root: string): Promise<LedgerReport> {
     () => false,
   );
   if (!exists) {
-    return { root, databasePath, exists: false, counters: emptyLedgerExport() };
+    return {
+      root: stateRoot,
+      databasePath,
+      exists: false,
+      counters: emptyLedgerExport(),
+    };
   }
 
-  const db = openLedger(root);
+  const db = openLedger(stateRoot);
   try {
-    return { root, databasePath, exists: true, counters: ledgerExport(db) };
+    return { root: stateRoot, databasePath, exists: true, counters: ledgerExport(db) };
   } finally {
     closeLedger(db);
   }
@@ -176,8 +185,8 @@ export type LedgerWasteOptions = {
 /**
  * The board of a project, at the path the board keeps it.
  */
-function boardPath(root: string): string {
-  return join(root, '.openagentsy', 'board.sqlite');
+function boardPath(stateRoot: string): string {
+  return join(stateRoot, '.openagentsy', 'board.sqlite');
 }
 
 /**
@@ -185,26 +194,26 @@ function boardPath(root: string): string {
  * the waste is.
  */
 export async function runLedgerWaste(
-  root: string,
+  stateRoot: string,
   options: LedgerWasteOptions = {},
 ): Promise<LedgerWasteReport> {
   const since = options.since ?? '30 days ago';
   const instant = instantOf(since);
-  const db = openLedger(root);
+  const db = openLedger(stateRoot);
   try {
     const candidates = [
       ...detectCacheMiss(db, {
         ...(options.dataDir === undefined ? {} : { dataDir: options.dataDir }),
         since: instant,
       }),
-      ...detectNoProgressAtPath(db, boardPath(root), {
+      ...detectNoProgressAtPath(db, boardPath(stateRoot), {
         since: instant,
         ...(options.leadAgent === undefined ? {} : { leadAgent: options.leadAgent }),
       }),
     ];
     const written = recordWasteRows(db, candidates);
     return {
-      root,
+      root: stateRoot,
       written,
       byKind: wasteByKind(db),
       totals: wasteTotals(db),
@@ -231,18 +240,23 @@ export type LedgerScanRevertsReport = {
  * when a person or the Lead asks for it. The tokens of a signal are the
  * builder tokens of the task the commit named, times the share of the lines
  * that were taken back.
+ *
+ * The history is the workspace's: it is the branch the session works on. The
+ * ledger the signals are written into is the state root's.
  */
 export async function runLedgerScanReverts(
-  root: string,
+  roots: ProjectRoots,
   options: { since?: string | undefined } = {},
 ): Promise<LedgerScanRevertsReport> {
   const since = options.since ?? '30 days ago';
-  const db = openLedger(root);
+  const db = openLedger(roots.stateRoot);
   try {
-    const candidates = scanReverts(root, since, { tokensForTask: builderTokens(db) });
+    const candidates = scanReverts(roots.workspace, since, {
+      tokensForTask: builderTokens(db),
+    });
     const written = recordWasteRows(db, candidates);
     return {
-      root,
+      root: roots.workspace,
       since,
       found: candidates.length,
       written,
@@ -289,19 +303,22 @@ export type LedgerOutcomesReport = {
  * transitions — but only when the caller injects a reader for the tasks
  * store. The ledger does not import that store, so the command runs without
  * the task transitions until whoever knows the store injects a reader.
+ *
+ * The history is the workspace's, and the ledger the outcomes are written
+ * into is the state root's.
  */
 export async function runLedgerOutcomes(
-  root: string,
+  roots: ProjectRoots,
   options: { since?: string | undefined; taskReader?: TaskReader | undefined } = {},
 ): Promise<LedgerOutcomesReport> {
   const since = options.since ?? '30 days ago';
-  const db = openLedger(root);
+  const db = openLedger(roots.stateRoot);
   try {
     const candidates = [
-      ...scanRefsTrailers(root, since),
+      ...scanRefsTrailers(roots.workspace, since),
       ...(options.taskReader === undefined
         ? []
-        : await scanTaskTransitions(root, instantOf(since), options.taskReader)),
+        : await scanTaskTransitions(roots.workspace, instantOf(since), options.taskReader)),
     ];
     let written = 0;
     for (const candidate of candidates) {
@@ -311,7 +328,7 @@ export async function runLedgerOutcomes(
       .query('SELECT kind, COUNT(*) AS count FROM outcome GROUP BY kind ORDER BY kind')
       .all() as { kind: string; count: number }[];
     return {
-      root,
+      root: roots.workspace,
       since,
       found: candidates.length,
       written,
