@@ -1,33 +1,41 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "1password": {
-      "enabled": false
-    },
-    "beeper": {
-      "enabled": false
-    },
-    "chrome-devtools": {
-      "enabled": false
-    },
-    "docker": {
-      "enabled": false
-    },
-    "git": {
-      "enabled": false
-    },
-    "github": {
-      "enabled": false
-    },
-    "langwatch": {
-      "type": "remote",
-      "url": "https://app.langwatch.ai/mcp",
-      "enabled": false
-    },
-    "fallow": {
-      "type": "local",
-      "command": ["bunx", "fallow-mcp"],
-      "enabled": true
+    "servers": {
+      "1password": {
+        "type": "local",
+        "command": ["1password-mcp"],
+        "disabled": true
+      },
+      "beeper": {
+        "type": "remote",
+        "url": "http://127.0.0.1:23373/v0/mcp",
+        "disabled": true
+      },
+      "chrome-devtools": {
+        "type": "local",
+        "command": ["bunx", "chrome-devtools-mcp@latest"],
+        "disabled": true
+      },
+      "docker": {
+        "type": "local",
+        "command": ["orbstack-mcp"],
+        "disabled": true
+      },
+      "github": {
+        "type": "local",
+        "command": ["gh", "mcp"],
+        "disabled": true
+      },
+      "langwatch": {
+        "type": "remote",
+        "url": "https://app.langwatch.ai/mcp",
+        "disabled": true
+      },
+      "fallow": {
+        "type": "local",
+        "command": ["bunx", "fallow-mcp"]
+      }
     }
   }
 }
