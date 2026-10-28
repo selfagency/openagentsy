@@ -26,6 +26,7 @@ import {
 } from './commands/lessons.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
 import { ethicalReportAsJson, formatEthicalReport, runEthicalReport } from './commands/report.js';
+import { formatScope, runScope } from './commands/scope.js';
 import { runSetup } from './commands/setup.js';
 
 const USAGE = `openagentsy <command> [options]
@@ -55,6 +56,7 @@ Commands:
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
   models switch        Switch the provider, re-pick the models, and write the lock file
   report --ethical     Report what the run cost, and what it was worth
+  scope [role]         Print the scope declaration of a role, or of every role
 Options:
   --root <dir>        Project directory (default: current directory)
   --all               Audit the whole project instead of the changed files
@@ -433,6 +435,26 @@ async function approveCommand(
  */
 export type CommandOptions = { fetchImpl?: FetchLike };
 
+/**
+ * The scope declarations of the roles (§22.3).
+ *
+ * The command is a person's: the declarations are there to be read, and the
+ * refusal a role makes is built from the same text.
+ */
+async function scopeCommand(
+  _roots: ProjectRoots,
+  _values: Values,
+  positionals: string[],
+): Promise<number> {
+  const report = runScope(positionals[1]);
+  if (report.unknownRole !== undefined) {
+    process.stderr.write(formatScope(report));
+    return 1;
+  }
+  process.stdout.write(formatScope(report));
+  return 0;
+}
+
 /** The command table. One entry per command, so the dispatch is a lookup. */
 const COMMANDS: Record<
   string,
@@ -456,6 +478,7 @@ const COMMANDS: Record<
   setup: setupCommand,
   models: modelsCommand,
   report: reportCommand,
+  scope: scopeCommand,
 };
 
 /**
