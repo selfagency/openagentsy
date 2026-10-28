@@ -1,0 +1,11 @@
+{
+  "root": false,
+  "extends": ["../../biome.jsonc"],
+  "linter": {
+    "rules": {
+      "a11y": {
+        "noStaticElementInteractions": "off"
+      }
+    }
+  }
+}

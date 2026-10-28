@@ -42,7 +42,14 @@ the terms noted:
 - EcoLogits (CC BY-SA 4.0, docs): the footprint formulas in
   packages/footprint/ are re-implemented from the published methodology,
   https://github.com/mlco2/ecologits, with credit in the UI and this NOTICE.
-  Its models.json data is fetched at runtime and cached, not bundled, until
+  The footprint block in packages/sidebar/ shows the same credit in its
+  method panel. Its models.json data is fetched at runtime and cached, not bundled, until
   its data license is confirmed.
+- The OpenTUI packages (MIT): @opentui/core and @opentui/solid are the
+  renderer and the Solid binding the sidebar draws in, and solid-js (MIT) is
+  the reactive runtime they share. @opencode/plugin, @opencode/client and
+  @opencode/theme (MIT) are the host's own SDK, the host's types and the
+  host's theme. The sidebar keeps all of them outside its bundle, so the host
+  resolves them and one copy of the Solid runtime is in play.
 - models.dev (MIT): model and cost data, bundled at build time through
   the @opencode-ai/models package.

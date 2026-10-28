@@ -37,6 +37,7 @@ bun run test
 | `@openagentsy/models` | the provider inventory and the model lock file |
 | `@openagentsy/mcp` | the board server, over stdio |
 | `@openagentsy/adapter-opencode` | the OpenCode plugin: the guard, the effort ladder, the harvest |
+| `@openagentsy/sidebar` | the OpenCode 2 TUI sidebar: the footprint block |
 
 `roles.yaml` is the source of truth for the seven roles. Everything else is
 generated from it, and the generator maps one permission vocabulary onto the

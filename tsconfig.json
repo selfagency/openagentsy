@@ -7,6 +7,7 @@
     { "path": "packages/mcp" },
     { "path": "packages/models" },
     { "path": "packages/footprint" },
+    { "path": "packages/sidebar" },
     { "path": "packages/ledger" },
     { "path": "packages/memory" },
     { "path": "packages/adapter-opencode" },
