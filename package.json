@@ -1,6 +1,7 @@
 {
   "name": "openagentsy",
   "version": "0.2.0",
+  "author": "Grand Slopulissimo <slopulissimo@voxslopuli.org>",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.4",

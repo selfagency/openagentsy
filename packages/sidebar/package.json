@@ -1,6 +1,7 @@
 {
   "name": "@openagentsy/sidebar",
   "version": "0.2.0",
+  "author": "Grand Slopulissimo <slopulissimo@voxslopuli.org>",
   "type": "module",
   "exports": {
     ".": {
