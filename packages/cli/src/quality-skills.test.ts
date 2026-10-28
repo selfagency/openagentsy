@@ -146,7 +146,7 @@ describe('the selection the routing names', () => {
 describe('the build', () => {
   it('copies the reference files of a skill, and not only its SKILL.md', async () => {
     const outDir = await mkdtemp(join(tmpdir(), 'oa-skills-'));
-    const result = await runBuild({ root: REPO_ROOT, target: 'v1', outDir });
+    const result = await runBuild({ root: REPO_ROOT, outDir });
     expect(result.skills).toContain('oa-ui');
     expect(result.skills).toContain('oa-copy');
     expect(result.skills).toContain('oa-comments');

@@ -7,8 +7,9 @@ export type PermissionRule = {
 
 /**
  * Internal action names. These are the keys used in roles.yaml and they are
- * mapped to version-specific permission keys at generation time, so one role
- * definition covers both OpenCode versions.
+ * mapped to the OpenCode permission keys at generation time, so the role
+ * definition carries the vocabulary of the project and not the vocabulary of
+ * the host.
  */
 export const ACTION_NAMES = [
   'read',
@@ -89,4 +90,11 @@ export type RolesFile = {
   roles: Record<string, RoleDefinition>;
 };
 
-export type Target = 'v1' | 'v2';
+/**
+ * The OpenCode version the project targets.
+ *
+ * There is one: OpenCode 2. The type is kept because the doctor reports the
+ * target and the generator writes for it, and a project that grows a second
+ * runtime gets a second member here.
+ */
+export type Target = 'v2';

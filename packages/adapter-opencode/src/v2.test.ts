@@ -1,6 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { closeDatabase, createRecord, migrate, openDatabase } from '@openagentsy/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   setupV2,
@@ -71,6 +72,9 @@ function fakeContext(
     data?: { sessionID?: string; text?: string };
   }[],
   directory = root,
+  messages: { parts?: { type: string; text?: string }[] }[] = [
+    { parts: [{ type: 'text', text: 'what the session said' }] },
+  ],
 ) {
   const created: { title?: string; parentID?: string }[] = [];
   const prompts: { sessionID: string; text: string }[] = [];
@@ -129,7 +133,7 @@ function fakeContext(
         });
         return { id: 'ses_archivist' };
       },
-      context: async () => [{ parts: [{ type: 'text', text: 'what the session said' }] }],
+      context: async () => messages,
       prompt: async (input) => {
         prompts.push({ sessionID: input.sessionID, text: input.text });
         return {};
@@ -359,6 +363,39 @@ describe('the OpenCode 2 path', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(removed).toEqual(['ses_old']);
+  });
+
+  it('records a report that contradicts the board', async () => {
+    // The report is the end of the round, and the board holds the status the
+    // round was persisted with. A report that claims another status is a
+    // finding, and the finding goes on the record.
+    await writeFile(join(root, '.openagentsy', 'harvest'), 'off', 'utf8');
+    const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
+    migrate(db);
+    createRecord(db, {
+      bean: '2c-2',
+      kind: 'status',
+      from: 'agentsy',
+      action: 'the round is over',
+      state: 'complete',
+      confidence: 'verified',
+    });
+    closeDatabase(db);
+
+    const { ctx, contextHooks, done } = fakeContext(
+      [{ type: 'session.execution.succeeded', data: { sessionID: 'ses_1' } }],
+      root,
+      [{ parts: [{ type: 'text', text: 'The round status is running.' }] }],
+    );
+    await setupV2(ctx);
+    for (const hook of contextHooks) {
+      await hook({ sessionID: 'ses_1', agent: 'agentsy' });
+    }
+    await done;
+
+    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
+    expect(audit).toContain('oa.round.status');
+    expect(audit).toContain('complete');
   });
 });
 

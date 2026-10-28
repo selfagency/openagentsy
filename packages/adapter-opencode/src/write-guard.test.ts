@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDatabase, grantLeases, migrate, openDatabase } from '@openagentsy/core';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { guardWrite, joinRoot, targetPathsOf } from './write-guard.js';
+import { joinRoot, targetPathsOf } from './write-guard.js';
 
 let root: string;
 
@@ -81,69 +81,5 @@ describe('joinRoot', () => {
     // test for a leading slash and join a Windows path into nonsense.
     const windows = 'C:\\repo\\src\\app.ts';
     expect(joinRoot('/repo', windows)).toBe(join('/repo', windows));
-  });
-});
-
-describe('guardWrite', () => {
-  it('allows a write to a file the agent holds', async () => {
-    await expect(
-      guardWrite(root, 'edit', { filePath: 'src/app.ts' }, 'oa-builder', 'ses-1'),
-    ).resolves.toBeUndefined();
-  });
-
-  it('refuses a write to a file no lease covers', async () => {
-    await expect(
-      guardWrite(root, 'edit', { filePath: 'docs/app.ts' }, 'oa-builder', 'ses-1'),
-    ).rejects.toThrow(/no lease covers/);
-  });
-
-  it('refuses a write from a session with no agent', async () => {
-    await expect(
-      guardWrite(root, 'edit', { filePath: 'src/app.ts' }, undefined, 'ses-1'),
-    ).rejects.toThrow(/no agent/);
-  });
-
-  it('refuses a write whose path cannot be read', async () => {
-    await expect(guardWrite(root, 'edit', {}, 'oa-builder', 'ses-1')).rejects.toThrow(
-      /names no path/,
-    );
-  });
-
-  it('allows a patch that touches a leased file', async () => {
-    const patchText = [
-      '*** Begin Patch',
-      '*** Update File: src/app.ts',
-      '@@',
-      '-old',
-      '+new',
-      '*** End Patch',
-    ].join('\n');
-    await expect(
-      guardWrite(root, 'apply_patch', { patchText }, 'oa-builder', 'ses-1'),
-    ).resolves.toBeUndefined();
-  });
-
-  it('refuses a patch that touches a file no lease covers', async () => {
-    const patchText = [
-      '*** Begin Patch',
-      '*** Update File: src/app.ts',
-      '@@',
-      '-old',
-      '+new',
-      '*** Update File: docs/app.ts',
-      '@@',
-      '-old',
-      '+new',
-      '*** End Patch',
-    ].join('\n');
-    await expect(
-      guardWrite(root, 'apply_patch', { patchText }, 'oa-builder', 'ses-1'),
-    ).rejects.toThrow(/no lease covers/);
-  });
-
-  it('leaves a tool that is not a write alone', async () => {
-    await expect(
-      guardWrite(root, 'read', { filePath: 'src/app.ts' }, 'oa-builder', 'ses-1'),
-    ).resolves.toBeUndefined();
   });
 });

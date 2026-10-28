@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { toV1Permissions, withProtectedPaths } from '@openagentsy/core';
+import { toV2Permissions, withProtectedPaths } from '@openagentsy/core';
 import { describe, expect, it } from 'vitest';
 import {
   candidateRecord,
@@ -92,9 +92,9 @@ describe('§4.6 the exit tests', () => {
     for (const name of names) {
       const role = roles.roles[name];
       if (role === undefined) continue;
-      const permissions = toV1Permissions(withProtectedPaths(role, roles.protectedPaths));
+      const permissions = toV2Permissions(withProtectedPaths(role, roles.protectedPaths));
       for (const tool of DECIDE_NAMES) {
-        expect(permissions[tool]).toBe('deny');
+        expect(permissions).toContainEqual({ action: tool, resource: '*', effect: 'deny' });
       }
     }
   });

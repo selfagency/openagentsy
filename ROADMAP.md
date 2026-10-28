@@ -6,11 +6,13 @@ open.
 
 ## 0.1.0 — the current release
 
-OpenCode V1, the board, the guard, the safety suite.
+OpenCode 2, the board, the guard, the safety suite. The 0.1.0 release shipped
+the OpenCode 1 path; the tree carries the OpenCode 2 path only now, and 0.2.0
+says what that changed.
 
 | Piece | State |
 | --- | --- |
-| Seven roles, generated for V1 and V2 from `roles.yaml` | done |
+| Seven roles, generated for OpenCode 2 from `roles.yaml` | done |
 | The board: records, leases, budgets, audit, classification | done |
 | The plugin: the lease guard, the effort ladder, the session harvest | done |
 | The model selector and the lock file | done |
@@ -44,28 +46,31 @@ OpenCode V1, the board, the guard, the safety suite.
 - The footprint estimator, the ledger and the offload router. These are the
   first of the 2a packages, and they need the new agent to be worth
   building.
-- The V2 harness port. See 0.2.0.
+- The OpenCode 2 harness port. See 0.2.0.
 - The AFT registration. The scout's guidance is conditional: it prefers the
   AFT tools when they are registered and reads narrowly with the built-in
   tools when they are not.
 
-## 0.2.0 — OpenCode V2
+## 0.2.0 — OpenCode 2, and only OpenCode 2
 
-The plan's exit test for the baseline was "the same suite runs on V1 and
-V2". It does not yet, and that is deliberate.
+The project speaks one runtime. The adapter, the generator and the CLI dropped
+the OpenCode 1 path: the plugin registers through `setup`, the generator writes
+one permission shape, and the CLI has no `--target` flag.
 
-OpenCode 2 has its own plugin API: the guard belongs in the permission hook,
-because that is where the agent identity and the target paths arrive. The
-adapter already has that path, and a conformance probe proves the plugin
-registers and the setup runs against the real V2 binary. What is missing is
-the harness: the V2 SDK and client have a different shape, so the suite
-needs its own runner.
+What the port measured, and what it costs:
+
+- The permission key is `shell` and the spawn tool is `subagent`. The `bash`
+  key and the `task` tool are gone.
+- The write guard runs on the permission hook, because that is where the agent
+  identity and the target paths arrive.
+- A command a person has to approve is an `ask` effect on that hook: OpenCode 2
+  gives a plugin no way to write the host's permission map.
+- The shell of an agent runs with the environment of the host. There is no
+  `shell.env` hook, so the shell environment policy has no place to tighten it.
 
 Also in 0.2.0:
 
-- The V1 permission key stays `bash`; V2 uses `shell` and `subagent`. The
-  mapping is already in the generator.
-- The board's tools are grouped, so a V2 session carries fewer of them.
+- The board's tools are grouped, so a session carries fewer of them.
 
 ## 2a and later — the agent as the product
 

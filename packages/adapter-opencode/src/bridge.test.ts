@@ -1,11 +1,8 @@
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeDatabase, createRecord, migrate, openDatabase } from '@openagentsy/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createBridge, type HostConfig } from './bridge.js';
-import type { ClientLike } from './client.js';
-import plugin from './index.js';
 
 let root: string;
 
@@ -267,93 +264,5 @@ describe('the bridge', () => {
 
     expect(refusals).toHaveLength(1);
     expect(config.permission?.['bash']).toEqual({ 'git push*': 'deny' });
-  });
-});
-
-/** A client that answers with one session's messages. */
-function fakeClient(messages: { parts?: { type: string; text?: string }[] }[]): ClientLike {
-  return {
-    provider: { list: async () => ({ data: { all: [] } }) },
-    session: {
-      create: async () => ({ data: {} }),
-      get: async () => ({ data: {} }),
-      list: async () => ({ data: [] }),
-      delete: async () => ({ data: true }),
-      messages: async () => ({ data: messages }),
-      promptAsync: async () => undefined,
-    },
-  };
-}
-
-describe('the idle path', () => {
-  it('says nothing about a file in a reply through the shipped hook', async () => {
-    // The review's own case, through the plugin: no finding, no annotation
-    // and no audit row.
-    const client = fakeClient([]);
-    const hooks = await plugin.server({ client, directory: root, worktree: '' });
-    const text = 'I changed packages/adapter-opencode/src/bridge.ts and the gate is green.';
-    const output = { text };
-
-    await hooks['experimental.text.complete']?.({ sessionID: 'ses-1' }, output);
-
-    expect(output.text).toBe(text);
-    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8').catch(() => '');
-    expect(audit).not.toContain('scope-drift');
-  });
-  it('records a report that contradicts the board', async () => {
-    await writeFile(join(root, '.openagentsy', 'harvest'), 'off', 'utf8');
-    const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
-    migrate(db);
-    createRecord(db, {
-      bean: '2c-2',
-      kind: 'status',
-      from: 'agentsy',
-      action: 'the round is over',
-      state: 'complete',
-      confidence: 'verified',
-    });
-    closeDatabase(db);
-
-    const client = fakeClient([
-      { parts: [{ type: 'text', text: 'The round status is running.' }] },
-    ]);
-    const hooks = await plugin.server({ client, directory: root, worktree: '' });
-    await hooks['chat.params']?.({ sessionID: 'ses-1', agent: 'agentsy' }, { options: {} });
-
-    await hooks.event?.({
-      event: { type: 'session.idle', properties: { sessionID: 'ses-1' } },
-    });
-
-    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
-    expect(audit).toContain('oa.round.status');
-    expect(audit).toContain('complete');
-  });
-
-  it('keeps the session alive when the idle path throws', async () => {
-    // The `event` hook is not awaited by OpenCode, so a throw there is a
-    // broken session and not a failed check. A rung file that cannot be
-    // written makes the idle path throw.
-    await writeFile(join(root, '.openagentsy', 'harvest'), 'off', 'utf8');
-    const rungs = join(root, '.openagentsy', 'rungs.json');
-    await writeFile(
-      rungs,
-      JSON.stringify({ 'ses-1': { role: 'lead', rungIndex: 0, reason: 'x', updatedAt: 'now' } }),
-      'utf8',
-    );
-    await chmod(rungs, 0o400);
-    const db = openDatabase(join(root, '.openagentsy', 'board.sqlite'));
-    migrate(db);
-    closeDatabase(db);
-
-    const client = fakeClient([{ parts: [{ type: 'text', text: 'The round is over.' }] }]);
-    const hooks = await plugin.server({ client, directory: root, worktree: '' });
-    await hooks['chat.params']?.({ sessionID: 'ses-1', agent: 'agentsy' }, { options: {} });
-
-    await expect(
-      hooks.event?.({ event: { type: 'session.idle', properties: { sessionID: 'ses-1' } } }),
-    ).resolves.toBeUndefined();
-
-    const audit = await readFile(join(root, '.openagentsy', 'audit.jsonl'), 'utf8');
-    expect(audit).toContain('oa.events.failed');
   });
 });
