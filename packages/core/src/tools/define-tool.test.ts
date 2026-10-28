@@ -1,7 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { defineTool, toolMap, v2Tool } from './define-tool.js';
+import {
+  defineTool,
+  type ToolCtx,
+  type ToolDef,
+  toolMap,
+  type V1ToolCtx,
+  v2Tool,
+} from './define-tool.js';
 import type { ToolDefinition } from './tool.js';
+
+/**
+ * Whether two types are the same, checked by the compiler.
+ *
+ * The check asks whether the two types are interchangeable in both
+ * directions, so a type that is wider than the other does not pass.
+ */
+type Same<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
 const definition = defineTool({
   description: 'Climb one rung on the reasoning effort ladder.',
@@ -107,5 +123,30 @@ describe('the tool definition helper', () => {
     await expect(v2.execute({ title: 'a task' }, { sessionID: 'ses_1' })).resolves.toEqual({
       content: '{"id":"tsk_1","title":"a task"}',
     });
+  });
+
+  it('counts on the session and the agent, and on nothing else', async () => {
+    // The context a definition is written against is the one the memory and
+    // the task packages are written against too, so the type has to be the
+    // same one the move carried over. It is checked at the type level and
+    // at the run level.
+    const seen: ToolCtx[] = [];
+    const watched = defineTool({
+      description: 'a tool',
+      args: z.object({ reason: z.string() }),
+      execute: async (_args, context) => {
+        seen.push(context);
+        return 'ok';
+      },
+    });
+
+    await watched.execute({ reason: 'x' }, { sessionID: 'ses_1', agent: 'oa-builder' });
+
+    const same: Same<Parameters<ToolDef<typeof watched.args>['execute']>[1], ToolCtx> = true;
+    const derived: Same<ToolCtx, Pick<V1ToolCtx, 'sessionID' | 'agent'>> = true;
+    expect(same).toBe(true);
+    expect(derived).toBe(true);
+    expect(seen).toEqual([{ sessionID: 'ses_1', agent: 'oa-builder' }]);
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual(['agent', 'sessionID']);
   });
 });

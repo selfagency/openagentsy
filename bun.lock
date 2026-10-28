@@ -60,6 +60,7 @@
       "dependencies": {
         "drizzle-orm": "^0.45.4",
         "yaml": "^2.8.0",
+        "zod": "^4.1.8",
       },
       "devDependencies": {
         "@types/node": "^24.3.0",
@@ -159,7 +160,6 @@
       "name": "@openagentsy/memory",
       "version": "0.2.0",
       "dependencies": {
-        "@openagentsy/adapter-opencode": "workspace:^",
         "@openagentsy/core": "workspace:^",
         "nanoid": "6.0.2",
         "zod": "4.6.7",
@@ -235,7 +235,6 @@
       "name": "@openagentsy/tasks",
       "version": "0.2.0",
       "dependencies": {
-        "@openagentsy/adapter-opencode": "workspace:^",
         "@openagentsy/core": "workspace:^",
         "nanoid": "6.0.2",
         "yaml": "2.9.1",

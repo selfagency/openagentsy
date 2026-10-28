@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { toolMap } from '@openagentsy/adapter-opencode';
+import { toolMap } from '@openagentsy/core';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_LENGTH, DEFAULT_PREFIX } from './ids.js';
 import { primeBlock } from './prime.js';

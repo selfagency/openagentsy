@@ -1,9 +1,9 @@
 import { join } from 'node:path';
+import { defineTool, type V2ToolDefinition, v2Tool } from '@openagentsy/core';
 import { applyShellEnvPolicy } from '@openagentsy/hooks/shell-env';
 import { closeLedger, openLedger } from '@openagentsy/ledger';
 import { z } from 'zod';
 import { boardRoundStatus } from './board-status.js';
-import { defineTool, type V2ToolDefinition, v2Tool } from './define-tool.js';
 import {
   appendAudit,
   POLICIES,

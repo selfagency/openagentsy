@@ -1,5 +1,4 @@
-import { defineTool } from '@openagentsy/adapter-opencode';
-import { taskToolNames } from '@openagentsy/core';
+import { defineTool, taskToolNames } from '@openagentsy/core';
 import { z } from 'zod';
 import { PRIORITIES, STATUSES, type Task, TYPES } from './model.js';
 import { index, next, ready, sortTasks } from './query.js';

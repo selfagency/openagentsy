@@ -1,13 +1,13 @@
 import { setupV2, type V2Context } from './v2.js';
 
-export type { ToolCtx, ToolDef, V2ToolDefinition } from './define-tool.js';
+export type { ToolCtx, ToolDef, V2ToolDefinition } from '@openagentsy/core';
 /**
  * The tool definition helper.
  *
  * A package that registers tools of its own defines them once and hands
  * them to the runtime through this.
  */
-export { defineTool, toolMap, v2Tool } from './define-tool.js';
+export { defineTool, toolMap, v2Tool } from '@openagentsy/core';
 
 /**
  * OpenAgentsy for OpenCode 2.
