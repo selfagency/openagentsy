@@ -1,6 +1,6 @@
 import type { SessionMessageInfo } from '@opencode/client';
 import type { Plugin } from '@opencode/plugin/tui';
-import { RGBA } from '@opentui/core';
+import { type CapturedFrame, RGBA } from '@opentui/core';
 import { testRender } from '@opentui/solid';
 import type { JSX } from 'solid-js';
 import { createStore, produce, type Store } from 'solid-js/store';
@@ -20,6 +20,39 @@ const BASE = RGBA.fromHex('#e6e6e6');
 
 /** The colour of the quiet text. */
 const MUTED = RGBA.fromHex('#8a8a8a');
+
+/**
+ * The colour of the error text.
+ *
+ * The framing rules ban it (§7.6): a block paints a measurement, and a
+ * measurement in the error colour is a verdict the block has no business
+ * making.
+ */
+export const ERROR = RGBA.fromHex('#ff5f5f');
+
+/**
+ * The colour of the warning text.
+ *
+ * The framing rules ban it too, and for the same reason.
+ */
+export const WARNING = RGBA.fromHex('#ffaf00');
+
+/**
+ * The colours the fake host paints with.
+ *
+ * A test that wants to see what a rule does when it is broken changes a
+ * colour here, and the block paints with it.
+ */
+export interface FakeTheme {
+  /** The colour of the normal text. */
+  readonly base?: RGBA;
+  /** The colour of the quiet text. */
+  readonly muted?: RGBA;
+  /** The colour of the error text. */
+  readonly error?: RGBA;
+  /** The colour of the warning text. */
+  readonly warning?: RGBA;
+}
 
 /** The factory of a keymap layer, as the host types it. */
 export type LayerFactory = Parameters<Plugin.Context['keymap']['layer']>[0];
@@ -45,6 +78,8 @@ export interface HostOptions {
   readonly family?: readonly string[];
   /** The session the block is about. */
   readonly sessionID?: string;
+  /** The colours the host paints with. */
+  readonly theme?: FakeTheme;
 }
 
 /**
@@ -73,8 +108,33 @@ export function fakeHost(options: HostOptions = {}): Host {
     },
   };
 
+  const colours = options.theme ?? {};
+  const base = colours.base ?? BASE;
+  const muted = colours.muted ?? MUTED;
+  const error = colours.error ?? ERROR;
+  const warning = colours.warning ?? WARNING;
+
   const theme = {
-    text: { base: BASE, muted: MUTED, faint: MUTED },
+    text: {
+      base,
+      muted,
+      faint: muted,
+      feedback: {
+        error: { base: error, muted: error },
+        warning: { base: warning, muted: warning },
+        success: { base, muted },
+        info: { base, muted },
+      },
+    },
+    background: {
+      base: muted,
+      feedback: {
+        error: { base: error },
+        warning: { base: warning },
+        success: { base },
+        info: { base },
+      },
+    },
   };
 
   const ui = {
@@ -161,8 +221,52 @@ export async function renderFrame(
 ): Promise<string> {
   const { width, height } = { ...DEFAULT_RENDER, ...options };
   const setup = await testRender(tree, { width, height });
-  await setup.renderOnce();
-  const frame = setup.captureCharFrame();
-  await setup.dispose();
-  return frame;
+  try {
+    await setup.renderOnce();
+    return setup.captureCharFrame();
+  } finally {
+    await setup.dispose();
+  }
+}
+
+/**
+ * A frame a tree draws, clicked at a point.
+ *
+ * The point is a column and a row of the frame, so a test clicks the line it
+ * means to click.
+ */
+export async function clickFrame(
+  tree: () => JSX.Element,
+  at: { readonly x: number; readonly y: number },
+  options: RenderOptions = {},
+): Promise<void> {
+  const { width, height } = { ...DEFAULT_RENDER, ...options };
+  const setup = await testRender(tree, { width, height });
+  try {
+    await setup.renderOnce();
+    await setup.mockMouse.click(at.x, at.y);
+    await setup.flush();
+  } finally {
+    await setup.dispose();
+  }
+}
+
+/**
+ * The frame a tree draws, as spans.
+ *
+ * The spans carry the colours the frame was painted with, so a test can ask
+ * what colour a line is without reading the theme (§7.6).
+ */
+export async function renderSpans(
+  tree: () => JSX.Element,
+  options: RenderOptions = {},
+): Promise<CapturedFrame> {
+  const { width, height } = { ...DEFAULT_RENDER, ...options };
+  const setup = await testRender(tree, { width, height });
+  try {
+    await setup.renderOnce();
+    return setup.captureSpans();
+  } finally {
+    await setup.dispose();
+  }
 }

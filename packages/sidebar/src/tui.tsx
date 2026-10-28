@@ -8,6 +8,7 @@ import { BoardBlock } from './blocks/board.js';
 import { BudgetBlock } from './blocks/budget.js';
 import { FootprintBlock } from './blocks/footprint.js';
 import { MemoryInboxBlock } from './blocks/memory.js';
+import { memoryDecider, memoryInboxKeymap } from './blocks/memory.keymap.js';
 import { MethodPanel } from './blocks/method.js';
 import { TasksBlock } from './blocks/tasks.js';
 import { type FootprintConfig, readFootprintConfig } from './config.js';
@@ -55,8 +56,7 @@ type Views = {
  * workspace's: a session in a worktree reads the board of the project and
  * the tasks of its own branch (§3.9).
  */
-async function loadViews(directory: string): Promise<Views> {
-  const roots = resolveProjectRoots(directory);
+async function loadViews(roots: ReturnType<typeof resolveProjectRoots>): Promise<Views> {
   const [board, tasks, budget, memory, accountability] = await Promise.all([
     readBoard(roots.stateRoot),
     readTasks(roots.workspace),
@@ -76,8 +76,14 @@ export default Plugin.define({
 
     const root = context.location?.directory;
     if (root) {
+      const roots = resolveProjectRoots(root);
       void readFootprintConfig(root).then(setConfig, () => undefined);
-      void loadViews(root).then(setViews, () => undefined);
+      void loadViews(roots).then(setViews, () => undefined);
+      memoryInboxKeymap({
+        context,
+        view: () => views()?.memory ?? { candidates: [] },
+        decide: memoryDecider(roots.stateRoot),
+      });
     }
 
     const releaseBlock = context.ui.slot({

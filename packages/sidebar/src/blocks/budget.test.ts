@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { collapseStore } from '../persist.js';
 import type { BudgetView } from '../readers.js';
+import { BUDGET, EMPTY_BUDGET } from '../testing/fixtures.js';
 import { fakeHost, renderFrame } from '../testing/harness.js';
 import { budgetTree } from './budget.render.js';
 
@@ -11,50 +12,7 @@ import { budgetTree } from './budget.render.js';
  * block and the `oa ledger` command answer the same question the same way.
  */
 
-const VIEW: BudgetView = {
-  totals: {
-    messages: 12,
-    tokens: 12_345,
-    input: 4_000,
-    output: 8_000,
-    reasoning: 0,
-    cacheRead: 200,
-    cacheWrite: 145,
-    usd: 0.42,
-    unpricedMessages: 0,
-  },
-  byRole: [
-    { role: 'build', messages: 8, tokens: 8_000, usd: 0.3, unpriced: 0 },
-    { role: 'lead', messages: 4, tokens: 4_345, usd: 0.12, unpriced: 0 },
-  ],
-  waste: { tokens: 120, percentage: 1 },
-  tokensPerTask: 4_000,
-  offload: { messages: 3, tokens: 2_000, usd: 0.01 },
-  caps: [
-    { bean: 'proj-42', tokenLimit: 180_000, stopAt: 153_000, tokensUsed: 40_000, stop: false },
-  ],
-};
-
-const EMPTY: BudgetView = {
-  totals: {
-    messages: 0,
-    tokens: 0,
-    input: 0,
-    output: 0,
-    reasoning: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    usd: null,
-    unpricedMessages: 0,
-  },
-  byRole: [],
-  waste: { tokens: 0, percentage: 0 },
-  tokensPerTask: null,
-  offload: { messages: 0, tokens: 0, usd: null },
-  caps: [],
-};
-
-async function frame(view: BudgetView = VIEW): Promise<string> {
+async function frame(view: BudgetView = BUDGET): Promise<string> {
   const host = fakeHost();
   const collapse = collapseStore(host.context);
   return renderFrame(() => budgetTree(host.context, view, collapse));
@@ -96,7 +54,7 @@ describe('the budget block', () => {
   });
 
   it('says the price is unknown when no message carried one', async () => {
-    const text = await frame(EMPTY);
+    const text = await frame(EMPTY_BUDGET);
 
     expect(text).toContain('unpriced');
     expect(text).toContain('per task · no completed task');

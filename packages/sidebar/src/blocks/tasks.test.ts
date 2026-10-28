@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { collapseStore } from '../persist.js';
 import type { TasksView } from '../readers.js';
+import { EMPTY_TASKS, TASKS } from '../testing/fixtures.js';
 import { fakeHost, renderFrame } from '../testing/harness.js';
 import { tasksTree } from './tasks.render.js';
 
@@ -12,18 +13,7 @@ import { tasksTree } from './tasks.render.js';
  * the meaning of a blocked task.
  */
 
-const VIEW: TasksView = {
-  inProgress: [{ id: 'oa-4f2k', title: 'fix the ranges' }],
-  ready: [
-    { id: 'oa-9x1p', title: 'write the reader' },
-    { id: 'oa-2b7q', title: 'add the check' },
-  ],
-  blocked: 2,
-};
-
-const EMPTY: TasksView = { inProgress: [], ready: [], blocked: 0 };
-
-async function frame(view: TasksView = VIEW): Promise<string> {
+async function frame(view: TasksView = TASKS): Promise<string> {
   const host = fakeHost();
   const collapse = collapseStore(host.context);
   return renderFrame(() => tasksTree(host.context, view, collapse));
@@ -53,7 +43,7 @@ describe('the tasks block', () => {
   });
 
   it('says so when no task is open', async () => {
-    const text = await frame(EMPTY);
+    const text = await frame(EMPTY_TASKS);
 
     expect(text).toContain('no open task');
   });

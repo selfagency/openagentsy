@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { collapseStore } from '../persist.js';
 import type { AccountabilityView } from '../readers.js';
+import { ACCOUNTABILITY, EMPTY_ACCOUNTABILITY } from '../testing/fixtures.js';
 import { fakeHost, renderFrame } from '../testing/harness.js';
 import { accountabilityTree } from './accountability.render.js';
 
@@ -12,21 +13,7 @@ import { accountabilityTree } from './accountability.render.js';
  * nothing counts them.
  */
 
-const VIEW: AccountabilityView = {
-  lessons: 3,
-  waivers: 2,
-  memory: 1,
-  outcomes: { tasksCompleted: 2, tasksScrapped: 0, commits: 5, prsMerged: 1 },
-};
-
-const EMPTY: AccountabilityView = {
-  lessons: 0,
-  waivers: 0,
-  memory: 0,
-  outcomes: { tasksCompleted: 0, tasksScrapped: 0, commits: 0, prsMerged: 0 },
-};
-
-async function frame(view: AccountabilityView = VIEW): Promise<string> {
+async function frame(view: AccountabilityView = ACCOUNTABILITY): Promise<string> {
   const host = fakeHost();
   const collapse = collapseStore(host.context);
   return renderFrame(() => accountabilityTree(host.context, view, collapse));
@@ -51,7 +38,7 @@ describe('the accountability block', () => {
   });
 
   it('says so when nothing waits for a decision', async () => {
-    const text = await frame(EMPTY);
+    const text = await frame(EMPTY_ACCOUNTABILITY);
 
     expect(text).toContain('nothing waiting for a decision');
   });

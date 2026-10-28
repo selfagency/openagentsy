@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { collapseStore } from '../persist.js';
 import type { BoardView } from '../readers.js';
+import { BOARD, EMPTY_BOARD } from '../testing/fixtures.js';
 import { fakeHost, renderFrame } from '../testing/harness.js';
 import { boardTree } from './board.render.js';
 
@@ -12,15 +13,7 @@ import { boardTree } from './board.render.js';
  * ones the core package read off the board's own tables.
  */
 
-const VIEW: BoardView = {
-  records: 12,
-  leases: [{ bean: 'proj-42', agent: 'builder-2', glob: 'packages/core/**', minutes: 7 }],
-  budgets: [{ bean: 'proj-42', tokenLimit: 180_000, stopAt: 153_000, tokensUsed: 40_000 }],
-};
-
-const EMPTY: BoardView = { records: 0, leases: [], budgets: [] };
-
-async function frame(view: BoardView = VIEW): Promise<string> {
+async function frame(view: BoardView = BOARD): Promise<string> {
   const host = fakeHost();
   const collapse = collapseStore(host.context);
   return renderFrame(() => boardTree(host.context, view, collapse));
@@ -50,7 +43,7 @@ describe('the board block', () => {
   });
 
   it('says so when the board holds nothing', async () => {
-    const text = await frame(EMPTY);
+    const text = await frame(EMPTY_BOARD);
 
     expect(text).toContain('0 records');
     expect(text).toContain('nothing on the board yet');
