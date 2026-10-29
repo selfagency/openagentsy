@@ -6,10 +6,12 @@ import {
   contentOf,
   isDestructiveCommand,
   isProtected,
+  shellViolation,
   skipsGitHooks,
   usesOtherPackageManager,
 } from './guards.js';
 import { isInside, projectName, worktreeRoot } from './paths.js';
+import { blindWriteReason, PROTECT_REASON } from './policies/protect-policy.js';
 import { type QualityRuleOptions, qualityAfterWrite } from './quality/rule.js';
 import type { HandlerResult, Rule } from './registry.js';
 
@@ -19,6 +21,8 @@ export {
   isDestructiveCommand,
   isProtected,
   scannedParts,
+  shellViolation,
+  shellWriteTargets,
   skipsGitHooks,
   substitutionPayloads,
   tokenise,
@@ -172,6 +176,18 @@ export const defaultRules = ({
       handler: (event) => {
         const call = readPreToolCall(event);
         if (call === undefined) return CONTINUE;
+        if (isReaderTool(call.toolName)) return CONTINUE;
+        // The shell writes files too, and the file tool's paths do not name
+        // them: the write targets of the command are read here.
+        if (call.command !== undefined) {
+          const violation = shellViolation(call.command, root);
+          if (violation !== undefined) {
+            if (violation.kind === 'blind') {
+              return { continue: false, reason: blindWriteReason(violation.command) };
+            }
+            return { continue: false, reason: PROTECT_REASON };
+          }
+        }
         if (!writesFiles(call)) return CONTINUE;
         const touched = call.files.some(
           (file) =>
@@ -181,8 +197,7 @@ export const defaultRules = ({
         if (!touched) return CONTINUE;
         return {
           continue: false,
-          reason:
-            'Policy, role, permission, build-config, lockfile, hook, workflow, lesson and waiver files are changed by a person (or, for bun.lock, by `bun add`; for roles.yaml and templates, by running the generator). Propose the change in chat.',
+          reason: PROTECT_REASON,
         };
       },
     },
