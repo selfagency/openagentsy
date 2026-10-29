@@ -2412,7 +2412,7 @@ Questions 1–14 are revision 2's; the void V1 question below is kept for the re
 22. **Scope declaration review** — who reviews scope declarations for first-party roles? Recommended: at least two maintainers, against the 12 ethics review questions (§17.5); changes go through `CHANGELOG-SAFETY.md`.
 23. **Communication style and accessibility** — does `verbosity: 'concise'` disadvantage users who need more context (e.g., neurodivergent users, non-native speakers)? Recommended: default `moderate`; the `prefersExamples` flag addresses context needs; review in §18.1 cat 11 intersectional adequacy scenarios.
 24. **Memory `verified` flag default** — should new memories default to `verified: false` (conservative) or `verified: true` (trusting the archivist)? Recommended: `false` (conservative); a person verifies when they trust the source. This is the VSD principle (§17.3) applied. **Decided 2026-10-28: `true`.** The archivist's judgement is the source, and a person marks a memory unverified when they disagree; the search still redacts what a person marked unverified.
-25. **Incident response drill frequency** — quarterly (§19.6)? Recommended: yes; more often if the framework is changing fast; less often if stable.
+25. **Incident response drill frequency** — quarterly (§19.6)? Recommended: yes; more often if the framework is changing fast; less often if stable. **Decided 2026-10-29: on demand.** The project has one maintainer and no scheduled runner, so a quarterly drill would be a promise with no calendar behind it; the drill is run when the framework changes fast enough to want one, when an S0 or S1 incident has just happened, or when a person asks for it. The record still goes into `CHANGELOG-SAFETY.md` under `drill`.
 26. **`oa release-check` enforcement** — should it be a hard gate in CI (nonzero exit blocks release) or a soft warning? Recommended: hard gate for first-party templates and roles; soft warning for libraries.
 27. **Policy module third-party extensions** — can downstream projects add their own policy modules? Recommended: yes, via `packages/hooks/src/policies/` plugin discovery; third-party modules are marked `external` in `policy_firing` and don't count toward the first-party release criteria.
 28. **Credential broker and the `human-only-decisions` rule** — `oa_credential_request` is human-only (§23.6). But what about `broker.use` (which is called by the tool's execution context, not the agent)? Recommended: `use` is not a decision; it's a mechanical injection. The decision was the `request`; the `use` is the consequence. So `use` is not human-only.
@@ -2644,7 +2644,11 @@ Breaking changes to the public API, prompt module contracts (§21), policy inter
 
 ### 19.6 Incident response drill
 
-Once per quarter, the maintainers run a tabletop drill: a simulated S0 incident is walked through the six-step runbook, the severity matrix is applied, and the response time is measured. The drill's outcome is recorded in `CHANGELOG-SAFETY.md` under a `drill` heading. The drill surfaces gaps in the runbook before a real incident does.
+The maintainers run a tabletop drill **on demand**: when the framework changes fast enough that a runbook gap is plausible, after an S0 or S1 incident, or when a person asks for one. A simulated S0 incident is walked through the six-step runbook, the severity matrix is applied, and the response time is measured. The drill's outcome is recorded in `CHANGELOG-SAFETY.md` under a `drill` heading. The drill surfaces gaps in the runbook before a real incident does.
+
+**Why on demand and not quarterly** (decided 2026-10-29): a quarterly drill needs a calendar and someone to run it. The project has one maintainer and no scheduled runner, so a quarterly cadence would be a promise with nothing behind it — and a promise nobody keeps is worse than no promise, because the record says a drill happened. The on-demand rule has a trigger a person can point at: the framework changed, an incident happened, or someone asked. A drill that is run because a trigger fired is worth more than one that is run because a quarter ended.
+
+The first drill has still not run. `CHANGELOG-SAFETY.md` says so, under `drill`, and it keeps saying so until one does.
 
 ---
 

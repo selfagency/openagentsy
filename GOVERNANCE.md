@@ -292,11 +292,9 @@ criterion.
 
 ### The drill (`oa.gov.drill`)
 
-Once a quarter the maintainers run a tabletop drill: a simulated S0 incident
-is walked through the six steps, the severity matrix is applied, and the
-response time is measured. The outcome is recorded in `CHANGELOG-SAFETY.md`
-under a `drill` heading. The drill finds the gaps in the runbook before a
-real incident does.
+The maintainers run a tabletop drill **on demand**: when the framework changes fast enough that a runbook gap is plausible, after an S0 or S1 incident, or when a person asks for one. A simulated S0 incident is walked through the six steps, the severity matrix is applied, and the response time is measured. The outcome is recorded in `CHANGELOG-SAFETY.md` under a `drill` heading. The drill finds the gaps in the runbook before a real incident does.
+
+It is not a quarterly obligation. A cadence with no calendar behind it becomes a promise nobody keeps, and the record would then say a drill happened when none did. The triggers are the things a person can point at: the framework changed, an incident happened, or someone asked. (Decided 2026-10-29.)
 
 ## The transparency
 

@@ -297,6 +297,8 @@ Breaking changes to the public API, prompt module contracts (§21), policy inter
 
 ### 19.6 Incident response drill
 
+**Superseded by the applied plan on 2026-10-29:** the drill is run on demand, not once per quarter. The applied `plans/PHASE-2-PLAN.md` §19.6 carries the decision and its reasoning; this delta keeps the original quarterly wording as the historical record of what revision 3 proposed.
+
 Once per quarter, the maintainers run a tabletop drill: a simulated S0 incident is walked through the six-step runbook, the severity matrix is applied, and the response time is measured. The drill's outcome is recorded in `CHANGELOG-SAFETY.md` under a `drill` heading. The drill surfaces gaps in the runbook before a real incident does.
 
 ---
@@ -1107,7 +1109,7 @@ New questions raised by revision 3 (in addition to revision 2's 14):
 22. **Scope declaration review** — who reviews scope declarations for first-party roles? Recommended: at least two maintainers, against the 12 ethics review questions (§17.5); changes go through `CHANGELOG-SAFETY.md`.
 23. **Communication style and accessibility** — does `verbosity: 'concise'` disadvantage users who need more context (e.g., neurodivergent users, non-native speakers)? Recommended: default `moderate`; the `prefersExamples` flag addresses context needs; review in §18.1 cat 11 intersectional adequacy scenarios.
 24. **Memory `verified` flag default** — should new memories default to `verified: false` (conservative) or `verified: true` (trusting the archivist)? Recommended: `false` (conservative); a person verifies when they trust the source. This is the VSD principle (§17.3) applied.
-25. **Incident response drill frequency** — quarterly (§19.6)? Recommended: yes; more often if the framework is changing fast; less often if stable.
+25. **Incident response drill frequency** — quarterly (§19.6)? Recommended: yes; more often if the framework is changing fast; less often if stable. **Decided 2026-10-29: on demand** (see the applied plan, §19.6).
 26. **`oa release-check` enforcement** — should it be a hard gate in CI (nonzero exit blocks release) or a soft warning? Recommended: hard gate for first-party templates and roles; soft warning for libraries.
 27. **Policy module third-party extensions** — can downstream projects add their own policy modules? Recommended: yes, via `packages/hooks/src/policies/` plugin discovery; third-party modules are marked `external` in `policy_firing` and don't count toward the first-party release criteria.
 28. **Credential broker and the `human-only-decisions` rule** — `oa_credential_request` is human-only (§23.6). But what about `broker.use` (which is called by the tool's execution context, not the agent)? Recommended: `use` is not a decision; it's a mechanical injection. The decision was the `request`; the `use` is the consequence. So `use` is not human-only.
