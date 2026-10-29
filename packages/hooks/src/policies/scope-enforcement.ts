@@ -1,4 +1,4 @@
-import { detectScopeDrift } from '../output-checks.js';
+import { detectScopeDrift } from '../output-detectors.js';
 import { allow, findingsOf, flag, type PolicyModule } from '../policy.js';
 
 /**

@@ -1,4 +1,4 @@
-import { detectSycophancy } from '../output-checks.js';
+import { detectSycophancy } from '../output-detectors.js';
 import { allow, flag, type PolicyModule } from '../policy.js';
 
 /**

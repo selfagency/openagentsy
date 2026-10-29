@@ -1,3 +1,4 @@
+import type { PolicyFiring, PolicyFiringSink } from '@openagentsy/core';
 import { baseToolName, toolVocabulary } from '@openagentsy/hooks/base-tool';
 import type { FileRef } from '@openagentsy/hooks/event';
 import { type OutputFinding, outputCheckRules } from '@openagentsy/hooks/output-checks';
@@ -5,6 +6,7 @@ import type { QualityMode } from '@openagentsy/hooks/quality/rule';
 import { createOaRegistry, type HookRegistry, type Rule } from '@openagentsy/hooks/registry';
 import { defaultRules } from '@openagentsy/hooks/rules';
 import { applyShellEnvPolicy } from '@openagentsy/hooks/shell-env';
+import { createPolicyFiringSink, openLedger } from '@openagentsy/ledger';
 import { changedFiles } from './changed-files.js';
 import {
   mergePermissions,
@@ -161,6 +163,14 @@ export type BridgeOptions = {
   };
   /** Where the refusal of a permission merge goes. */
   onPermissionRefusal?: (error: Error) => void | Promise<void>;
+  /**
+   * Where the policy firings go.
+   *
+   * The sink is the caller's choice, and the ledger is the one the plan
+   * names (§21.3): a bridge without one writes its own, so the guard path
+   * never decides without leaving a row behind.
+   */
+  firings?: PolicyFiringSink | undefined;
 };
 
 /**
@@ -302,10 +312,47 @@ const SCOPE_DRIFT_RULE = 'output-scope-drift';
 function outputRules(
   statedPaths: readonly string[],
   sink: (findings: OutputFinding[]) => void,
+  firings: PolicyFiringSink,
 ): Rule[] {
-  const rules = outputCheckRules({ statedPaths, onFindings: sink });
+  const rules = outputCheckRules({ statedPaths, onFindings: sink, firings });
   if (statedPaths.length > 0) return rules;
   return rules.filter((rule) => rule.id !== SCOPE_DRIFT_RULE);
+}
+
+/**
+ * The message of an error, when it has one.
+ */
+function describe(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A sink that writes the firings into the ledger of a state root (§21.3).
+ *
+ * The ledger is opened when the first row is written and kept open for the
+ * life of the bridge: the guard path runs on every tool call, and opening
+ * the database on each of them would cost more than the row is worth.
+ *
+ * A write that fails is neither swallowed nor hidden. The error goes out of
+ * the record with its cause, and the call does not happen: the guard is the
+ * security property and the row is its evidence, so a decision that cannot
+ * be accounted for is refused rather than made quietly.
+ */
+function ledgerFiringSink(stateRoot: string): PolicyFiringSink {
+  let sink: PolicyFiringSink | undefined;
+  return {
+    record: (firing: PolicyFiring) => {
+      try {
+        sink ??= createPolicyFiringSink(openLedger(stateRoot));
+        sink.record(firing);
+      } catch (error) {
+        throw new Error(
+          `the firing of ${firing.policyId} could not be recorded, so the call was not made: ${describe(error)}`,
+          { cause: error },
+        );
+      }
+    },
+  };
 }
 
 /**
@@ -316,6 +363,10 @@ function outputRules(
  */
 export function createBridge(options: BridgeOptions): BridgeHooks {
   const statedPaths = options.statedPaths ?? [];
+  // The firing log is the ledger's, and the ledger is the one the plan
+  // names: a bridge that was given no sink writes its own, so every
+  // decision the guard path takes leaves a row behind.
+  const firings = options.firings ?? ledgerFiringSink(options.stateRoot);
 
   /**
    * The scope of the task a session is working on.
@@ -340,6 +391,7 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
     ...defaultRules({
       workspace: options.workspace,
       stateRoot: options.stateRoot,
+      firings,
       ...(options.quality === undefined ? {} : { quality: options.quality }),
     }),
     ...(options.rules ?? []),
@@ -421,9 +473,13 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
       const findings: OutputFinding[] = [];
       const scope = await scopeOf(input.sessionID);
       const checks = createOaRegistry(
-        outputRules(scope, (found) => {
-          findings.push(...found);
-        }),
+        outputRules(
+          scope,
+          (found) => {
+            findings.push(...found);
+          },
+          firings,
+        ),
       );
       await checks.run('PreResponse', {
         type: 'PreResponse',

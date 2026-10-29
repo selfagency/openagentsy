@@ -1,4 +1,4 @@
-import { detectAnthropomorphising } from '../output-checks.js';
+import { detectAnthropomorphising } from '../output-detectors.js';
 import { allow, flag, type PolicyModule } from '../policy.js';
 
 /**

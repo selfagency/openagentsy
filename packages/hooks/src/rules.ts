@@ -1,19 +1,16 @@
-import { isAbsolute, resolve } from 'node:path';
-import { findSecrets } from '@openagentsy/core';
+import type { PolicyFiringSink } from '@openagentsy/core';
 import { approvalGate, createApprovalStore } from './approvals.js';
-import { isReaderTool, isWritingTool, type PreToolCallEvent, readPreToolCall } from './event.js';
-import {
-  contentOf,
-  isDestructiveCommand,
-  isProtected,
-  shellViolation,
-  skipsGitHooks,
-  usesOtherPackageManager,
-} from './guards.js';
-import { isInside, projectName, worktreeRoot } from './paths.js';
-import { blindWriteReason, PROTECT_REASON } from './policies/protect-policy.js';
+import { isDestructiveCommand } from './guards.js';
+import { destructiveNeedsApproval } from './policies/destructive-needs-approval.js';
+import { humanOnlyDecisions } from './policies/human-only-decisions.js';
+import { noSkipGitHooks } from './policies/no-skip-git-hooks.js';
+import { packageManager } from './policies/package-manager.js';
+import { protectPolicy } from './policies/protect-policy.js';
+import { secretScanWrites } from './policies/secret-scan-writes.js';
+import { workspaceWritesOnly } from './policies/workspace-writes-only.js';
+import { approvalPolicyRule, policyRule } from './policy-rule.js';
 import { type QualityRuleOptions, qualityAfterWrite } from './quality/rule.js';
-import type { HandlerResult, Rule } from './registry.js';
+import type { Rule } from './registry.js';
 
 export {
   commandSegments,
@@ -36,56 +33,16 @@ export {
  * blocking: a call that trips one of them does not happen. The output
  * checks are the other half of the package, and they flag instead.
  *
+ * Every one of them is a policy module (§21.2) behind the bridge of
+ * `policy-rule.ts`: the module decides, the rule carries the decision, and
+ * the evaluation leaves a row in the firing log. The ids are the legacy
+ * ones, so a rule that is named in a test or in a record is still the rule
+ * that name refers to.
+ *
  * The readings the rules make - the command, the path, the content of a
  * write - live in `guards.ts`, so the policy modules read the same thing
  * the rules read.
  */
-
-/** The answer of a rule that lets the call through. */
-const CONTINUE: HandlerResult = { continue: true };
-
-/**
- * The tools a person decides with.
- *
- * The permission map denies these to every agent role, and that map is the
- * primary enforcement: the rule is the second layer, for the built-in
- * tools and for any host where the map is not the whole answer.
- */
-const HUMAN_ONLY_TOOLS = ['oa_lesson_decide', 'oa_quality_waive', 'oa_memory_decide'];
-
-/**
- * A path, made absolute against the workspace.
- *
- * A host names a file either way, and a relative path is relative to the
- * project the agent works in.
- */
-function absolutePath(root: string, path: string): string {
-  return isAbsolute(path) ? path : resolve(root, path);
-}
-
-/**
- * Whether a call writes a file.
- *
- * A known writing tool writes. A known reader does not, even when the
- * host says which file it read, so the exclusion cannot come back through
- * the bridge. A name that is neither is treated as a writer when the
- * call carries a file: a rule that let an unknown name through would let
- * every write the host names in an unfamiliar way through.
- */
-function writesFiles(call: PreToolCallEvent): boolean {
-  if (isReaderTool(call.toolName)) return false;
-  if (isWritingTool(call.toolName)) return true;
-  return call.files.length > 0;
-}
-
-/**
- * Whether a call writes content.
- */
-function writesContent(call: PreToolCallEvent): boolean {
-  if (isReaderTool(call.toolName)) return false;
-  if (isWritingTool(call.toolName)) return true;
-  return contentOf(call) !== '';
-}
 
 /** The options the default rules are built with. */
 export interface DefaultRuleOptions {
@@ -102,6 +59,13 @@ export interface DefaultRuleOptions {
    * rather than registered and idle.
    */
   quality?: Omit<QualityRuleOptions, 'workspace' | 'stateRoot'>;
+  /**
+   * Where the policy firings go.
+   *
+   * A rule without a sink decides and records nothing: the log is the
+   * caller's choice, and a guard that runs without one still guards.
+   */
+  firings?: PolicyFiringSink | undefined;
 }
 
 /**
@@ -114,135 +78,58 @@ export const defaultRules = ({
   stateRoot,
   home,
   quality,
+  firings,
 }: DefaultRuleOptions): Rule[] => {
-  const root = resolve(workspace);
-  const roots = [root, worktreeRoot(projectName(root), home)];
   const approvals = createApprovalStore(stateRoot);
+  // The firing sink is the same for every rule: the log is one log.
+  const guard = { firings };
   return [
     ...(quality === undefined ? [] : [qualityAfterWrite({ workspace, stateRoot, ...quality })]),
-    {
+    policyRule(noSkipGitHooks, {
+      ...guard,
       id: 'no-skip-git-hooks',
       event: 'PreToolCall',
       block: true,
-      handler: (event) => {
-        const call = readPreToolCall(event);
-        if (call === undefined || call.command === undefined) return CONTINUE;
-        if (!skipsGitHooks(call.command)) return CONTINUE;
-        return {
-          continue: false,
-          reason: 'Git hooks (lint, typecheck) cannot be skipped. Fix the reported errors instead.',
-        };
-      },
-    },
-    {
+    }),
+    policyRule(packageManager, {
+      ...guard,
       id: 'package-manager',
       event: 'PreToolCall',
       block: true,
-      handler: (event) => {
-        const call = readPreToolCall(event);
-        if (call === undefined || call.command === undefined) return CONTINUE;
-        if (!usesOtherPackageManager(call.command)) return CONTINUE;
-        return {
-          continue: false,
-          reason:
-            'This repo uses Bun. Use `bun add` / `bun remove` / `bunx`, or `turbo run <task>`.',
-        };
-      },
-    },
-    {
+    }),
+    policyRule(workspaceWritesOnly({ workspace, home }), {
+      ...guard,
       id: 'workspace-writes-only',
       event: 'PreToolCall',
       block: true,
-      handler: (event) => {
-        const call = readPreToolCall(event);
-        if (call === undefined) return CONTINUE;
-        if (!writesFiles(call)) return CONTINUE;
-        const outside = call.files.some((file) =>
-          [file.path, file.fromPath]
-            .filter((path): path is string => path !== undefined)
-            .some((path) => !isInside(absolutePath(root, path), roots)),
-        );
-        if (!outside) return CONTINUE;
-        return {
-          continue: false,
-          reason: 'Writes are limited to the workspace and OpenAgentsy worktrees.',
-        };
-      },
-    },
-    {
+    }),
+    policyRule(protectPolicy, {
+      ...guard,
       id: 'protect-policy',
       event: 'PreToolCall',
       block: true,
-      handler: (event) => {
-        const call = readPreToolCall(event);
-        if (call === undefined) return CONTINUE;
-        if (isReaderTool(call.toolName)) return CONTINUE;
-        // The shell writes files too, and the file tool's paths do not name
-        // them: the write targets of the command are read here.
-        if (call.command !== undefined) {
-          const violation = shellViolation(call.command, root);
-          if (violation !== undefined) {
-            if (violation.kind === 'blind') {
-              return { continue: false, reason: blindWriteReason(violation.command) };
-            }
-            return { continue: false, reason: PROTECT_REASON };
-          }
-        }
-        if (!writesFiles(call)) return CONTINUE;
-        const touched = call.files.some(
-          (file) =>
-            (file.path !== undefined && isProtected(file.path)) ||
-            (file.fromPath !== undefined && isProtected(file.fromPath)),
-        );
-        if (!touched) return CONTINUE;
-        return {
-          continue: false,
-          reason: PROTECT_REASON,
-        };
-      },
-    },
-    {
+    }),
+    policyRule(humanOnlyDecisions, {
+      ...guard,
       id: 'human-only-decisions',
       event: 'PreToolCall',
       block: true,
-      handler: (event) => {
-        const call = readPreToolCall(event);
-        if (call === undefined) return CONTINUE;
-        const tool = call.toolName;
-        const humanOnly = HUMAN_ONLY_TOOLS.some(
-          (name) => tool === name || tool.endsWith(`_${name}`),
-        );
-        if (!humanOnly) return CONTINUE;
-        return {
-          continue: false,
-          reason:
-            'Lesson decisions, quality waivers and memory promotions are recorded by a person (/oa lesson, /oa waive, /oa memory). Propose it in chat with your evidence.',
-        };
-      },
-    },
-    {
+    }),
+    policyRule(secretScanWrites, {
+      ...guard,
       id: 'secret-scan-writes',
       event: 'PreToolCall',
       block: true,
-      handler: (event) => {
-        const call = readPreToolCall(event);
-        if (call === undefined) return CONTINUE;
-        if (!writesContent(call)) return CONTINUE;
-        const content = contentOf(call);
-        if (content === '') return CONTINUE;
-        if (findSecrets(content).length === 0) return CONTINUE;
-        return {
-          continue: false,
-          reason:
-            'The content contains what looks like a credential. Use an env var or secret reference.',
-        };
-      },
-    },
-    {
+    }),
+    // The destructive rule asks a person, and a person answers out of band:
+    // the gate is asynchronous and it spends a grant, so it cannot live in
+    // the synchronous decision of a policy.
+    approvalPolicyRule(destructiveNeedsApproval, {
+      ...guard,
       id: 'destructive-needs-approval',
       event: 'PreToolCall',
       block: true,
-      handler: approvalGate(isDestructiveCommand, approvals),
-    },
+      gate: approvalGate(isDestructiveCommand, approvals),
+    }),
   ];
 };

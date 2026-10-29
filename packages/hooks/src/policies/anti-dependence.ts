@@ -1,4 +1,4 @@
-import { detectDependency } from '../output-checks.js';
+import { detectDependency } from '../output-detectors.js';
 import { allow, flag, type PolicyModule } from '../policy.js';
 
 /**

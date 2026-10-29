@@ -36,6 +36,7 @@ export type {
 export * from './policy-engine.js';
 export * from './policy-registry.js';
 export * from './policy-release.js';
+export * from './policy-rule.js';
 export * from './quality/index.js';
 export * from './registry.js';
 export * from './rules.js';

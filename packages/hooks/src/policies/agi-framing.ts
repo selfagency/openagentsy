@@ -1,4 +1,4 @@
-import { detectAgiFraming } from '../output-checks.js';
+import { detectAgiFraming } from '../output-detectors.js';
 import { allow, flag, type PolicyModule } from '../policy.js';
 
 /**
