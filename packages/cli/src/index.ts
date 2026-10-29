@@ -26,6 +26,13 @@ import {
   runLessons,
 } from './commands/lessons.js';
 import { runModels, type SwitchTouches } from './commands/models.js';
+import {
+  formatReleaseAnswer,
+  formatReleaseReport,
+  releaseCheckAsJson,
+  runReleaseAnswer,
+  runReleaseCheck,
+} from './commands/release-check.js';
 import { ethicalReportAsJson, formatEthicalReport, runEthicalReport } from './commands/report.js';
 import { formatScope, runScope } from './commands/scope.js';
 import { runSetup } from './commands/setup.js';
@@ -57,6 +64,9 @@ Commands:
   models refresh     Re-pick the models with the providers the lock records, and write the lock file
   models switch        Switch the provider, re-pick the models, and write the lock file
   report --ethical     Report what the run cost, and what it was worth
+  release-check        Check a release against the criteria the framework states
+  release-answer <id> <yes|no> "<note>"
+                        Record the answer of a person to one criterion
   scope [role]         Print the scope declaration of a role, or of every role
 Options:
   --root <dir>        Project directory (default: current directory)
@@ -77,7 +87,8 @@ Options:
   --allow-retention   Allow models that are not zero data retention
   --key <key>         BenchLM key, for the keyed REST API
   --yes               Write the lock file without asking
-  --json              Write the output as JSON (ledger, conformance)
+  --json              Write the output as JSON (ledger, conformance, release-check)
+  --scope <kind>      What is being released: first-party or library (default: the project itself)
   --ttl <ms>          How long a grant lives (default: 15 minutes, max: 1 day)
   --dry-run           Print what setup would write without writing it
   --magic-context     Turn OpenCode's compaction off, for a project with a
@@ -107,6 +118,7 @@ export type Values = {
   ttl?: string | undefined;
   session?: string | undefined;
   bean?: string | undefined;
+  scope?: string | undefined;
   ethical?: boolean | undefined;
   check?: boolean | undefined;
   help?: boolean | undefined;
@@ -456,6 +468,53 @@ async function scopeCommand(
   return 0;
 }
 
+/**
+ * The release check (§18.3).
+ *
+ * The gate is hard for a first-party release and soft for a library, and the
+ * exit code is the gate's answer. The scope is inferred from the project
+ * when the flag does not name it.
+ */
+async function releaseCheckCommand(roots: ProjectRoots, values: Values): Promise<number> {
+  const scope =
+    values.scope === 'library'
+      ? 'library'
+      : values.scope === 'first-party'
+        ? 'first-party'
+        : undefined;
+  const report = await runReleaseCheck(roots, scope === undefined ? {} : { scope });
+  if (values.json === true) {
+    process.stdout.write(releaseCheckAsJson(report));
+    return report.exitCode;
+  }
+  process.stdout.write(formatReleaseReport(report));
+  return report.exitCode;
+}
+
+/**
+ * Record the answer of a person to one criterion.
+ *
+ * The person running the command is the decider: the commitments and the
+ * review questions are answered by a person, and the command is the way the
+ * answer is recorded.
+ */
+async function releaseAnswerCommand(
+  roots: ProjectRoots,
+  _values: Values,
+  positionals: string[],
+): Promise<number> {
+  const id = positionals[1];
+  const answer = positionals[2];
+  const note = positionals.slice(3).join(' ');
+  if (id === undefined || (answer !== 'yes' && answer !== 'no')) {
+    process.stderr.write('usage: openagentsy release-answer <id> <yes|no> "<note>"\n');
+    return 1;
+  }
+  const report = await runReleaseAnswer(roots.stateRoot, id, answer === 'yes', note);
+  process.stdout.write(formatReleaseAnswer(report));
+  return report.ok ? 0 : 1;
+}
+
 /** The command table. One entry per command, so the dispatch is a lookup. */
 const COMMANDS: Record<
   string,
@@ -480,6 +539,8 @@ const COMMANDS: Record<
   models: modelsCommand,
   report: reportCommand,
   scope: scopeCommand,
+  'release-check': releaseCheckCommand,
+  'release-answer': releaseAnswerCommand,
 };
 
 /**
@@ -542,6 +603,7 @@ export async function main(argv: string[], options: CommandOptions = {}): Promis
       ttl: { type: 'string' },
       session: { type: 'string' },
       bean: { type: 'string' },
+      scope: { type: 'string' },
       ethical: { type: 'boolean' },
       check: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
