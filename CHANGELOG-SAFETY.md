@@ -76,6 +76,15 @@ first entry here will be an incident.
 No drill has been run yet. The plan asks for a tabletop drill of an S0
 incident, and its outcome is recorded here.
 
+**When a drill runs** (decided 2026-10-29): on demand — when the framework
+changes fast enough that a runbook gap is plausible, after an S0 or S1
+incident, or when a person asks for one. It is not a quarterly obligation:
+a cadence with no calendar behind it becomes a promise nobody keeps, and
+the record would then claim a drill happened when none did. The drill's
+outcome goes under this heading, with the date, the scenario, the severity
+the matrix assigned, the response time measured, and the gaps the runbook
+turned out to have.
+
 ## The record ahead
 
 Every entry above this line is the framework's history. Every entry below it
