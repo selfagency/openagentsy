@@ -1,4 +1,5 @@
-import { detectScopeDrift } from '../output-detectors.js';
+import { thresholdsInForce } from '../detector-thresholds.js';
+import { findingsAt, gradeScopeDrift } from '../output-detectors.js';
 import { allow, findingsOf, flag, type PolicyModule } from '../policy.js';
 
 /**
@@ -8,6 +9,9 @@ import { allow, findingsOf, flag, type PolicyModule } from '../policy.js';
  * names a file the declaration does not cover. A role that declares no
  * scope has nothing to enforce, and the policy lets the thing through
  * rather than guess where the boundary is.
+ *
+ * The detector is graded (§8.6): a file outside the scope is clear
+ * evidence, and the threshold in force decides how clear is clear enough.
  */
 
 /** The stable id of the policy. */
@@ -26,13 +30,14 @@ export const scopeEnforcement: PolicyModule = {
     if (declared.length === 0) return allow();
     const text = ctx.response?.text ?? ctx.request?.text ?? '';
     if (text === '') return allow();
-    const found = detectScopeDrift(text, declared);
-    if (found.length === 0) return allow();
+    const detection = gradeScopeDrift(text, declared);
+    const threshold = thresholdsInForce(ctx).scopeDrift;
+    if (detection.confidence < threshold) return allow();
     return flag(
       findingsOf(
         SCOPE_ENFORCEMENT_ID,
         'out-of-scope-path',
-        found.map((entry) => entry.match),
+        findingsAt(detection, threshold).map((entry) => entry.match),
       ),
     );
   },

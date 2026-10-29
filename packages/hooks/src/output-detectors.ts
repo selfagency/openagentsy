@@ -10,6 +10,13 @@ import { pathSegments } from './paths.js';
  * A detector reads a reply and says what it found. It never decides what
  * the finding means - that is the policy's work - and it never stops
  * anything.
+ *
+ * Three of the detectors are graded (§20.3): the sycophancy detector, the
+ * professional-displacement detector and the scope-drift detector. A graded
+ * detector answers a confidence as well as the findings, and the policy
+ * fires it only when that confidence reaches the threshold in force. The
+ * threshold in force is the baseline one, and a high-risk domain lowers it,
+ * so the same words that are a warning elsewhere are a finding here.
  */
 
 /** The kinds of finding a check reports. */
@@ -22,7 +29,11 @@ export type FindingType =
   | 'not-needed'
   | 'agi-claim'
   | 'replacement'
-  | 'out-of-scope-path';
+  | 'out-of-scope-path'
+  | 'structural-bias'
+  | 'dark-pattern'
+  | 'hidden-personalization'
+  | 'third-party-impact';
 
 /** What a check found. */
 export interface OutputFinding {
@@ -51,6 +62,10 @@ const FINDING_TYPES: readonly FindingType[] = [
   'agi-claim',
   'replacement',
   'out-of-scope-path',
+  'structural-bias',
+  'dark-pattern',
+  'hidden-personalization',
+  'third-party-impact',
 ];
 
 /**
@@ -58,6 +73,83 @@ const FINDING_TYPES: readonly FindingType[] = [
  */
 export function isFindingType(value: string): value is FindingType {
   return (FINDING_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * How sure a graded detector is, from 0 to 1.
+ *
+ * The confidence of a detection is the confidence of its strongest cue: a
+ * cue that matches twice is not twice the evidence, and a second, weaker
+ * cue does not make a strong one stronger.
+ */
+export type Confidence = number;
+
+/**
+ * The confidence of a cue that is clear on its own.
+ *
+ * It is the cut the quality package publishes as the baseline threshold of
+ * the graded detectors (§20.3), so a cue worth this much fires without a
+ * high-risk domain. The cues that are worth less are the ones a high-risk
+ * domain brings in.
+ */
+const CLEAR = 0.6;
+
+/**
+ * The confidence of a cue that suggests without asserting.
+ *
+ * It is above the cut a high-risk domain lowers the thresholds to and
+ * below the baseline, so it is a finding in a high-risk domain and
+ * nothing outside one.
+ */
+const SUGGESTED = 0.45;
+
+/**
+ * The confidence of a cue that only hints.
+ *
+ * It is below every cut, so it is never a finding. It is kept because a
+ * detector that says nothing about a phrase it saw is a detector that
+ * cannot be asked what it saw.
+ */
+const WEAK = 0.2;
+
+/** A cue of a graded detector: what it matches and how sure it makes the detector. */
+interface Cue {
+  /** The kind of finding a match of it is. */
+  readonly type: FindingType;
+  /** The pattern that matches. */
+  readonly re: RegExp;
+  /** How sure a match of it makes the detector. */
+  readonly confidence: Confidence;
+}
+
+/** A finding of a graded detector, with the confidence the detector had in it. */
+export interface GradedFinding {
+  /** The finding, in the shape the legacy detector hands it over. */
+  readonly finding: OutputFinding;
+  /** How sure the detector was about this finding. */
+  readonly confidence: Confidence;
+}
+
+/** What a graded detector found, and how sure it is. */
+export interface GradedDetection {
+  /** The findings, each with the confidence the detector had in it. */
+  readonly findings: readonly GradedFinding[];
+  /** How sure the detector is, from 0 to 1. */
+  readonly confidence: Confidence;
+}
+
+/**
+ * The findings of a graded detector that reach a threshold.
+ *
+ * A graded detector fires when its confidence reaches the threshold in
+ * force, and it reports the findings that reach it: a finding below the
+ * bar is not part of what the detector found. The types are the ones the
+ * legacy checks carried, so nothing downstream changes shape.
+ */
+export function findingsAt(detection: GradedDetection, threshold: Confidence): OutputFinding[] {
+  return detection.findings
+    .filter((entry) => entry.confidence >= threshold)
+    .map((entry) => entry.finding);
 }
 
 /**
@@ -84,23 +176,83 @@ function detect(
 }
 
 /**
- * Praise of the user, and agreement with them.
+ * The findings of one graded detector.
+ *
+ * The confidence of the detection is the confidence of its strongest cue.
  */
-const SYCOPHANCY: [FindingType, RegExp][] = [
-  [
-    'praise',
-    /\b(?:great|excellent|brilliant|wonderful|fantastic|amazing)\s+(?:point|idea|question|suggestion|insight|job)\b/gi,
-  ],
-  ['agreement', /\byou(?:'re| are)\s+(?:absolutely\s+|completely\s+|totally\s+)?right\b/gi],
-  ['agreement', /\bi\s+(?:completely\s+|totally\s+|fully\s+)?agree\s+with\s+you\b/gi],
-  [
-    'agreement',
-    /\b(?:of course|certainly|absolutely)[,.!]?\s+(?:i(?:'ll| will)\s+)?(?:happy|glad|pleased)\s+to\b/gi,
-  ],
-  [
-    'praise',
-    /\b(?:thank|thanks)\s+for\s+(?:the\s+)?(?:great|excellent|valuable|helpful|thoughtful)\b/gi,
-  ],
+function grade(name: string, cues: readonly Cue[], text: string): GradedDetection {
+  const findings: GradedFinding[] = [];
+  let confidence = 0;
+  for (const cue of cues) {
+    for (const match of text.matchAll(cue.re)) {
+      const value = match[0];
+      if (value === undefined || value.length === 0) continue;
+      findings.push({
+        finding: { name, type: cue.type, match: value },
+        confidence: cue.confidence,
+      });
+      if (cue.confidence > confidence) confidence = cue.confidence;
+    }
+  }
+  return { findings, confidence };
+}
+
+/**
+ * The findings of a graded detector that are clear on their own.
+ *
+ * This is what the legacy detectors hand over: the cues that reach the
+ * baseline cut. The fainter cues are the ones a high-risk domain brings
+ * in, and a legacy detector does not see them.
+ */
+function clearFindings(detection: GradedDetection): OutputFinding[] {
+  return detection.findings
+    .filter((entry) => entry.confidence >= CLEAR)
+    .map((entry) => entry.finding);
+}
+
+/**
+ * Praise of the user, and agreement with them.
+ *
+ * The first five cues are the ones the detector has always carried. The
+ * sixth suggests agreement without asserting it, and the seventh only
+ * hints at it.
+ */
+const SYCOPHANCY: readonly Cue[] = [
+  {
+    type: 'praise',
+    re: /\b(?:great|excellent|brilliant|wonderful|fantastic|amazing)\s+(?:point|idea|question|suggestion|insight|job)\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'agreement',
+    re: /\byou(?:'re| are)\s+(?:absolutely\s+|completely\s+|totally\s+)?right\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'agreement',
+    re: /\bi\s+(?:completely\s+|totally\s+|fully\s+)?agree\s+with\s+you\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'agreement',
+    re: /\b(?:of course|certainly|absolutely)[,.!]?\s+(?:i(?:'ll| will)\s+)?(?:happy|glad|pleased)\s+to\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'praise',
+    re: /\b(?:thank|thanks)\s+for\s+(?:the\s+)?(?:great|excellent|valuable|helpful|thoughtful)\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'agreement',
+    re: /\b(?:that\s+makes\s+sense|good\s+point|i\s+understand\s+your\s+point)\b/gi,
+    confidence: SUGGESTED,
+  },
+  {
+    type: 'agreement',
+    re: /\b(?:fair\s+point|reasonable\s+point)\b/gi,
+    confidence: WEAK,
+  },
 ];
 
 /**
@@ -164,6 +316,47 @@ const AGI_FRAMING: [FindingType, RegExp][] = [
   ],
 ];
 
+/**
+ * The language that places the agent in the place of a professional (§21.5).
+ *
+ * The cues of the module of §21.5 are clear on their own. The last one
+ * compares the agent with a professional without claiming the professional's
+ * place, so it suggests rather than asserts.
+ */
+const PROFESSIONAL_DISPLACEMENT: readonly Cue[] = [
+  {
+    type: 'replacement',
+    re: /\bi(?:'m| am)\s+better\s+than\s+(?:a|an|the|your)\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'replacement',
+    re: /\byou\s+(?:don'?t|do\s+not)\s+need\s+(?:a|an|the|your)\s+(?:reviewer|architect|pm|product manager|designer|tester|qa|engineer|manager|mentor|lawyer|doctor|accountant)\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'replacement',
+    re: /\blet\s+me\s+decide\s+for\s+you\b/gi,
+    confidence: CLEAR,
+  },
+  { type: 'replacement', re: /\bi\s+can\s+replace\b/gi, confidence: CLEAR },
+  {
+    type: 'replacement',
+    re: /\breplace\s+(?:your|the)\s+(?:reviewer|architect|pm|manager|team)\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'replacement',
+    re: /\bmore\s+(?:reliable|accurate)\s+than\s+(?:a|an|any)\s+(?:human|reviewer|architect|expert)\b/gi,
+    confidence: CLEAR,
+  },
+  {
+    type: 'replacement',
+    re: /\b(?:no\s+expert\s+needed|you\s+do\s+not\s+need\s+(?:a|an)\s+(?:expert|specialist|consultant))\b/gi,
+    confidence: SUGGESTED,
+  },
+];
+
 /** The extensions a source file has. */
 const SOURCE_EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs'];
 
@@ -205,6 +398,32 @@ function pathMentions(text: string): string[] {
 }
 
 /**
+ * The configuration files a reply names without a directory.
+ *
+ * A configuration file on its own is a weaker sign than a path: a reply
+ * that says "the config.yaml" is naming a thing, not a change. It is a
+ * cue a high-risk domain brings in.
+ */
+const CONFIG_EXTENSIONS = ['json', 'jsonc', 'yaml', 'yml', 'toml', 'lock', 'sql', 'sh'];
+
+/**
+ * The configuration files a reply names without a directory.
+ */
+function configFileMentions(text: string): string[] {
+  const found = new Set<string>();
+  for (const match of text.matchAll(CANDIDATE)) {
+    const value = match[0];
+    if (value === undefined || value.includes('/')) continue;
+    if (looksLikeAProjectFile(value)) continue;
+    const parts = value.split('.');
+    const extension = parts[parts.length - 1]?.toLowerCase() ?? '';
+    if (!CONFIG_EXTENSIONS.includes(extension)) continue;
+    found.add(value);
+  }
+  return [...found];
+}
+
+/**
  * Whether a path is under another one.
  *
  * The two are compared on their parts, and the shorter one may be the tail
@@ -221,10 +440,25 @@ function within(target: string[], stated: string[]): boolean {
 }
 
 /**
+ * Whether a mention is outside the stated scope.
+ */
+function outOfScope(mention: string, statedPaths: readonly string[]): boolean {
+  const target = pathSegments(mention);
+  return !statedPaths.some((stated) => within(target, pathSegments(stated)));
+}
+
+/**
  * Praise of the user, and agreement with them.
  */
 export function detectSycophancy(text: string): OutputFinding[] {
-  return detect('sycophancy', SYCOPHANCY, text);
+  return clearFindings(grade('sycophancy', SYCOPHANCY, text));
+}
+
+/**
+ * The sycophancy detector, with the confidence it has in the reply (§8.6).
+ */
+export function gradeSycophancy(text: string): GradedDetection {
+  return grade('sycophancy', SYCOPHANCY, text);
 }
 
 /**
@@ -249,6 +483,14 @@ export function detectAgiFraming(text: string): OutputFinding[] {
 }
 
 /**
+ * The professional displacement detector, with the confidence it has in the
+ * reply (§21.5).
+ */
+export function gradeProfessionalDisplacement(text: string): GradedDetection {
+  return grade('professional-displacement', PROFESSIONAL_DISPLACEMENT, text);
+}
+
+/**
  * The files a reply names that the task does not cover.
  *
  * The stated paths are the files the active task may touch, and a reply
@@ -257,13 +499,36 @@ export function detectAgiFraming(text: string): OutputFinding[] {
  * which this package does not carry, so it is left to the caller.
  */
 export function detectScopeDrift(text: string, statedPaths: readonly string[]): OutputFinding[] {
-  const findings: OutputFinding[] = [];
+  return clearFindings(gradeScopeDrift(text, statedPaths));
+}
+
+/**
+ * The scope drift detector, with the confidence it has in the reply (§8.6).
+ *
+ * A path outside the scope is clear evidence. A configuration file named
+ * on its own is a weaker sign, and it is a cue a high-risk domain brings
+ * in.
+ */
+export function gradeScopeDrift(text: string, statedPaths: readonly string[]): GradedDetection {
+  const findings: GradedFinding[] = [];
+  let confidence = 0;
   for (const mention of pathMentions(text)) {
-    const target = pathSegments(mention);
-    if (statedPaths.some((stated) => within(target, pathSegments(stated)))) continue;
-    findings.push({ name: 'scope-drift', type: 'out-of-scope-path', match: mention });
+    if (!outOfScope(mention, statedPaths)) continue;
+    findings.push({
+      finding: { name: 'scope-drift', type: 'out-of-scope-path', match: mention },
+      confidence: CLEAR,
+    });
+    confidence = Math.max(confidence, CLEAR);
   }
-  return findings;
+  for (const mention of configFileMentions(text)) {
+    if (!outOfScope(mention, statedPaths)) continue;
+    findings.push({
+      finding: { name: 'scope-drift', type: 'out-of-scope-path', match: mention },
+      confidence: SUGGESTED,
+    });
+    confidence = Math.max(confidence, SUGGESTED);
+  }
+  return { findings, confidence };
 }
 
 /**
