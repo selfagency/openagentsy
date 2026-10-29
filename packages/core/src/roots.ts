@@ -53,12 +53,29 @@ export const GIT_REPOSITORY_VARS = [
   'GIT_NAMESPACE',
 ] as const;
 
-/** The environment a git child gets: the caller's, without the git variables. */
+/**
+ * The environment a git child gets: the caller's, without the git variables.
+ *
+ * It also turns the signing off. A machine whose global git configuration
+ * says `commit.gpgsign = true` makes every commit in a test's temporary
+ * repository ask the signing agent — and the agent is the machine's, not
+ * the test's. When the agent cannot answer (it is locked, it is a GUI
+ * application, it is not running), the commit fails with "failed to write
+ * commit object" and the test fails for a reason that has nothing to do
+ * with the code. Measured 2026-10-29: two tests in the changelog generator
+ * failed that way, and the same failure appeared in an untouched checkout.
+ */
 export function gitFreeEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string | undefined> {
   const copy: Record<string, string | undefined> = { ...env };
   for (const name of GIT_REPOSITORY_VARS) delete copy[name];
+  // GIT_CONFIG_COUNT and its companions are git's own way of saying "this
+  // one setting, for this command only". They override the global
+  // configuration without touching it.
+  copy.GIT_CONFIG_COUNT = '1';
+  copy.GIT_CONFIG_KEY_0 = 'commit.gpgsign';
+  copy.GIT_CONFIG_VALUE_0 = 'false';
   return copy;
 }
 
