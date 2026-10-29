@@ -2707,7 +2707,9 @@ Per agentsy's `SAFETY.md` §"High-risk domain expectations", the framework shoul
 3. Records a `policy_firing` row (§6.2) with policy ID `oa.high-risk.<domain>`.
 4. Surfaces in the Accountability block: "high-risk domain [domain] detected in [surface]; copy rules tightened".
 
-The classifier is heuristic, not perfect. False negatives are tracked as S2 incidents (§19.2); false positives are tracked as `quality` issues. The classifier's keyword list is versioned in `packages/quality/data/high-risk-keywords.json` and changes are logged in `CHANGELOG-SAFETY.md`.
+The classifier is heuristic, not perfect. False negatives are tracked as S2 incidents (§19.2); false positives are tracked as `quality` issues. The classifier's keyword list is versioned in `packages/quality/src/data/high-risk-keywords.json` and changes are logged in `CHANGELOG-SAFETY.md`.
+
+**Where the list lives, and why it moved** (2026-10-29): the list was first written at `packages/quality/data/high-risk-keywords.json` and read from the filesystem at runtime. That was wrong for the plugin: the plugin is copied out as one file and loaded by OpenCode, so a path resolved from `import.meta.url` points at the bundle and a path resolved from `process.cwd()` points at whatever directory the server happens to run in. The classifier then found nothing and the guardrail silently stopped - worse than no guardrail, because the record says it fired. The list is now a module import (`with { type: 'json' }`), so the bundler inlines it and the classifier never touches the filesystem. The file therefore sits inside the package's `rootDir`, which is why the path changed. The content did not change: the list's version is still `1.0.0`, and a path-only move is not a safety change worth an entry in `CHANGELOG-SAFETY.md`.
 
 ### 20.4 Bounded personalization
 
