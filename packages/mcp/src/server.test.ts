@@ -173,7 +173,9 @@ describe('the board server over stdio', () => {
     expect(names).toContain('oa_quality_waive');
     // The conformance tool reports what is proven, observed or unverified.
     expect(names).toContain('oa_conformance_report');
-    expect(names.length).toBe(21);
+    // The scope tool reports what a role is for and what it refuses.
+    expect(names).toContain('oa_scope');
+    expect(names.length).toBe(22);
   });
 
   it('posts a record and reads it back in the inbox', async () => {
