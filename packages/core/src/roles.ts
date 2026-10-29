@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { parse } from 'yaml';
+import { parseScopeBlock, type ScopeBlock } from './scope/block.js';
 import {
   ACTION_NAMES,
   type ActionName,
@@ -264,6 +265,68 @@ function parseSkills(
   return { allow, routing };
 }
 
+/**
+ * The scope of a role.
+ *
+ * A role's `scope:` is either a sentence or a block. The sentence says what
+ * the role is for in prose, and it is what the agent's prompt carries. The
+ * block says it in the shape the scope check matches a request against, and
+ * it is what the declaration of the role is built from. A role with a block
+ * has both: the block's purpose is the sentence the prompt carries.
+ */
+function parseScope(
+  value: unknown,
+  where: string,
+): { text: string; block: ScopeBlock | undefined } {
+  if (typeof value === 'string') {
+    return { text: asString(value, where), block: undefined };
+  }
+  if (isRecord(value)) {
+    try {
+      const block = parseScopeBlock(value, where);
+      return { text: block.purpose, block };
+    } catch (error) {
+      throw new RolesError(error instanceof Error ? error.message : String(error));
+    }
+  }
+  throw new RolesError(`${where}: expected a sentence or a scope block`);
+}
+
+/**
+ * The permissions of a role: the defaults, with the role's own rules over them.
+ *
+ * The last rule wins, so a role's own rule about an action is the one that
+ * applies, and a rule the role does not mention keeps the default.
+ */
+function mergePermissions(
+  defaults: Record<string, ActionPermissions>,
+  rolePermissions: Record<string, ActionPermissions>,
+): Record<string, ActionPermissions> {
+  const merged: Record<string, ActionPermissions> = {};
+  for (const [action, rules] of Object.entries(defaults)) {
+    merged[action] = rules;
+  }
+  for (const [action, rules] of Object.entries(rolePermissions)) {
+    merged[action] = rules;
+  }
+  return merged;
+}
+
+/**
+ * The agent id of a role, when it has one.
+ *
+ * The id is what the agent is called, and it has to be a lowercase agent id
+ * with a dash in it, because that is what the host accepts.
+ */
+function parseAgentName(value: unknown, where: string): string | undefined {
+  if (value === undefined) return undefined;
+  const agentName = asString(value, where);
+  if (!/^[a-z][a-z0-9-]*$/.test(agentName)) {
+    throw new RolesError(`${where}: expected a lowercase agent id, got "${agentName}"`);
+  }
+  return agentName;
+}
+
 function parseRole(
   name: string,
   raw: unknown,
@@ -280,23 +343,17 @@ function parseRole(
     throw new RolesError(`${where}.mode: expected "primary" or "subagent"`);
   }
 
-  const rolePermissions = parsePermissions(raw.permissions ?? {}, `${where}.permissions`);
-  const merged: Record<string, ActionPermissions> = {};
-  for (const [action, rules] of Object.entries(defaults)) {
-    merged[action] = rules;
-  }
-  for (const [action, rules] of Object.entries(rolePermissions)) {
-    merged[action] = rules;
-  }
+  const merged = mergePermissions(
+    defaults,
+    parsePermissions(raw.permissions ?? {}, `${where}.permissions`),
+  );
 
   const skills = parseSkills(raw.skills, `${where}.skills`);
   merged.skill = skillRules(skills.allow);
 
-  const agentName =
-    raw.agentName === undefined ? undefined : asString(raw.agentName, `${where}.agentName`);
-  if (agentName !== undefined && !/^[a-z][a-z0-9-]*$/.test(agentName)) {
-    throw new RolesError(`${where}.agentName: expected a lowercase agent id, got "${agentName}"`);
-  }
+  const agentName = parseAgentName(raw.agentName, `${where}.agentName`);
+
+  const scope = parseScope(raw.scope, `${where}.scope`);
 
   return {
     name,
@@ -307,7 +364,8 @@ function parseRole(
       raw.hidden === undefined ? defaultsMeta.hidden : asBoolean(raw.hidden, `${where}.hidden`),
     writes: asBoolean(raw.writes, `${where}.writes`),
     steps: raw.steps === undefined ? defaultsMeta.steps : asNumber(raw.steps, `${where}.steps`),
-    scope: asString(raw.scope, `${where}.scope`),
+    scope: scope.text,
+    ...(scope.block !== undefined ? { scopeBlock: scope.block } : {}),
     guidance: asString(raw.guidance, `${where}.guidance`),
     permissions: merged,
     skills: skills.allow,

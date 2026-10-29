@@ -39,6 +39,7 @@ import { CONFORMANCE_TOOL_NAME, createConformanceTools } from './conformance.js'
 import { ledgerReaders } from './ledger-usage.js';
 import { createLessonTools } from './lessons.js';
 import { failure, type McpToolResult, text } from './mcp-tool.js';
+import { createScopeTools, SCOPE_TOOL_NAME } from './scope.js';
 import { createWaiverTools, WAIVER_TOOL_NAME } from './waivers.js';
 import { workspaceTools } from './workspace-tools.js';
 
@@ -181,6 +182,7 @@ const USAGE_CARD = `The OpenAgentsy board. The tools:
 - oa_task_*: the todo list of the project. list, show, create, update, next, archive.
 - oa_memory_*: the memories a person decided to keep. search, list. The decide tool is a person's, not an agent's.
 - oa_conformance_report: what is proven, observed or unverified about the OpenCode host, one capability at a time, with the evidence of an observed one. It never writes the evidence.
+- oa_scope: the scope of a role: what it is for, what it does, and what it refuses. It decides nothing; an agent may read its own limits with it.
 Three rules hold everywhere: one writer per file, a write without a lease is refused, and every decision is on the record. An error names the next call to make.`;
 
 /**
@@ -478,6 +480,22 @@ server.registerTool(
     inputSchema: CONFORMANCE_TOOLS.oa_conformance_report.inputSchema,
   },
   async (input) => CONFORMANCE_TOOLS.oa_conformance_report.handler(input),
+);
+
+// --- scope ------------------------------------------------------------------
+
+// The scope tool reports what a role is for and what it refuses. It reads
+// the roles file and the declarations the package ships, and it writes
+// neither: an agent may call it on itself to see its own limits.
+const SCOPE_TOOLS = createScopeTools({ workspace });
+
+server.registerTool(
+  SCOPE_TOOL_NAME,
+  {
+    description: SCOPE_TOOLS.oa_scope.description,
+    inputSchema: SCOPE_TOOLS.oa_scope.inputSchema,
+  },
+  async (input) => SCOPE_TOOLS.oa_scope.handler(input),
 );
 
 // --- leases -----------------------------------------------------------------
