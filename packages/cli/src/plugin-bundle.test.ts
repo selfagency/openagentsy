@@ -40,6 +40,29 @@ describe('the plugin bundle', () => {
     expect(bundle).not.toContain('createTypeChecker');
   });
 
+  it('carries the high-risk keyword list', async () => {
+    const bundle = await readFile(bundlePath, 'utf8');
+    // The classifier used to read its keyword list from disk at runtime.
+    // The plugin is loaded from the OpenCode config directory, where no
+    // path means anything, so the classifier found nothing and reported
+    // every reply as safe - a guardrail that silently stops, while the
+    // record says it fired. The list is a module now, so the bundle
+    // carries it. These are phrases of the list itself.
+    expect(bundle).toContain('crisis hotline');
+    expect(bundle).toContain('automated hiring');
+    expect(bundle).toContain('public deliberation');
+  });
+
+  it('names no workspace package', async () => {
+    const bundle = await readFile(bundlePath, 'utf8');
+    // The plugin is loaded from the OpenCode config directory, where bare
+    // imports do not resolve. A bundle that names a workspace package
+    // fails to load at the worst possible moment: the lease guard never
+    // registers and every write goes through. Every package the plugin
+    // needs is inlined, so no `@openagentsy/` name is left behind.
+    expect(bundle).not.toContain('@openagentsy/');
+  });
+
   it('is the file the setup command copies out', async () => {
     const source = await readFile(
       fileURLToPath(new URL('../../adapter-opencode/dist/index.js', import.meta.url)),

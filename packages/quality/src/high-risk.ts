@@ -1,7 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import keywordListJson from './data/high-risk-keywords.json' with { type: 'json' };
 
 /**
  * The high-risk classifier.
@@ -17,8 +15,15 @@ import { z } from 'zod';
  * is the worse of the two, so the caller treats a firing as a reason for a
  * person to look, not as a verdict.
  *
- * The keyword list lives in `data/high-risk-keywords.json` and carries a
- * version, so a change to it is visible in a diff and in the record.
+ * The keyword list lives in `src/data/high-risk-keywords.json` and carries
+ * a version, so a change to it is visible in a diff and in the record.
+ *
+ * It is imported as a module, not read from disk at runtime. The plugin
+ * is copied out as one file and loaded from a directory where a path
+ * means nothing, so a list that the classifier has to go and find is a
+ * list that is not there when it matters most. An import travels with
+ * the code: the bundler inlines it and the classifier never touches the
+ * filesystem.
  */
 
 /** The eight high-risk domains. */
@@ -117,48 +122,20 @@ interface KeywordList {
   domains: Map<HighRiskDomain, DomainEntry>;
 }
 
-/**
- * Where the keyword list can be.
- *
- * The list is a data file, so `tsc` does not copy it into the build: it
- * stays beside the sources and beside the build output, and the first
- * path that exists is the one that is read. The last two paths are for
- * the case where the package is bundled into the plugin, where the path
- * of this module says nothing about where the data ended up.
- */
-const KEYWORD_PATHS: readonly string[] = [
-  fileURLToPath(new URL('../data/high-risk-keywords.json', import.meta.url)),
-  fileURLToPath(new URL('./data/high-risk-keywords.json', import.meta.url)),
-  join(process.cwd(), 'node_modules/@openagentsy/quality/data/high-risk-keywords.json'),
-  join(process.cwd(), 'packages/quality/data/high-risk-keywords.json'),
-];
-
-/** The loaded keyword list, or nothing when it has not been read yet. */
+/** The loaded keyword list, or nothing when it has not been built yet. */
 let loaded: KeywordList | undefined;
 
 /**
- * The keyword list, read from the data directory.
+ * The keyword list, built from the imported data.
  *
- * A missing or malformed file is an error and is not swallowed: a
- * classifier that silently matched nothing would report every reply as
- * safe.
+ * The data is a module, so it is here by the time this runs: there is no
+ * path to guess and no file that can be missing. A malformed list is an
+ * error and is not swallowed: a classifier that silently matched nothing
+ * would report every reply as safe.
  */
 function keywordList(): KeywordList {
   if (loaded !== undefined) return loaded;
-  const path = KEYWORD_PATHS.find((candidate) => existsSync(candidate));
-  if (path === undefined) {
-    throw new Error(
-      `the high-risk keyword list is not at any of these paths: ${KEYWORD_PATHS.join(', ')}`,
-    );
-  }
-  const raw = readFileSync(path, 'utf8');
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`the high-risk keyword list is not valid JSON: ${describe(error)}`);
-  }
-  const result = keywordListSchema.safeParse(parsed);
+  const result = keywordListSchema.safeParse(keywordListJson);
   if (!result.success) {
     throw new Error(
       `the high-risk keyword list is not the expected shape: ${result.error.message}`,
@@ -185,11 +162,6 @@ function keywordList(): KeywordList {
   }
   loaded = { version: result.data.version, domains };
   return loaded;
-}
-
-/** The message of an error, without its stack. */
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** What the classifier found in one domain. */

@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi } from 'vitest';
 import { highRiskCopy } from './copy/high-risk.js';
 import {
   accountabilityLine,
@@ -147,6 +151,58 @@ describe('the consequences of a high-risk domain', () => {
     for (const domain of DOMAINS) {
       expect(loweredThresholds(domain)).toEqual(first);
     }
+  });
+});
+
+describe('the keyword list travels with the code', () => {
+  /**
+   * The regression guard for the data that came from the filesystem.
+   *
+   * The list used to be read at runtime from one of four paths, two of
+   * them derived from `process.cwd()`. The plugin is copied out as one
+   * file and loaded from a directory where a path means nothing, so the
+   * classifier found nothing there and reported every reply as safe. A
+   * guardrail that silently stops is worse than no guardrail, because the
+   * record says it fired.
+   *
+   * The list is a module now, so the classifier does not care where the
+   * process stands. The test says so out loud: it moves the working
+   * directory somewhere else entirely and expects the same answer.
+   */
+  it('classifies the same prose from a working directory that is somewhere else', async () => {
+    const before = classifyHighRisk(PROSE.advice);
+    const elsewhere = mkdtempSync(join(tmpdir(), 'oa-high-risk-cwd-'));
+    const previous = process.cwd();
+    try {
+      process.chdir(elsewhere);
+      // The module is loaded again, so the list is looked for again too:
+      // a list that was cached before the move would prove nothing.
+      vi.resetModules();
+      const moved = await import('./high-risk.js');
+      const after = moved.classifyHighRisk(PROSE.advice);
+      expect(after.matches.map((match) => match.domain)).toEqual(
+        before.matches.map((match) => match.domain),
+      );
+      expect(after.version).toBe(before.version);
+      expect(after.highest?.domain).toBe('advice');
+    } finally {
+      process.chdir(previous);
+      vi.resetModules();
+    }
+  });
+
+  /**
+   * The second half of the guard: the list is not read from a path.
+   *
+   * The working directory test above cannot see a lookup that succeeds
+   * by accident, so the source says it too: the classifier does not open
+   * a file to find the list.
+   */
+  it('does not open a file to find the list', () => {
+    const source = readFileSync(fileURLToPath(new URL('./high-risk.ts', import.meta.url)), 'utf8');
+    expect(source).not.toContain('node:fs');
+    expect(source).not.toContain('readFileSync');
+    expect(source).not.toContain('process.cwd()');
   });
 });
 

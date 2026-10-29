@@ -36,7 +36,7 @@
     "url": "https://github.com/voxslopuli/openagentsy/issues"
   },
   "engines": {
-    "node": ">=22.5.0"
+    "node": ">=22.12.0"
   },
   "publishConfig": {
     "access": "public"
