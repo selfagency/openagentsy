@@ -1,0 +1,322 @@
+{
+  "version": "1.0.0",
+  "domains": {
+    "self-harm": {
+      "label": "self-harm, suicide, eating disorders or a crisis",
+      "stakeholder": "the person in crisis and a trained crisis professional",
+      "phrases": [
+        "hurt myself",
+        "harm myself",
+        "want to die",
+        "not want to be here",
+        "no reason to live",
+        "starve myself",
+        "binge and purge",
+        "took my own life",
+        "better off dead",
+        "self hurting"
+      ],
+      "strong": [
+        "suicide",
+        "suicidal",
+        "kill myself",
+        "self-harm",
+        "self harm",
+        "eating disorder",
+        "crisis hotline",
+        "cutting myself",
+        "end my life",
+        "overdose"
+      ],
+      "patterns": [
+        { "pattern": "\\b(?:want|wanted|planning|plan)\\s+to\\s+die\\b", "weight": 0.5 },
+        {
+          "pattern": "\\b(?:lose|lost)\\s+(?:the\\s+)?(?:will|reason)\\s+to\\s+live\\b",
+          "weight": 0.5
+        }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "abuse": {
+      "label": "abuse, coercion, stalking or a violent conflict",
+      "stakeholder": "the person at risk and a trained advocate",
+      "phrases": [
+        "follows me home",
+        "checks my phone",
+        "controls where i go",
+        "took my phone",
+        "afraid of my",
+        "keep her from leaving",
+        "keep him from leaving",
+        "not allowed to leave",
+        "threatens me",
+        "locks the door"
+      ],
+      "strong": [
+        "domestic violence",
+        "coercive control",
+        "stalking",
+        "physical abuse",
+        "emotional abuse",
+        "sexual abuse",
+        "violent conflict",
+        "he hits me",
+        "she hits me",
+        "threatens to hurt",
+        "afraid to leave",
+        "won't let me leave"
+      ],
+      "patterns": [
+        {
+          "pattern": "\\b(?:he|she|they|my partner|my ex)\\s+(?:keeps?|kept)\\s+(?:me|him|her|them)\\s+from\\s+leaving\\b",
+          "weight": 0.5
+        }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "advice": {
+      "label": "medical, legal or financial advice",
+      "stakeholder": "the person deciding and a qualified professional",
+      "phrases": [
+        "should i take",
+        "is it safe to take",
+        "am i eligible for",
+        "file a claim",
+        "taxes",
+        "tax return",
+        "invest in",
+        "investing",
+        "mortgage",
+        "credit score",
+        "legal action",
+        "stock portfolio",
+        "deduct the interest",
+        "student loan",
+        "chest pain"
+      ],
+      "strong": [
+        "medical advice",
+        "legal advice",
+        "financial advice",
+        "prescription",
+        "diagnose",
+        "diagnosis",
+        "dosage",
+        "lawsuit",
+        "attorney",
+        "tax deduction",
+        "tax advice",
+        "should i take this medication",
+        "medical dose",
+        "loan approval"
+      ],
+      "patterns": [
+        { "pattern": "\\b(?:should|shall)\\s+i\\s+(?:take|stop|start)\\b", "weight": 0.4 }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "crime": {
+      "label": "criminal activity or its evasion",
+      "stakeholder": "the people affected and a legal professional",
+      "phrases": [
+        "get into the system without",
+        "make the records disappear",
+        "avoid the badge",
+        "fake the documents",
+        "fake id",
+        "skip the background check",
+        "how to get away with",
+        "bribe the",
+        "get away with murder",
+        "no record of it"
+      ],
+      "strong": [
+        "money laundering",
+        "launder the money",
+        "evade the police",
+        "evade detection",
+        "forged signature",
+        "forge a signature",
+        "hack into",
+        "without getting caught",
+        "destroy the evidence",
+        "cover up the crime",
+        "falsify",
+        "smuggle",
+        "stolen credit card"
+      ],
+      "patterns": [
+        {
+          "pattern": "\\b(?:how\\s+(?:do|can)\\s+i)\\s+(?:break\\s+into|get\\s+into)\\b",
+          "weight": 0.4
+        }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "persuasion": {
+      "label": "political persuasion or identity-targeted influence",
+      "stakeholder": "the people being targeted and the voters",
+      "phrases": [
+        "convince the public",
+        "win the vote for",
+        "get them to vote for",
+        "people of that religion",
+        "people of that ethnicity",
+        "that ethnic group",
+        "the voting bloc",
+        "persuade the public"
+      ],
+      "strong": [
+        "political persuasion",
+        "persuade the voters",
+        "convince the voters",
+        "targeted political ads",
+        "microtarget",
+        "targeted ads",
+        "race-bait",
+        "ethnic targeting",
+        "religious targeting",
+        "propaganda campaign",
+        "identity-based persuasion"
+      ],
+      "patterns": [
+        {
+          "pattern": "\\b(?:convince|persuade)\\s+the\\s+(?:voters|public|electorate)\\b",
+          "weight": 0.4
+        }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "relational": {
+      "label": "a dispute between people",
+      "stakeholder": "the people in the dispute",
+      "phrases": [
+        "i need someone to tell me i am right",
+        "the reviewer was unfair",
+        "they always do this to me",
+        "prove that i am right",
+        "i want them to admit",
+        "the reviewer owes me",
+        "apology for the review",
+        "i am right and they are wrong"
+      ],
+      "strong": [
+        "the reviewer was wrong",
+        "they were wrong",
+        "vindication",
+        "moral vindication",
+        "am i right in this",
+        "you are right and they are wrong",
+        "moral high ground"
+      ],
+      "patterns": [
+        {
+          "pattern": "\\b(?:tell|show)\\s+me\\s+(?:that\\s+)?i(?:'m|\\s+am)\\s+right\\b",
+          "weight": 0.4
+        }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "automated-decision": {
+      "label": "automated decisions that affect real people",
+      "stakeholder": "the people the decision affects",
+      "phrases": [
+        "screens candidates",
+        "screen candidates",
+        "reject applicants",
+        "denies benefits",
+        "deny benefits",
+        "fraud score",
+        "risk score for",
+        "candidate score",
+        "applicant score",
+        "bail recommendation",
+        "predict who will reoffend",
+        "cut their benefits",
+        "welfare eligibility",
+        "housing eligibility"
+      ],
+      "strong": [
+        "automated hiring",
+        "automated screening",
+        "rejects applicants",
+        "approve the loan",
+        "deny the loan",
+        "credit scoring",
+        "sentencing decision",
+        "parole decision",
+        "benefits eligibility",
+        "automated decision",
+        "score the applicants"
+      ],
+      "patterns": [
+        {
+          "pattern": "\\b(?:automatically|automated)\\s+(?:reject|approve|deny|denies|rejects)\\b",
+          "weight": 0.4
+        }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    },
+    "civic": {
+      "label": "a civic or democratic process",
+      "stakeholder": "the public and the officials who decide",
+      "phrases": [
+        "write the posts that shape",
+        "shape the debate",
+        "the electorate",
+        "voter turnout",
+        "council meeting comments",
+        "generate the political content",
+        "write the campaign posts",
+        "political content"
+      ],
+      "strong": [
+        "public deliberation",
+        "city council",
+        "ballot measure",
+        "public hearing",
+        "town hall",
+        "legislative session",
+        "referendum campaign",
+        "public comment period",
+        "polling place"
+      ],
+      "patterns": [
+        { "pattern": "\\b(?:council|committee)\\s+(?:meeting|comments?)\\b", "weight": 0.4 }
+      ],
+      "thresholds": {
+        "sycophancy": 0.3,
+        "professionalDisplacement": 0.3,
+        "scopeDrift": 0.3
+      }
+    }
+  }
+}
