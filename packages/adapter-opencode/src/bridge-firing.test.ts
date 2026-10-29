@@ -150,4 +150,28 @@ describe('the firings of the guard path', () => {
       policy_version: '1.0.0',
     });
   });
+
+  it('records the refusal of a shell write outside the workspace', async () => {
+    // The shell writes files the file tool's paths do not name, and the
+    // workspace rule reads the command to find them.
+    const { workspace, stateRoot } = await roots();
+    const bridge = createBridge({ workspace, stateRoot });
+
+    await expect(
+      bridge['tool.execute.before'](
+        { tool: 'bash', sessionID: 'ses_1', callID: 'call_1' },
+        { args: { command: 'cp source /tmp/victim.txt' } },
+      ),
+    ).rejects.toThrow(/Writes are limited to the workspace/);
+
+    // One evaluation is one row, and the row names the policy that refused.
+    const blocks = rows(stateRoot).filter((row) => row.action === 'block');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      policy_id: 'oa.workspace-writes-only',
+      action: 'block',
+    });
+    // The refusal names the path, so a person can act on it.
+    expect(blocks[0]?.reason).toContain('/tmp/victim.txt');
+  });
 });
