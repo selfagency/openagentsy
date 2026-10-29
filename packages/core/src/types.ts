@@ -1,3 +1,5 @@
+import type { ScopeBlock } from './scope/block.js';
+
 export type PermissionEffect = 'allow' | 'ask' | 'deny';
 
 export type PermissionRule = {
@@ -69,6 +71,16 @@ export type RoleDefinition = {
   writes: boolean;
   steps: number;
   scope: string;
+  /**
+   * The scope block of the role, when its `scope:` is a block and not a
+   * sentence.
+   *
+   * A role that declares a block says what it is for, and the block is what
+   * the scope check matches a request against. A role that declares a
+   * sentence has no block, and the scope of such a role is whatever the
+   * sentence says.
+   */
+  scopeBlock?: ScopeBlock;
   guidance: string;
   permissions: Record<string, ActionPermissions>;
   /** The skills the role may load. Empty means every skill. */
