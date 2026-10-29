@@ -154,18 +154,22 @@ describe('the declarations file', () => {
     return block;
   }
 
-  it('holds the eight first-party roles', async () => {
+  it('holds the seven first-party roles', async () => {
     const blocks = await loadScopeBlocks(DECLARATIONS_FILE);
     expect(Object.keys(blocks).sort()).toEqual([
       'advisor',
       'archivist',
       'builder',
       'lead',
-      'offload',
       'researcher',
       'reviewer',
       'scout',
     ]);
+  });
+
+  it('holds no block for the offload, which is a package and not a role', async () => {
+    const blocks = await loadScopeBlocks(DECLARATIONS_FILE);
+    expect(blocks.offload).toBeUndefined();
   });
 
   it('validates every declaration it holds', async () => {
@@ -225,15 +229,10 @@ describe('the declarations file', () => {
     expect(refuseIfOutOfScope('make the decision for us', advisor)).toContain('out of my scope');
   });
 
-  it('keeps the archivist out of the code and the offload on the local model', async () => {
+  it('keeps the archivist out of the code', async () => {
     const blocks = await loadScopeBlocks(DECLARATIONS_FILE);
     const archivist = blockOf(blocks, 'archivist');
-    const offload = blockOf(blocks, 'offload');
     expect(refuseIfOutOfScope('write the code for the fix', archivist)).toContain(
-      'out of my scope',
-    );
-    expect(offload.purpose.toLowerCase()).toContain('fail closed');
-    expect(refuseIfOutOfScope('call a remote model for this', offload)).toContain(
       'out of my scope',
     );
   });

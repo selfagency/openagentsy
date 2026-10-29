@@ -10,8 +10,13 @@ import { scopeRoleKey } from './declarations.js';
  *
  * The file is the ready-to-paste block for `roles.yaml`. It is also what
  * the tool reads when a project has not pasted the blocks into its roles
- * file yet, so the eight first-party roles answer for themselves in a
+ * file yet, so the seven first-party roles answer for themselves in a
  * project that never touched the roles file.
+ *
+ * The file is generated from `declarations.ts`, which is the source of
+ * truth: `packages/core/scripts/generate-scope-declarations.mjs` writes it,
+ * and the drift test in `src/scope-declarations.test.ts` says when the two
+ * have drifted.
  */
 
 /** The scope blocks of the roles, keyed by role id. */

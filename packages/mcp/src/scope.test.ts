@@ -78,7 +78,6 @@ describe('the scope tool', () => {
       'archivist',
       'builder',
       'lead',
-      'offload',
       'researcher',
       'reviewer',
       'scout',

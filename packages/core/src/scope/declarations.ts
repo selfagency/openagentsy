@@ -312,11 +312,11 @@ export const SCOPE_DECLARATIONS: readonly ScopeDeclaration[] = [
       },
       {
         statement: 'Stating an API that was not read in the current source of truth.',
-        match: [],
+        match: ['guess an api', 'state an api', 'api that was not read'],
       },
       {
         statement: 'Guessing a version, a behaviour or a deprecation.',
-        match: [],
+        match: ['state a version that was not read', 'guess a version', 'guess a behaviour'],
       },
     ],
     refusal_pattern:
