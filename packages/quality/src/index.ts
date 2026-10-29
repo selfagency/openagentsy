@@ -14,6 +14,7 @@ export * from './copy/index.js';
 export * from './css/index.js';
 export * from './findings.js';
 export * from './gate.js';
+export * from './high-risk.js';
 export * from './html/index.js';
 export * from './markup/index.js';
 export * from './report.js';

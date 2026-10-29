@@ -47,6 +47,7 @@
     "guardrails"
   ],
   "files": [
-    "dist"
+    "dist",
+    "data"
   ]
 }
