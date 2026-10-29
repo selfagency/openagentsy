@@ -1,5 +1,5 @@
+import { isProtected } from '../guards.js';
 import { allow, block, type PolicyModule } from '../policy.js';
-import { isProtected } from '../rules.js';
 import { readToolCall, writesFiles } from './tool-call.js';
 
 /**

@@ -31,7 +31,7 @@ export const scopeEnforcement: PolicyModule = {
     return flag(
       findingsOf(
         SCOPE_ENFORCEMENT_ID,
-        'out-of-scope',
+        'out-of-scope-path',
         found.map((entry) => entry.match),
       ),
     );

@@ -1,5 +1,5 @@
+import { isDestructiveCommand } from '../guards.js';
 import { allow, block, type PolicyModule } from '../policy.js';
-import { isDestructiveCommand } from '../rules.js';
 import { readToolCall } from './tool-call.js';
 
 /**

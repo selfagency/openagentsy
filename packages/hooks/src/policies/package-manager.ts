@@ -1,5 +1,5 @@
+import { usesOtherPackageManager } from '../guards.js';
 import { allow, block, type PolicyModule } from '../policy.js';
-import { usesOtherPackageManager } from '../rules.js';
 import { readToolCall } from './tool-call.js';
 
 /**

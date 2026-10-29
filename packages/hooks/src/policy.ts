@@ -81,7 +81,7 @@ export interface PolicyContext {
  * policy that changes it hands the change back.
  */
 export type PolicyResult =
-  | { action: 'allow' }
+  | { action: 'allow'; reason?: string }
   | { action: 'flag'; findings: PolicyFinding[]; severity: PolicySeverity }
   | { action: 'block'; reason: string; finding?: PolicyFinding }
   | { action: 'transform'; payload: unknown };
@@ -104,9 +104,14 @@ export interface PolicyModule {
   evaluate: (ctx: PolicyContext) => PolicyResult;
 }
 
-/** The result of a policy that let the thing through. */
-export function allow(): PolicyResult {
-  return { action: 'allow' };
+/**
+ * The result of a policy that let the thing through.
+ *
+ * A policy that lets something through after a person approved it says so,
+ * so the record of the firing names the approval rather than nothing.
+ */
+export function allow(reason?: string): { action: 'allow'; reason?: string } {
+  return reason === undefined ? { action: 'allow' } : { action: 'allow', reason };
 }
 
 /** The result of a policy that noted something. */

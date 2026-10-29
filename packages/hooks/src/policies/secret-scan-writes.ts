@@ -1,7 +1,6 @@
 import { findSecrets } from '@openagentsy/core';
 import { allow, block, type PolicyModule } from '../policy.js';
-import { contentOf } from '../rules.js';
-import { readToolCall } from './tool-call.js';
+import { contentOfCall, readToolCall, writesContent } from './tool-call.js';
 
 /**
  * The secret-scan-writes policy (§21.2, layer 1).
@@ -25,11 +24,8 @@ export const secretScanWrites: PolicyModule = {
   evaluate(ctx) {
     const call = readToolCall(ctx);
     if (call === undefined) return allow();
-    const content = contentOf({
-      toolName: call.name,
-      args: call.args,
-      files: call.files,
-    });
+    if (!writesContent(call)) return allow();
+    const content = contentOfCall(call);
     if (content === '') return allow();
     if (findSecrets(content).length === 0) return allow();
     return block(

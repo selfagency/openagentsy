@@ -1,5 +1,5 @@
+import { skipsGitHooks } from '../guards.js';
 import { allow, block, type PolicyModule } from '../policy.js';
-import { skipsGitHooks } from '../rules.js';
 import { readToolCall } from './tool-call.js';
 
 /**

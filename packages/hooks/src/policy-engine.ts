@@ -58,7 +58,7 @@ export function outcomeOf(module: PolicyModule, result: PolicyResult): PolicyOut
   const base = { policyId: module.id, version: module.version, layer: module.layer };
   switch (result.action) {
     case 'allow':
-      return { ...base, action: 'allow', findings: [] };
+      return { ...base, action: 'allow', reason: result.reason, findings: [] };
     case 'flag':
       return { ...base, action: 'flag', severity: result.severity, findings: result.findings };
     case 'block':

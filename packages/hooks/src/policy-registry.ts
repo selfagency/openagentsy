@@ -51,9 +51,24 @@ export class PolicyRegistry {
     }
   }
 
-  /** Every module of the registry. */
-  list(): PolicyModule[] {
+  /**
+   * Every module of the registry.
+   *
+   * The order is the order the modules were registered in, so a reader sees
+   * the first-party policies before the ones a plugin brought.
+   */
+  all(): PolicyModule[] {
     return [...this.byId.values()];
+  }
+
+  /**
+   * One module, by its id.
+   *
+   * An id the registry does not hold gives nothing back, and the caller
+   * decides what that means.
+   */
+  get(id: string): PolicyModule | undefined {
+    return this.byId.get(id);
   }
 
   /**
@@ -84,7 +99,7 @@ export class PolicyRegistry {
    * with them.
    */
   explain(classification: RequestClassification): PolicySelection {
-    const selected = selectPolicies(this.list(), classification);
+    const selected = selectPolicies(this.all(), classification);
     const modules: PolicyModule[] = [];
     const reasons: PolicySelectionReason[] = [];
     for (const entry of selected) {

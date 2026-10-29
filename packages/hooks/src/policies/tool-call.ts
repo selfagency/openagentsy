@@ -1,4 +1,5 @@
-import { isWritingTool } from '../event.js';
+import { isReaderTool, isWritingTool } from '../event.js';
+import { contentOf } from '../guards.js';
 import type { FileChange, PolicyContext } from '../policy.js';
 
 /**
@@ -70,6 +71,33 @@ export function readToolCall(ctx: PolicyContext): ToolCallFacts | undefined {
  * through.
  */
 export function writesFiles(call: ToolCallFacts): boolean {
+  if (isReaderTool(call.name)) return false;
   if (isWritingTool(call.name)) return true;
   return call.files.length > 0;
+}
+
+/**
+ * The content a call would write.
+ *
+ * The host puts the content in the arguments: a write carries `content`,
+ * an edit carries `newString`, and a patch carries the whole patch.
+ */
+export function contentOfCall(call: ToolCallFacts): string {
+  return contentOf({
+    toolName: call.name,
+    args: call.args,
+    files: call.files,
+  });
+}
+
+/**
+ * Whether a call writes content.
+ *
+ * A reader does not write content, even when the host hands it the text it
+ * read: the content of a read is what the file already holds.
+ */
+export function writesContent(call: ToolCallFacts): boolean {
+  if (isReaderTool(call.name)) return false;
+  if (isWritingTool(call.name)) return true;
+  return contentOfCall(call) !== '';
 }
