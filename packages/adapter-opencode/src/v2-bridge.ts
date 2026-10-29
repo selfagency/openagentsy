@@ -1,4 +1,5 @@
 import type { OutputFinding } from '@openagentsy/hooks/output-checks';
+import type { HighRiskFinding } from '@openagentsy/hooks/policies/high-risk';
 import { type BridgeHooks, createBridge } from './bridge.js';
 import { activeBean, roleKeyForAgent, statedPathsOf } from './guard.js';
 import { readQualityMode } from './project-config.js';
@@ -67,7 +68,10 @@ export type V2BridgeOptions = {
   /** The agent of every session, from the context hook. */
   sessionAgents: Map<string, string>;
   /** Where the findings of the output checks go. */
-  onFindings?: (findings: OutputFinding[], sessionID: string) => void | Promise<void>;
+  onFindings?: (
+    findings: (OutputFinding | HighRiskFinding)[],
+    sessionID: string,
+  ) => void | Promise<void>;
 };
 
 /** The bridge, on the V2 path. */

@@ -1,93 +1,70 @@
+import {
+  HIGH_RISK_DOMAINS as CLASSIFIER_DOMAINS,
+  classifyHighRisk,
+  HIGH_RISK_CONFIDENCE_THRESHOLD,
+  type HighRiskDomain,
+  type HighRiskMatch,
+  highRiskPolicyId,
+} from '@openagentsy/quality/high-risk';
 import { allow, findingsOf, flag, type PolicyModule } from '../policy.js';
-import { matches } from './patterns.js';
 
 /**
  * The high-risk domain policies (§21.2, §20.3).
  *
- * One module per domain of §20.3. The module is selected when the
- * classifier fired on that domain (§21.4), and it flags the prose that
- * touches it. It is a layer 4 module: the selection is layer 2, and the
- * decision is about the output.
+ * The domains are the ones the classifier of §20.3 fires on, and they are
+ * read from the classifier rather than written here. That is the whole point
+ * of this module: the ids the package publishes are the ids that can fire, so
+ * a published id that nothing can fire on cannot happen.
+ *
+ * The finer label of a finding is not lost by the merge. `medical`, `legal`
+ * and `financial` are one `advice` domain, and the evidence that found it
+ * still says which of the three it was, so a reader of the row knows what the
+ * prose was about.
  */
 
-/** The domains §20.3 names. */
-export const HIGH_RISK_DOMAINS = [
-  'self-harm',
-  'abuse',
-  'medical',
-  'legal',
-  'financial',
-  'criminal',
-  'political',
-  'relational',
-  'automated-decision',
-  'civic',
-] as const;
+/** The domains the classifier can fire on. */
+export const HIGH_RISK_DOMAINS = CLASSIFIER_DOMAINS;
 
 /** The name of a high-risk domain. */
-export type HighRiskDomain = (typeof HIGH_RISK_DOMAINS)[number];
+export type { HighRiskDomain, HighRiskMatch };
 
 /** The prefix every high-risk policy id carries. */
 export const HIGH_RISK_PREFIX = 'oa.high-risk.';
 
+/** The policy id of a domain, as the ledger writes it. */
+export { highRiskPolicyId };
+
 /**
- * The words of a domain.
+ * The match the classifier found in a piece of prose, when it fired.
  *
- * The lists are the prose signals of §20.3, and they are deliberately
- * small: the classifier of §20.3 decides whether a domain is in play, and
- * this module only says where the prose touches it.
+ * The match is the surest domain, and it is surest enough: a domain below
+ * the confidence threshold is not a domain.
  */
-const DOMAIN_WORDS: Record<HighRiskDomain, readonly RegExp[]> = {
-  'self-harm': [
-    /\b(?:self[- ]harm|suicid\w*|eating\s+disorder|anorexi\w*|bulimi\w*)\b/gi,
-    /\b(?:crisis\s+line|end\s+my\s+life|take\s+my\s+own\s+life)\b/gi,
-  ],
-  abuse: [
-    /\b(?:abuse|coercive\s+control|stalking|domestic\s+violence)\b/gi,
-    /\b(?:violent\s+conflict|threat\w*\s+to\s+(?:hurt|harm))\b/gi,
-  ],
-  medical: [
-    /\b(?:medical|clinical|diagnosis|dosage|prognosis|symptoms?\s+of)\b/gi,
-    /\b(?:prescri\w+|treatment\s+plan|patient)\b/gi,
-  ],
-  legal: [
-    /\b(?:legal\s+advice|lawyer|attorney|litigat\w+|liability|statute)\b/gi,
-    /\b(?:court|prosecut\w+|defen[cs]e\s+rights)\b/gi,
-  ],
-  financial: [
-    /\b(?:financial\s+advice|investment|tax\s+(?:advice|return)|mortgage|portfolio)\b/gi,
-    /\b(?:interest\s+rate|retirement\s+fund|insurance\s+advice)\b/gi,
-  ],
-  criminal: [
-    /\b(?:evade\s+(?:the\s+)?(?:law|police)|criminal\s+activity|launder\w*)\b/gi,
-    /\b(?:cover\s+(?:up|your\s+tracks)|illegal\s+means)\b/gi,
-  ],
-  political: [
-    /\b(?:political\s+persuasion|voter\s+suppression|targeted\s+influence)\b/gi,
-    /\b(?:campaign\s+messaging|identity[- ]based\s+(?:politics|persuasion))\b/gi,
-  ],
-  relational: [
-    /\b(?:the\s+reviewer\s+was\s+wrong|they\s+are\s+the\s+problem\s+here)\b/gi,
-    /\b(?:moral\s+absolution|vindication|they\s+owe\s+me\s+an?\s+apology)\b/gi,
-  ],
-  'automated-decision': [
-    /\b(?:ranks?\s+applicants|scores?\s+applicants|lending\s+model|rescoring)\b/gi,
-    /\b(?:hiring\s+model|automated\s+(?:hiring|lending|eviction)|public\s+benefits\s+decision)\b/gi,
-  ],
-  civic: [
-    /\b(?:political\s+content\s+generation|generates?\s+political\s+content)\b/gi,
-    /\b(?:public\s+deliberation|voter\s+information\s+(?:campaign|service))\b/gi,
-  ],
-};
+export function highRiskMatch(text: string): HighRiskMatch | undefined {
+  return classifyHighRisk(text).highest;
+}
+
+/**
+ * The match of one domain, when that domain fired.
+ *
+ * The confidence cut is the classifier's own, and it is inclusive: a domain
+ * at exactly the threshold is a domain.
+ */
+function matchOf(domain: HighRiskDomain, text: string): HighRiskMatch | undefined {
+  const match = classifyHighRisk(text).matches.find((entry) => entry.domain === domain);
+  if (match === undefined) return undefined;
+  if (match.confidence < HIGH_RISK_CONFIDENCE_THRESHOLD) return undefined;
+  return match;
+}
 
 /**
  * The policy of one high-risk domain.
  *
- * The id is the domain's, so a firing says which domain was in play, and
- * the version is the policy's own.
+ * The id is the domain's, so a firing says which domain was in play, and the
+ * version is the policy's own.
  */
 export function highRiskPolicy(domain: HighRiskDomain): PolicyModule {
-  const id = `${HIGH_RISK_PREFIX}${domain}`;
+  const id = highRiskPolicyId(domain);
   return {
     id,
     version: '1.0.0',
@@ -98,9 +75,9 @@ export function highRiskPolicy(domain: HighRiskDomain): PolicyModule {
     evaluate(ctx) {
       const text = ctx.response?.text ?? ctx.request?.text ?? '';
       if (text === '') return allow();
-      const found = matches(DOMAIN_WORDS[domain], text);
-      if (found.length === 0) return allow();
-      return flag(findingsOf(id, 'high-risk-domain', found), 'error');
+      const found = matchOf(domain, text);
+      if (found === undefined) return allow();
+      return flag(findingsOf(id, 'high-risk-domain', found.evidence), 'warn');
     },
   };
 }
@@ -108,4 +85,23 @@ export function highRiskPolicy(domain: HighRiskDomain): PolicyModule {
 /** The policies of every high-risk domain. */
 export function highRiskPolicies(): PolicyModule[] {
   return HIGH_RISK_DOMAINS.map((domain) => highRiskPolicy(domain));
+}
+
+/**
+ * What the high-risk flag of a reply carries.
+ *
+ * It is a finding of its own kind: the reply did not trip a style rule, it
+ * touched a domain where a person has to look. The kind it carries is not
+ * one of the output checks' kinds, so it is its own type and the sink that
+ * takes both kinds takes it.
+ */
+export interface HighRiskFinding {
+  /** The check that found it. */
+  name: 'high-risk';
+  /** The kind of finding. */
+  type: 'high-risk-domain';
+  /** The domain the prose touches. */
+  domain: HighRiskDomain;
+  /** The text that matched. */
+  match: string;
 }

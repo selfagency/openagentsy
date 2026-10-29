@@ -48,6 +48,15 @@ export interface PolicyContextOptions {
   roleId?: string | undefined;
   /** The session the call is made in, when the event names none. */
   sessionId?: string | undefined;
+  /**
+   * The high-risk domain the classifier fired on, when it fired (§20.3).
+   *
+   * The domain is a fact about the prose, and it reaches the policies
+   * through the context: a policy that tightens its rules in a high-risk
+   * domain reads it from there. The event carries it too, so a caller that
+   * classified the prose does not have to name it a second time.
+   */
+  highRiskDomain?: string | undefined;
 }
 
 /** The event, when it is an object. */
@@ -97,6 +106,8 @@ export function policyContextOf(event: unknown, options: PolicyContextOptions = 
   }
   const text = stringField(event, 'text');
   if (text !== undefined) ctx.response = { text };
+  const highRiskDomain = options.highRiskDomain ?? stringField(event, 'highRiskDomain');
+  if (highRiskDomain !== undefined) ctx.highRiskDomain = highRiskDomain;
   if (options.statedPaths !== undefined && options.statedPaths.length > 0) {
     ctx.scope = { declaredPaths: options.statedPaths };
   }
@@ -117,15 +128,22 @@ export interface PolicyRuleOptions extends PolicyContextOptions {
   onFindings?: ((findings: PolicyFinding[]) => void) | undefined;
   /** The id of the finding the firing links to, when there is one. */
   findingId?: string | undefined;
+  /**
+   * The reason the row carries, when the decision carries none of its own.
+   *
+   * A flag says nothing by itself, so a flag that has to be read says why
+   * here: the domain it fired on and the evidence that found it.
+   */
+  reason?: string | undefined;
 }
 
 /**
  * The reason a decision carries, when it carries one.
  *
  * A block says why it stopped the thing, and an allow says why it let it
- * through - an approval, mostly. A flag and a transform say nothing: the
- * findings of a flag are the row's detail, and a transform carries a
- * payload and not a reason.
+ * through - an approval, mostly. A flag says nothing by itself: the findings
+ * of a flag are the row's detail, and a flag that was given a reason carries
+ * it in the options. A transform carries a payload and not a reason.
  */
 function reasonOf(result: PolicyResult): string | undefined {
   if (result.action === 'block') return result.reason;
@@ -151,9 +169,9 @@ function findingsOf(result: PolicyResult): PolicyFinding[] {
  *
  * The row carries what a reader needs to attribute a decision: the policy,
  * the version it carried at that moment, the layer, the action, the severity
- * of a flag, the reason of a block and the session it happened in. The
- * findings of the decision go into the detail of the row, so a row that
- * fired on three findings is still one row.
+ * of a flag, the reason of a block (or of a flag that was given one) and the
+ * session it happened in. The findings of the decision go into the detail of
+ * the row, so a row that fired on three findings is still one row.
  *
  * A sink that is not there records nothing: a rule that runs without a log
  * still decides.
@@ -163,7 +181,7 @@ export function recordPolicyFiring(
   module: PolicyModule,
   result: PolicyResult,
   ctx: PolicyContext,
-  options: { findingId?: string | undefined } = {},
+  options: { findingId?: string | undefined; reason?: string | undefined } = {},
 ): void {
   if (sink === undefined) return;
   const firing: PolicyFiring = {
@@ -173,7 +191,7 @@ export function recordPolicyFiring(
     layer: module.layer,
     action: result.action,
     severity: result.action === 'flag' ? result.severity : undefined,
-    reason: reasonOf(result),
+    reason: reasonOf(result) ?? options.reason,
     classification: ctx.highRiskDomain ?? ctx.request?.classification?.highRiskDomain,
     origin: module.origin,
     ...(options.findingId === undefined ? {} : { findingId: options.findingId }),

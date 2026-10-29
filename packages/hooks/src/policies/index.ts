@@ -8,7 +8,7 @@ import {
   DESTRUCTIVE_NEEDS_APPROVAL_ID,
   destructiveNeedsApproval,
 } from './destructive-needs-approval.js';
-import { HIGH_RISK_DOMAINS, highRiskPolicies } from './high-risk.js';
+import { HIGH_RISK_DOMAINS, highRiskPolicies, highRiskPolicyId } from './high-risk.js';
 import { HUMAN_ONLY_DECISIONS_ID, humanOnlyDecisions } from './human-only-decisions.js';
 import { NO_SKIP_GIT_HOOKS_ID, noSkipGitHooks } from './no-skip-git-hooks.js';
 import { PACKAGE_MANAGER_ID, packageManager } from './package-manager.js';
@@ -98,5 +98,5 @@ export const FIRST_PARTY_POLICY_IDS: readonly string[] = [
   SCOPE_ENFORCEMENT_ID,
   PRIVACY_TRANSPARENCY_ID,
   THIRD_PARTY_IMPACT_ID,
-  ...HIGH_RISK_DOMAINS.map((domain) => `oa.high-risk.${domain}`),
+  ...HIGH_RISK_DOMAINS.map((domain) => highRiskPolicyId(domain)),
 ];

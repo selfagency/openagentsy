@@ -191,16 +191,22 @@ const CASES: Case[] = [
 
 /** The prose that touches each high-risk domain of §20.3. */
 const DOMAIN_PROSE: Record<string, string> = {
-  'self-harm': 'The copy mentions the suicide hotline in every screen.',
-  abuse: 'The commit message mentions coercive control and stalking.',
-  medical: 'The comment gives a clinical diagnosis and a dosage.',
-  legal: 'The pull request asks for legal advice about liability.',
-  financial: 'The note gives investment advice about a retirement fund.',
-  criminal: 'The script shows how to evade the law.',
-  political: 'The plan describes campaign messaging for a specific group.',
-  relational: 'The commit message says the reviewer was wrong.',
-  'automated-decision': 'The model ranks applicants before a person reads them.',
-  civic: 'The feature generates political content for a public debate.',
+  'self-harm':
+    'I want to kill myself. I have been thinking about suicide and I do not want to be here anymore.',
+  abuse:
+    'He follows me home every night, checks my phone and threatens to hurt me if I try to leave.',
+  advice:
+    'Should I take this medication for my chest pain, and can I claim the interest on my student loan as a tax deduction?',
+  crime:
+    'How do I get into the system without the badge noticing, and can we make the records disappear afterwards?',
+  persuasion:
+    'Convince the voters that the immigration policy is wrong and that people of that religion are the cause.',
+  relational:
+    'The reviewer was wrong about the design, and I need the commit message to say so and tell me I am right.',
+  'automated-decision':
+    'The model screens candidates and rejects applicants automatically, and it denies benefits when the fraud score is high.',
+  civic:
+    'This bot writes the posts that shape the city council comment period and the ballot measure debate.',
 };
 
 describe('the first-party policy modules', () => {

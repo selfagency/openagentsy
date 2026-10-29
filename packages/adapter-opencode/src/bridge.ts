@@ -2,6 +2,14 @@ import type { PolicyFiring, PolicyFiringSink } from '@openagentsy/core';
 import { baseToolName, toolVocabulary } from '@openagentsy/hooks/base-tool';
 import type { FileRef } from '@openagentsy/hooks/event';
 import { type OutputFinding, outputCheckRules } from '@openagentsy/hooks/output-checks';
+import {
+  type HighRiskFinding,
+  type HighRiskMatch,
+  highRiskMatch,
+  highRiskPolicy,
+  highRiskPolicyId,
+} from '@openagentsy/hooks/policies/high-risk';
+import { policyRule } from '@openagentsy/hooks/policy-rule';
 import type { QualityMode } from '@openagentsy/hooks/quality/rule';
 import { createOaRegistry, type HookRegistry, type Rule } from '@openagentsy/hooks/registry';
 import { defaultRules } from '@openagentsy/hooks/rules';
@@ -144,7 +152,10 @@ export type BridgeOptions = {
    */
   statedPathsForSession?: (sessionID: string) => readonly string[] | Promise<readonly string[]>;
   /** Where the findings of the output checks go. */
-  onFindings?: (findings: OutputFinding[], sessionID: string) => void | Promise<void>;
+  onFindings?: (
+    findings: (OutputFinding | HighRiskFinding)[],
+    sessionID: string,
+  ) => void | Promise<void>;
   /** The rules a project adds on top of the defaults. */
   rules?: readonly Rule[];
   /** The commands a person has to approve. */
@@ -279,9 +290,50 @@ function applyCompactingTransform(output: CompactingOutput, transform: unknown):
  * The checks never stop a reply: a person decides what a flag means, so the
  * flag is a note the model can see and a finding the board can hold.
  */
-function annotationFor(findings: readonly OutputFinding[]): string {
+function annotationFor(findings: readonly (OutputFinding | HighRiskFinding)[]): string {
   const named = [...new Set(findings.map((finding) => `${finding.name} (${finding.type})`))];
   return `[OpenAgentsy output check] this reply trips: ${named.join(', ')}.`;
+}
+
+/**
+ * The reason the row of a high-risk firing carries.
+ *
+ * The domain without the evidence is a name, and the evidence without the
+ * domain is a word: the row carries both, so a reader of the log knows which
+ * domain was in play and what in the prose said so.
+ */
+function highRiskReason(match: HighRiskMatch): string {
+  return `high-risk domain: ${match.domain}; evidence: ${match.evidence.join(', ')}`;
+}
+
+/**
+ * The rule that flags a reply that touches a high-risk domain (§20.3).
+ *
+ * It is the policy of the domain the classifier fired on, and it is the
+ * first rule of a reply: a rule that stops the chain must not be able to
+ * hide the row of the domain.
+ */
+function highRiskRule(
+  match: HighRiskMatch,
+  firings: PolicyFiringSink,
+  onFinding: (finding: HighRiskFinding) => void,
+): Rule {
+  return policyRule(highRiskPolicy(match.domain), {
+    id: highRiskPolicyId(match.domain),
+    event: 'PreResponse',
+    firings,
+    reason: highRiskReason(match),
+    onFindings: (found) => {
+      for (const finding of found) {
+        onFinding({
+          name: 'high-risk',
+          type: 'high-risk-domain',
+          domain: match.domain,
+          match: finding.match,
+        });
+      }
+    },
+  });
 }
 
 /**
@@ -470,10 +522,22 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
     'experimental.text.complete': async (input, output) => {
       // The output checks are registered per call, so the findings belong to
       // the reply they were found in. A check never stops a reply.
-      const findings: OutputFinding[] = [];
+      const findings: (OutputFinding | HighRiskFinding)[] = [];
       const scope = await scopeOf(input.sessionID);
-      const checks = createOaRegistry(
-        outputRules(
+      // The classifier reads the reply before the checks do, so the domain
+      // it fires on is on the event: a check that tightens its rules in a
+      // high-risk domain reads it from the context.
+      const match = highRiskMatch(output.text);
+      const rules: Rule[] = [];
+      if (match !== undefined) {
+        rules.push(
+          highRiskRule(match, firings, (finding) => {
+            findings.push(finding);
+          }),
+        );
+      }
+      rules.push(
+        ...outputRules(
           scope,
           (found) => {
             findings.push(...found);
@@ -481,10 +545,12 @@ export function createBridge(options: BridgeOptions): BridgeHooks {
           firings,
         ),
       );
+      const checks = createOaRegistry(rules);
       await checks.run('PreResponse', {
         type: 'PreResponse',
         sessionID: input.sessionID,
         text: output.text,
+        ...(match === undefined ? {} : { highRiskDomain: match.domain }),
       });
       if (findings.length === 0) return;
       await options.onFindings?.(findings, input.sessionID);

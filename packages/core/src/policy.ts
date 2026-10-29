@@ -19,8 +19,8 @@ export interface RequestClassification {
   /**
    * The high-risk domain the classifier fired on (§20.3), when it fired.
    *
-   * The domain is a slug: `medical`, `legal`, `financial`, `relational` and
-   * the rest of §20.3. A classification that fired on no domain leaves it
+   * The domain is a slug: `advice`, `crime`, `relational` and the rest of
+   * §20.3. A classification that fired on no domain leaves it
    * out, and the stack is the baseline one.
    */
   highRiskDomain?: string | undefined;

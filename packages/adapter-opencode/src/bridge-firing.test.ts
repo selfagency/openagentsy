@@ -2,6 +2,7 @@ import { mkdir, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { OutputFinding } from '@openagentsy/hooks/output-checks';
+import type { HighRiskFinding } from '@openagentsy/hooks/policies/high-risk';
 import { closeLedger, openLedger } from '@openagentsy/ledger';
 import { describe, expect, it } from 'vitest';
 import { createBridge } from './bridge.js';
@@ -104,7 +105,7 @@ describe('the firings of the guard path', () => {
 
   it('writes one row for a reply it flags', async () => {
     const { workspace, stateRoot } = await roots();
-    const findings: OutputFinding[] = [];
+    const findings: (OutputFinding | HighRiskFinding)[] = [];
     const bridge = createBridge({
       workspace,
       stateRoot,

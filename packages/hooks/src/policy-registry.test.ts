@@ -24,26 +24,28 @@ describe('the policy registry', () => {
     expect(ids).toContain('oa.truthfulness-uncertainty');
     expect(ids).toContain('oa.anti-sycophancy');
     expect(ids).toContain('oa.no-skip-git-hooks');
-    expect(ids).not.toContain('oa.high-risk.medical');
+    expect(ids).not.toContain('oa.high-risk.advice');
   });
 
   it('adds the high-risk module of the domain the classification named', () => {
-    const selected = registry().select({ highRiskDomain: 'medical', confidence: 0.9 });
+    const selected = registry().select({ highRiskDomain: 'advice', confidence: 0.9 });
 
     const ids = selected.map((module) => module.id);
-    expect(ids).toContain('oa.high-risk.medical');
-    expect(ids).not.toContain('oa.high-risk.legal');
+    expect(ids).toContain('oa.high-risk.advice');
+    expect(ids).not.toContain('oa.high-risk.crime');
   });
 
   it('says why each module was selected', () => {
-    const selection = registry().explain({ highRiskDomain: 'legal' });
+    const selection = registry().explain({ highRiskDomain: 'relational' });
 
     const reason = (id: string): string | undefined =>
       selection.reasons.find((entry) => entry.policyId === id)?.reason;
     expect(reason('oa.no-skip-git-hooks')).toBe('the guardrail applies to every tool call');
     expect(reason('oa.anti-sycophancy')).toBe('every session gets this policy');
-    expect(reason('oa.high-risk.legal')).toBe('the classification named the legal domain');
-    expect(reason('oa.high-risk.medical')).toBeUndefined();
+    expect(reason('oa.high-risk.relational')).toBe(
+      'the classification named the relational domain',
+    );
+    expect(reason('oa.high-risk.advice')).toBeUndefined();
   });
 
   it('carries the version of every module it selected', () => {
